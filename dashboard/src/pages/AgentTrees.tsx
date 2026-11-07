@@ -60,7 +60,7 @@ export default function AgentTrees() {
     { key: 'fanout', header: 'Fan-out', align: 'end', sort: (t) => t.stats.maxFanout, render: (t) => fmtInt(t.stats.maxFanout) },
     { key: 'parallel', header: 'Peak parallel', align: 'end', sort: (t) => t.stats.peakParallel, render: (t) => fmtInt(t.stats.peakParallel) },
     { key: 'busy', header: 'Busy time', align: 'end', sort: (t) => t.stats.busyMs, render: (t) => fmtDuration(t.stats.busyMs) },
-    { key: 'tokens', header: windowed ? 'Tokens here' : 'Tokens', align: 'end', sort: (t) => treeTokens(t.root), render: (t) => { if (!turnsReady) return <span className="fine" aria-label="Loading">…</span>; const v = treeTokens(t.root); return v === null && windowed ? <span className="fine">None here</span> : <>{v !== null && treeShort(t.root) && <span className="lower-bound" title="Some turns reported no total"><span aria-hidden="true">≥</span><span className="sr-only">at least </span></span>}<Tokens v={v} /></>; } },
+    { key: 'tokens', header: windowed ? 'Tokens here' : 'Tokens', align: 'end', sort: (t) => treeTokens(t.root), render: (t) => { if (!turnsReady) return <span className="fine" aria-label="Loading">…</span>; const v = treeTokens(t.root); const ran = flatten(t.root).some((n) => (tokens.get(n.key)?.turns ?? 0) > 0); return v === null && windowed && !ran ? <span className="fine">None here</span> : v === null || (v === 0 && treeShort(t.root)) ? <Unknown label="No complete total" why="Turns ran here but none with a total, or those with one summed to 0 while others reported none." /> : <>{v !== null && treeShort(t.root) && <span className="lower-bound" title="Some turns reported no total"><span aria-hidden="true">≥</span><span className="sr-only">at least </span></span>}<Tokens v={v} /></>; } },
     { key: 'start', header: 'Started', sort: (t) => t.root.start, render: (t) => (t.root.start ? <time dateTime={new Date(t.root.start).toISOString()}>{fmtDay(new Date(t.root.start).toISOString(), timezone)}</time> : <span className="fine">Unknown</span>) },
   ];
 
@@ -171,6 +171,9 @@ function TreeView({ root, tz, tokens, win }: { root: TreeNode; tz: string; token
   const hasTimes = axis.end > axis.start;
   const rootTokens = tokens.get(root.key)?.total ?? null;
   const childTokens = all.filter((n) => n.depth > 0).reduce<number | null>((s, n) => { const v = tokens.get(n.key)?.total; return v == null ? s : (s ?? 0) + v; }, null);
+  // A sum is a lower bound when any turn behind it reported no total.
+  const short = (n: TreeNode) => { const u = tokens.get(n.key); return !!u && (u.withTotal ?? u.withUsage) < u.turns; };
+  const childShort = all.some((n) => n.depth > 0 && short(n));
   const fullAgent = useQuery({
     queryKey: ['agent-full', selected.agent?.source_id],
     enabled: !!selected.agent,
@@ -199,8 +202,8 @@ function TreeView({ root, tz, tokens, win }: { root: TreeNode; tz: string; token
           <span><b>{fmtInt(stats.maxFanout)}</b> max fan-out</span>
           <span><b>{fmtInt(stats.peakParallel)}</b> peak parallel</span>
           <span><b>{fmtDuration(stats.busyMs)}</b> busy{win ? ' in this window' : ''}</span>
-          {rootTokens !== null && <span><b><Tokens v={rootTokens} /></b> root tokens</span>}
-          {childTokens !== null && <span><b><Tokens v={childTokens} /></b> sub-agent tokens</span>}
+          {rootTokens !== null && <span><b><AtLeast on={short(root) && rootTokens > 0} /><Tokens v={rootTokens} /></b> root tokens{win ? ' here' : ''}</span>}
+          {childTokens !== null && <span><b><AtLeast on={childShort && childTokens > 0} /><Tokens v={childTokens} /></b> sub-agent tokens{win ? ' here' : ''}</span>}
           {stats.openEnded > 0 && <span><b>{fmtInt(stats.openEnded)}</b> <span className="unknown unknown-inline">no end time</span></span>}
         </div>
         <div className="tree-axis" aria-hidden="true">
@@ -265,10 +268,10 @@ function TreeView({ root, tz, tokens, win }: { root: TreeNode; tz: string; token
           <div><dt>Started</dt><dd>{selected.start ? `${fmtDay(new Date(selected.start).toISOString(), tz)} ${fmtClock(new Date(selected.start).toISOString(), tz)}` : <Unknown label="Unknown" />}</dd></div>
           {selected.depth > 0 && <div><dt>Time</dt><dd>{selected.agent?.duration != null ? fmtDuration(selected.agent.duration) : <Unknown label="Unknown" why="No completion time recorded." />}</dd></div>}
           {selected.depth > 0 && <div><dt>Result delivered</dt><dd>{selected.agent?.returned == null ? <Unknown label="Not recorded" why="No explicit delivery record. This does not mean the result was lost." /> : selected.agent.returned ? <Tag>Acknowledged</Tag> : <Tag tone="warn">Not acknowledged</Tag>}</dd></div>}
-          <div><dt>Tokens</dt><dd><Tokens v={tokens.get(selected.key)?.total} why="No provider turn with reported usage is recorded for this thread." /></dd></div>
+          <div><dt>{win ? 'Tokens here' : 'Tokens'}</dt><dd><AtLeast on={short(selected) && !!tokens.get(selected.key)?.total} /><Tokens v={tokens.get(selected.key)?.total} why="No provider turn with a reported total is recorded for this thread here." /></dd></div>
           {selected.evidence && <div><dt>Edge evidence</dt><dd>{EVIDENCE[selected.evidence]}</dd></div>}
           {selected.missingParent && <div><dt>Parent</dt><dd><Tag tone="warn">Recorded, not imported</Tag></dd></div>}
-          {selected.depth === 0 && <div><dt>Direct sub-agents</dt><dd>{fmtInt(selected.children.length)}</dd></div>}
+          {selected.depth === 0 && <div><dt>{win ? 'Direct sub-agents, whole tree' : 'Direct sub-agents'}</dt><dd>{fmtInt(selected.children.length)}</dd></div>}
         </dl>
         {agentText?.task && <TextBlock label="Task" text={agentText.task} />}
         {agentText?.result && <TextBlock label="Result" text={agentText.result} />}
@@ -285,4 +288,9 @@ function TextBlock({ label, text }: { label: string; text: string }) {
       <div className="message-text message-small">{text}</div>
     </details>
   );
+}
+
+/** The lower-bound mark for a sum that leaves out turns with no total. */
+function AtLeast({ on }: { on: boolean }) {
+  return on ? <span className="lower-bound" title="Some turns reported no total"><span aria-hidden="true">≥</span><span className="sr-only">at least </span></span> : null;
 }

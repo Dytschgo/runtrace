@@ -888,3 +888,82 @@ test('Agent Trees lists only trees that delegated inside the window', async ({ p
   expect(Number(shown.replace(/\D/g, ''))).toBe(await rows.count());
   for (const cell of await rows.locator('td:nth-child(2)').allInnerTexts()) expect(cell.trim().startsWith('0')).toBe(false);
 });
+
+test('repeat delegations keep their tree in a closed window, and the count matches the records', async ({ page, request }) => {
+  const since = '2026-11-07T03:10:00.000Z';
+  const until = '2026-11-07T03:45:00.000Z';
+  const overview = (await (await request.get(`/api/v1/overview?since=${since}&until=${until}`)).json()).data as { kind: string; count: number }[];
+  const agents = overview.find((r) => r.kind === 'agent')?.count ?? 0;
+  test.skip(!agents, 'No delegation in this window.');
+  await page.goto(`/?page=Agent+Trees&since=${since}&until=${until}`);
+  await expect(page.locator('.stat', { hasText: 'Sub-agents' }).first().locator('.stat-value')).toHaveText(String(agents), { timeout: 30_000 });
+});
+
+test('thread detail keeps the lower bound the list shows', async ({ page, request }) => {
+  const id = 'a9a6af7e-72b5-47c5-ab80-8be5b9c7852c';
+  const turns = (await (await request.get(`/api/v1/model-turns?limit=2000`)).json()).data as { thread_id: string; data: { total_tokens?: number | null; usage_source?: string } }[];
+  const mine = turns.filter((t) => t.thread_id === id && t.data.usage_source !== 'session_log');
+  test.skip(!mine.length || mine.every((t) => t.data.total_tokens != null), 'This thread has no turn without a total in the latest page.');
+  await page.goto(`/?page=Threads&range=all&id=${id}`);
+  await expect(page.locator('.facts div', { hasText: 'Complete-turn tokens' }).locator('.lower-bound')).toHaveCount(1, { timeout: 30_000 });
+});
+
+test('the Models daily table marks days where some turns reported no total', async ({ page }) => {
+  await page.goto('/?page=Models&since=2026-11-01T00:00:00.000Z&until=2026-11-07T00:00:00.000Z');
+  await page.waitForLoadState('networkidle');
+  await page.getByRole('button', { name: 'Show as table' }).first().click();
+  await expect(page.locator('table td.num', { hasText: /^≥ / }).first()).toBeVisible({ timeout: 30_000 });
+});
+
+test('Search says a future window is not yet known', async ({ page }) => {
+  const day = new Date(Date.now() + 5 * 86_400_000).toISOString().slice(0, 10);
+  await page.goto(`/?page=Search&q=dashboard&since=${day}T00:00:00.000Z`);
+  await expect(page.getByRole('heading', { name: 'Not yet' })).toBeVisible({ timeout: 30_000 });
+});
+
+test('a resolution chosen by link stays lit while the chart falls back', async ({ page }) => {
+  await open(page, '?range=6h&res=1w');
+  const label = page.getByRole('group', { name: 'Resolution' }).locator('label', { has: page.getByRole('radio', { name: '1w', exact: true }) });
+  await expect(label).toHaveCSS('opacity', '1');
+  await expect(page.locator('.res-note')).toBeVisible();
+});
+
+test('a group with no turns in the window shows no share', async ({ page }) => {
+  await open(page, '?range=24h');
+  const idle = page.locator('.model-lines li[data-idle]');
+  test.skip(!(await idle.count()), 'Every group ran in the last day.');
+  await expect(idle.first().locator('small')).toHaveText('No turns here');
+});
+
+test('a future window keeps its stated end, and nothing below the headline reads as empty', async ({ page }) => {
+  await open(page, '?since=2026-11-20T00:00:00.000Z&until=2026-11-22T00:00:00.000Z');
+  await expect(page.locator('.ts-read')).not.toContainText('now');
+  await expect(page.getByRole('heading', { name: 'Not yet' })).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator('main')).not.toContainText('No records match');
+});
+
+test('a bucket as long as the window is switched off', async ({ page }) => {
+  await open(page, '?range=7d');
+  await expect(page.getByRole('group', { name: 'Resolution' }).getByRole('radio', { name: '1w', exact: true })).toBeDisabled();
+  await open(page, '?range=24h');
+  await expect(page.getByRole('group', { name: 'Resolution' }).getByRole('radio', { name: '1d', exact: true })).toBeDisabled();
+});
+
+test('a range the page does not know opens the default week', async ({ page }) => {
+  await page.goto('/?range=1d');
+  await page.waitForLoadState('networkidle');
+  await expect(page.locator('.ts-read')).toContainText('Last 7d');
+  await expect(page.getByRole('radio', { name: '7d' })).toBeChecked();
+});
+
+test('tokens by type count provider turns only, never session-log hours', async ({ page, request }) => {
+  const since = '2026-09-01T00:00:00.000Z';
+  const until = '2026-09-30T23:59:59.999Z';
+  const rows = (await (await request.get(`/api/v1/model-turns?since=${since}&until=${until}&limit=20000`)).json()).data as { data: { usage_source?: string } }[];
+  const turns = rows.filter((r) => r.data.usage_source !== 'session_log').length;
+  test.skip(turns === rows.length, 'No session-log hours in this window.');
+  await open(page, `?since=${since}&until=${until}`);
+  await expect(page.locator('.type-coverage')).toBeVisible({ timeout: 60_000 });
+  const of = Number((await page.locator('.type-coverage small').innerText()).match(/of ([\d,]+) turns/)![1].replace(/,/g, ''));
+  expect(of).toBe(turns);
+});

@@ -250,7 +250,9 @@ export function forestInView(roots: TreeNode[], f: { since?: string; until?: str
   const until = f.until ? Date.parse(f.until) : Infinity;
   const matches = (root: TreeNode) => {
     const all = flatten(root);
-    const inRange = all.some((n) => n.start !== null && n.start >= since && n.start <= until);
+    // A repeat delegation to a child that first ran earlier still puts its tree in this window.
+    const at = (iso: string) => { const t = Date.parse(iso); return Number.isFinite(t) && t >= since && t <= until; };
+    const inRange = all.some((n) => (n.start !== null && n.start >= since && n.start <= until) || (n.records ?? []).some((r) => at(r.occurred_at)));
     return inRange && (!f.model || all.some((n) => n.thread?.model === f.model || n.agent?.model === f.model));
   };
   const shown = roots.filter(matches);

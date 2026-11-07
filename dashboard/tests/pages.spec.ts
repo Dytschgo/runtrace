@@ -208,3 +208,34 @@ test('on a phone the quota warning shows in the top bar and the current page is 
   const current = page.locator('.nav [aria-current="page"]');
   await expect.poll(() => current.evaluate((el) => { const r = el.getBoundingClientRect(); return r.left >= 0 && r.right <= innerWidth; })).toBe(true);
 });
+
+test('a quota track whose window reset after its last reading says reset, not an old percentage', async ({ page }) => {
+  const now = Date.now();
+  const reset = new Date(now - 30 * 60_000).toISOString();
+  const samples = [3, 2, 1].map((h, i) => ({ provider: 'claude', window: 'five_hour', sampled_at: new Date(now - h * 3_600_000).toISOString(), used_percentage: 40 + i * 10, reset_at: reset }));
+  await mockApi(page, (name) => {
+    if (name === 'quota/current') return envelope([{ provider: 'claude', window: 'five_hour', used_percentage: 60, reset_at: reset, reset_passed: true, window_minutes: 300, sampled_at: samples[2].sampled_at }]);
+    if (name === 'quota/samples') return envelope(samples);
+  });
+  await page.goto('/?page=Quota+and+Resets');
+  const last = page.locator('.quota-track-last').first();
+  await expect(last).toHaveText('reset');
+  await expect(page.locator('.quota-window[data-passed]')).toHaveCount(1);
+});
+
+test('a thread whose totals sum to 0 while other turns reported none is not an exact zero', async ({ page }) => {
+  const at = (h: number) => new Date(Date.now() - h * 3_600_000).toISOString();
+  const thread = entity('thread', 'th0', at(5), { title: 'Zero with gaps', thread_type: 'primary' }, { thread_id: 'th0' });
+  const turns = [
+    entity('model_turn', 'z1', at(4), { total_tokens: 0, usage_status: 'complete', model: 'gpt-6.1-sol' }, { thread_id: 'th0' }),
+    entity('model_turn', 'z2', at(3), { total_tokens: null, input_tokens: 18_000_000, usage_status: 'partial', model: 'gpt-6.1-sol' }, { thread_id: 'th0' }),
+  ];
+  await mockApi(page, (name, url) => {
+    if (name === 'threads') return paged([thread], url);
+    if (name === 'model-turns') return paged(turns, url);
+  });
+  await page.goto('/?page=Threads&range=7d');
+  const cell = page.locator('tbody tr', { hasText: 'Zero with gaps' }).locator('.cell-tokens');
+  await expect(cell).toContainText('No complete total');
+  await expect(cell).not.toHaveText(/^0$/);
+});

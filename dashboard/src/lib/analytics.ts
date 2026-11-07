@@ -226,11 +226,14 @@ export function captureGaps(hours: string[], longest = 10 * 86_400_000): [number
 }
 
 /** The same summary from single turns, for a selection the API cannot total by itself. */
-export function summaryFromTurns(turns: { total: number | null; input: number | null; cached: number | null; cacheWrite?: number | null; output: number | null; reasoning: number | null }[]): TokenSummary {
+export function summaryFromTurns(rows: { total: number | null; input: number | null; cached: number | null; cacheWrite?: number | null; output: number | null; reasoning: number | null; log?: boolean }[]): TokenSummary {
+  // Token sums include session-log hours. Turn counts and coverage do not, because a log hour is not a provider turn.
+  const turns = rows.filter((t) => !t.log);
+  const sums = rows;
   return {
-    total: sumKnown(turns.map((t) => t.total)), input: sumKnown(turns.map((t) => t.input)), cached: sumKnown(turns.map((t) => t.cached)),
-    cacheWrite: sumKnown(turns.map((t) => t.cacheWrite)), cacheWriteTurns: turns.filter((t) => typeof t.cacheWrite === 'number').length,
-    output: sumKnown(turns.map((t) => t.output)), reasoning: sumKnown(turns.map((t) => t.reasoning)),
+    total: sumKnown(sums.map((t) => t.total)), input: sumKnown(sums.map((t) => t.input)), cached: sumKnown(sums.map((t) => t.cached)),
+    cacheWrite: sumKnown(sums.map((t) => t.cacheWrite)), cacheWriteTurns: turns.filter((t) => typeof t.cacheWrite === 'number').length,
+    output: sumKnown(sums.map((t) => t.output)), reasoning: sumKnown(sums.map((t) => t.reasoning)),
     turns: turns.length, withUsage: turns.filter((t) => [t.total, t.input, t.cached, t.output, t.reasoning].some((v) => typeof v === 'number')).length, complete: turns.filter((t) => t.total !== null).length,
     noUsage: [],
     short: {
@@ -247,10 +250,10 @@ export function tokensByKey<T>(turns: T[], key: (t: T) => string, total: (t: T) 
   const m = new Map<string, ThreadTokens>();
   for (const t of turns) {
     const k = key(t);
-    const cur = m.get(k) ?? { total: null, turns: 0, withUsage: 0 };
+    const cur = m.get(k) ?? { total: null, turns: 0, withUsage: 0, withTotal: 0 };
     const v = total(t);
     cur.turns += 1;
-    if (v !== null) cur.total = (cur.total ?? 0) + v;
+    if (v !== null) { cur.total = (cur.total ?? 0) + v; cur.withTotal = (cur.withTotal ?? 0) + 1; }
     if (hasUsage ? hasUsage(t) : v !== null) cur.withUsage += 1;
     m.set(k, cur);
   }
@@ -262,6 +265,7 @@ export interface ProviderUsage { provider: string; turns: number; complete: numb
 export function usageByProvider(turns: TurnRow[]): ProviderUsage[] {
   const m = new Map<string, ProviderUsage>();
   for (const t of turns) {
+    if (t.log) continue;
     const name = t.provider ?? 'Not recorded';
     const p = m.get(name) ?? { provider: name, turns: 0, complete: 0, partial: 0, unavailable: 0, total: null };
     p.turns += 1;
@@ -277,6 +281,7 @@ export function usageByProvider(turns: TurnRow[]): ProviderUsage[] {
 export function coverageRows(threads: ThreadRow[], agents: AgentRow[], tools: ToolRow[], turns: TurnRow[] = []): Coverage[] {
   const count = <T,>(rows: T[], f: (r: T) => boolean) => rows.filter(f).length;
   const shell = tools.filter((t) => t.category === 'shell');
+  turns = turns.filter((t) => !t.log);
   return [
     { id: 'thread-lineage', entity: 'Threads', field: 'Lineage resolved', known: count(threads, (t) => t.resolved === true), total: threads.length, note: 'Parent links followed to a root without a break or cycle.' },
     { id: 'thread-model', entity: 'Threads', field: 'Model selection', known: count(threads, (t) => t.model !== null), total: threads.length, note: 'Requested model. The resolved model is not captured.' },

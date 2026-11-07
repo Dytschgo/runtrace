@@ -179,10 +179,10 @@ export default function Overview() {
   const plotSince = clipped ? firstRecord : since;
   const span = Math.max(1, until - plotSince);
   // A bucket much longer than the window would draw one point that reads as a whole week or day, so those are switched off too.
-  const tooCoarse = (r: Resolution) => RESOLUTION_MS[r] > span * 1.02;
+  const tooCoarse = (r: Resolution) => RESOLUTION_MS[r] >= span * 0.5;
   // A bucket longer than the window falls back to the automatic choice, which always fits.
   const res = (() => { const r = effectiveResolution(resChoice, span); return tooCoarse(r) ? effectiveResolution('auto', span) : r; })();
-  const resOptions = RES_OPTIONS.map((o) => (o.value === 'auto' ? o : effectiveResolution(o.value, span) !== o.value ? { ...o, disabled: true, title: 'Too fine for this window' } : tooCoarse(o.value) ? { ...o, disabled: true, title: 'Longer than this window' } : o));
+  const resOptions = RES_OPTIONS.map((o) => (o.value === 'auto' ? o : effectiveResolution(o.value, span) !== o.value ? { ...o, disabled: true, title: 'Too fine for this window' } : tooCoarse(o.value) ? { ...o, disabled: true, title: 'Too long for this window' } : o));
   // The list always ranks every group. The chart and the headline follow the rows chosen, and turns that name no model stay off the chart until asked for.
   const chartTurns = useMemo(
     () => scoped.filter((t) => { const key = turnGroupKey(t, by); return picks.size ? picks.has(key) : showUnnamed || key !== 'not-recorded'; }),
@@ -449,7 +449,7 @@ export default function Overview() {
               <div className="chart-controls">
                 <SelectField label="Measure" hideLabel value={metric} onChange={(v) => set({ metric: v === 'total' ? null : v })} options={METRICS.map((m) => ({ value: m.key, label: m.label }))} />
                 <Segmented label="Resolution" value={resChoice} options={resOptions} onChange={(v) => set({ res: v === 'auto' ? null : v })} />
-                {resChoice !== 'auto' && res !== resChoice && <span className="fine res-note" title={tooCoarse(resChoice) ? `${resChoice} is longer than this window` : `${resChoice} would draw too many points for this window`}>per {RES_WORDS[res]}</span>}
+                {resChoice !== 'auto' && res !== resChoice && <span className="fine res-note" title={tooCoarse(resChoice) ? `${resChoice} is too long for this window` : `${resChoice} would draw too many points for this window`}>per {RES_WORDS[res]}</span>}
                 <Segmented label="Chart style" value={view} options={[{ value: 'lines', label: 'Lines' }, { value: 'stacked', label: 'Stacked' }, { value: 'cumulative', label: 'Running' }]} onChange={(v) => set({ view: v === 'lines' ? null : v })} />
                 <button type="button" className="icon-btn" disabled={!trace.rows.length || !!unknownWindow} onClick={exportCsv} aria-label="Download this chart as CSV" title="Download CSV"><Download size={15} aria-hidden="true" /></button>
                 <button type="button" className={compare ? 'icon-btn is-on' : 'icon-btn'} aria-pressed={compare} disabled={!previousTrace && !compare} onClick={() => set({ compare: compare ? null : 1 })} aria-label="Compare with the period before" title={previousTrace ? 'Compare with the period before' : 'Choose a window with history before it to compare'}><GitCompareArrows size={15} aria-hidden="true" /></button>
@@ -508,7 +508,10 @@ export default function Overview() {
         </section>
       )}
 
-      {noData ? (
+      {unknownWindow ? (
+        // Nothing below can be said about a window that is not known, so it says why once instead of reading as empty.
+        <Panel><EmptyState title={unknownWindow.title}><p>{unknownWindow.text}</p></EmptyState></Panel>
+      ) : noData ? (
         <Panel>
           <EmptyState title="No imported history in this view">
             <p>Clear the filters, or import completed T3 history with <code>t3ui import --all</code>.</p>
@@ -644,8 +647,8 @@ function GroupLine({ line, total, top, by, unit, draft, focused, seriesKey, onFo
     <>
       <Icon size={15} aria-hidden="true" style={{ color: info.color }} />
       <span className={by === 'model' ? 'model-line-name mono' : 'model-line-name'}>{info.label}</span>
-      {unknown ? <b><Unknown label={unknown.title} why={unknown.text} /></b> : silent ? <b><Unknown label="Not reported" why={why} /></b> : <b title={`${atLeast ? 'At least ' : ''}${fmtInt(value)} ${unit}`}>{atLeast && <span className="lower-bound"><span aria-hidden="true">≥</span><span className="sr-only">at least </span></span>}<Counter value={value} ms={draft ? 160 : 900} /></b>}
-      <small title={logOnly ? "These tokens come from the agents' session logs, kept per hour. Session-log hours are never counted as turns." : undefined}>{unknown ? 'Unknown' : silent ? 'Share unknown' : fmtPct(share, 1)}{unknown ? '' : unit !== 'provider turns' ? ` · ${logOnly ? (turns ? `session logs only · ${plural(turns, 'turn')} reported nothing` : 'session logs only') : reported < turns ? `${fmtInt(reported)} of ${plural(turns, 'turn')}` : plural(turns, 'turn')}` : ''}</small>
+      {unknown ? <b><Unknown label={unknown.title} why={unknown.text} /></b> : silent ? <b><Unknown label={line.partial ? 'Parts only' : 'Not reported'} why={why} /></b> : <b title={`${atLeast ? 'At least ' : ''}${fmtInt(value)} ${unit}`}>{atLeast && <span className="lower-bound"><span aria-hidden="true">≥</span><span className="sr-only">at least </span></span>}<Counter value={value} ms={draft ? 160 : 900} /></b>}
+      <small title={logOnly ? "These tokens come from the agents' session logs, kept per hour. Session-log hours are never counted as turns." : undefined}>{unknown ? 'Unknown' : silent ? 'Share unknown' : turns === 0 && value === 0 ? 'No turns here' : fmtPct(share, 1)}{unknown || (turns === 0 && value === 0) ? '' : unit !== 'provider turns' ? ` · ${logOnly ? (turns ? `session logs only · ${plural(turns, 'turn')} reported nothing` : 'session logs only') : reported < turns ? `${fmtInt(reported)} of ${plural(turns, 'turn')}` : plural(turns, 'turn')}` : ''}</small>
       <span className="model-line-share" aria-hidden="true"><i style={{ '--share': value / top, background: info.dashArray ? `repeating-linear-gradient(90deg, ${info.color} 0 6px, transparent 6px 10px)` : info.color } as React.CSSProperties} /></span>
     </>
   );

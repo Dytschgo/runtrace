@@ -1,10 +1,10 @@
 import { useQuery } from '@tanstack/react-query';
 import { FileText, SearchX } from 'lucide-react';
 import { Pager } from '../components/DataTable';
-import { AppLink, Async, EmptyState, PageHeader, Panel, SkeletonRows } from '../components/ui';
+import { AppLink, Async, EmptyState, PageHeader, Panel, SkeletonRows, NotYetPage } from '../components/ui';
 import { getEntities } from '../lib/api';
 import { useFilters } from '../lib/data';
-import { apiParams } from '../lib/filters';
+import { apiParams, isFuture } from '../lib/filters';
 import { cleanText, fmtDay, fmtClock, snippet } from '../lib/format';
 import { useSettings } from '../lib/settings';
 import type { Entity } from '../lib/types';
@@ -25,6 +25,8 @@ export default function SearchPage() {
     placeholderData: (prev) => prev,
     queryFn: ({ signal }) => getEntities<Entity>('search', apiParams('search', f, { q, limit: LIMIT, offset, include_content: 'true' }), signal),
   });
+
+  if (isFuture(f)) return <NotYetPage title="Search" />;
 
   return (
     <>

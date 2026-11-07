@@ -175,7 +175,7 @@ export default function Models() {
                 table={
                   <table>
                     <thead><tr><th scope="col">Day</th>{stack.series.map((s) => <th key={s.key} scope="col" className="num">{s.label}</th>)}</tr></thead>
-                    <tbody>{stack.data.map((d) => <tr key={d.day}><td>{d.label}</td>{stack.series.map((s) => <td key={s.key} className="num">{fmtInt(Number(d[s.key] ?? 0))}</td>)}</tr>)}</tbody>
+                    <tbody>{stack.data.map((d) => <tr key={d.day}><td>{d.label}</td>{stack.series.map((s) => <td key={s.key} className="num">{metric === 'tokens' && 'partial' in stack && (stack.partial as Set<string>).has(`${d.day}|${s.key}`) ? '≥ ' : ''}{fmtInt(Number(d[s.key] ?? 0))}</td>)}</tr>)}</tbody>
                   </table>
                 }
                 action={

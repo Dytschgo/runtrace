@@ -77,7 +77,8 @@ export function sliderDomain(rows: HourRow[], f: Pick<Filters, 'range' | 'since'
   if (!f.range && !zoom.dayTrack && validDate(f.since)) {
     const start = Date.parse(f.since as string);
     const end = validDate(f.until) ? Date.parse(f.until as string) : now;
-    if (end - start <= 3 * DAY && end > start) {
+    // A window that has not started yet has no hours to show around it, so it sits off the day track and names its own dates.
+    if (end - start <= 3 * DAY && end > start && start < now) {
       const pad = Math.max(6 * HOUR, end - start);
       const to = Math.min(end + pad, bar);
       return { slots: hourSlots(rows, start - pad, to), unit: 'hour', zoomed: false, openEnd: to >= now };

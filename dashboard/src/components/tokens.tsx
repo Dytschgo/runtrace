@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import { stackByDay, type TokenSummary } from '../lib/analytics';
 import type { TurnRow } from '../lib/entities';
-import { fmtCompact, fmtInt, fmtPct, isKnown } from '../lib/format';
+import { fmtCompact, fmtInt, fmtPct, isKnown, localParts } from '../lib/format';
 import type { StackSeries } from './charts';
 import { OTHER_COLOR, seriesColor } from '../lib/modelColors';
 import { CoverageBar, Unknown } from './ui';
@@ -64,9 +64,11 @@ export function useTokenStack(turns: TurnRow[], slots: Map<string, string>, tz: 
     const visible = new Set([...slots.keys()].slice(0, CHART_MODELS));
     const name = (t: TurnRow) => (t.model && visible.has(t.model) ? t.model : 'Other');
     const data = stackByDay(turns.filter((t) => t.total !== null), (t) => t.occurred_at, name, tz, (t) => t.total!);
+    // A day where some of a model's turns reported no total is a lower bound for that model, and the table says so.
+    const partial = new Set(turns.filter((t) => t.total === null && !t.log).map((t) => `${localParts(t.occurred_at, tz).date}|${name(t)}`));
     const present = new Set(data.flatMap((d) => Object.keys(d)));
     const series: StackSeries[] = [...visible].filter((m) => present.has(m)).map((m) => ({ key: m, label: m, color: seriesColor(slots.get(m)) }));
     if (present.has('Other')) series.push({ key: 'Other', label: 'Other', color: OTHER_COLOR });
-    return { data, series };
+    return { data, series, partial };
   }, [turns, slots, tz]);
 }

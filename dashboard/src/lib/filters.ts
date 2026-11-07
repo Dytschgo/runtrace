@@ -20,7 +20,9 @@ export function readDate(value: string | null | undefined) {
  * A date that cannot be read is ignored, and a reversed pair is put the right way round.
  */
 export function resolveFilters(params: URLSearchParams, now = Date.now(), defaultRange?: string): Filters {
-  const range = params.get('range') ?? undefined;
+  // A range the page does not know is treated as no range, so the default applies rather than the whole history.
+  const given = params.get('range') ?? undefined;
+  const range = given === 'all' || (given && Object.hasOwn(RANGES, given)) ? given : undefined;
   const f: Filters = {
     project: params.get('project') || undefined,
     model: params.get('model') || undefined,
@@ -29,7 +31,7 @@ export function resolveFilters(params: URLSearchParams, now = Date.now(), defaul
     until: readDate(params.get('until')),
   };
   if (f.since && f.until && Date.parse(f.since) > Date.parse(f.until)) [f.since, f.until] = [f.until, f.since];
-  if (f.until && Date.parse(f.until) >= now) f.until = undefined;
+  if (f.until && Date.parse(f.until) >= now && !(f.since && Date.parse(f.since) > now)) f.until = undefined;
   // "all" is a choice, so only a page with nothing chosen falls back to the default.
   const preset = range && Object.hasOwn(RANGES, range) ? range : !range && !f.since && !f.until ? defaultRange : undefined;
   if (preset) {

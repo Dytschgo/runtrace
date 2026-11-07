@@ -194,8 +194,8 @@ describe('analytics', () => {
   });
   it('totals tokens per key without treating a missing total as zero', () => {
     const m = tokensByKey([{ k: 'a', v: 5 }, { k: 'a', v: null }, { k: 'b', v: null }], (r) => r.k, (r) => r.v);
-    expect(m.get('a')).toEqual({ total: 5, turns: 2, withUsage: 1 });
-    expect(m.get('b')).toEqual({ total: null, turns: 1, withUsage: 0 });
+    expect(m.get('a')).toEqual({ total: 5, turns: 2, withUsage: 1, withTotal: 1 });
+    expect(m.get('b')).toEqual({ total: null, turns: 1, withUsage: 0, withTotal: 0 });
   });
   it('measures provider usage from turns rather than assuming it', () => {
     const turn = (provider: string | null, usage: string, total: number | null) => toTurn(entity({ provider, usage_status: usage, total_tokens: total }));
