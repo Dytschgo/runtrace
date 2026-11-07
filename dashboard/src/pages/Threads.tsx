@@ -3,12 +3,12 @@ import { ModelName } from '../components/model';
 import { useInfiniteQuery } from '@tanstack/react-query';
 import { ArrowLeft, ChevronRight, CornerDownRight, GitBranch, History, Network, Play } from 'lucide-react';
 import { DataTable, type Column } from '../components/DataTable';
-import { AppLink, Async, DisclosurePanel, EmptyState, ErrorState, Tokens, NoRecords, PageHeader, Panel, plural, QualityBadge, ScanNote, Segmented, SkeletonRows, Stat, StatRow, StatusBadge, Tag, Unknown } from '../components/ui';
+import { AppLink, Async, DisclosurePanel, EmptyState, ErrorState, Tokens, NoRecords, PageHeader, Panel, plural, QualityBadge, ScanNote, Segmented, SkeletonRows, Stat, StatRow, StatusBadge, Tag, Unknown, NotYetPage } from '../components/ui';
 import { getJson } from '../lib/api';
 import { useAgents, useFilters, useLiveTurns, useProjects, useThreads, useThreadTokens } from '../lib/data';
 import { windowTokens } from '../lib/analytics';
 import { contentField, parseContent, toRun, toTurn, type ThreadRow } from '../lib/entities';
-import { inTimeRange } from '../lib/filters';
+import { inTimeRange, isFuture } from '../lib/filters';
 import { fmtClock, fmtCompact, fmtDateTime, fmtDay, fmtDuration, fmtInt, fmtRelative, fmtShortDateTime, isKnown, cleanText, repairText } from '../lib/format';
 import { useSettings } from '../lib/settings';
 import { durationMs } from '../lib/entities';
@@ -88,7 +88,7 @@ function ThreadList() {
     },
     {
       key: 'tokens', header: 'Tokens', align: 'end', className: 'cell-tokens', sort: (t) => t.tokenTotal,
-      render: (t) => (!turnsReady ? <span className="fine" aria-label="Loading">…</span> : t.tokenTotal === null && !t.turns ? <span className="fine">None here</span> : <>{t.short && t.tokenTotal !== null && <span className="lower-bound" title="Some turns in this thread reported no total"><span aria-hidden="true">≥</span><span className="sr-only">at least </span></span>}<Tokens v={t.tokenTotal} why={TOKEN_WHY} /></>),
+      render: (t) => (!turnsReady ? <span className="fine" aria-label="Loading">…</span> : t.tokenTotal === null && !t.turns ? <span className="fine">None here</span> : <>{t.short && !!t.tokenTotal && <span className="lower-bound" title="Some turns in this thread reported no total"><span aria-hidden="true">≥</span><span className="sr-only">at least </span></span>}<Tokens v={t.tokenTotal} why={TOKEN_WHY} /></>),
     },
     { key: 'story', header: 'Play', render: (t) => <AppLink className="icon-btn" href={hrefPage('Threads', { id: t.source_id, story: '1' })} ariaLabel={`Play the story of ${t.title}`} title="Play the story"><Play size={14} aria-hidden="true" /></AppLink> },
     { key: 'type', header: 'Type', sort: (t) => t.type, render: (t) => <span className={`type type-${t.type}`}>{t.type === 'child' ? `Child · depth ${t.depth ?? '?'}` : t.type === 'primary' ? 'Primary' : 'Unknown'}</span> },
@@ -100,6 +100,8 @@ function ThreadList() {
     { key: 'updated', header: 'Last update', sort: (t) => t.updated_at, render: (t) => (t.updated_at ? <span title={fmtDateTime(t.updated_at, timezone)}>{fmtRelative(t.updated_at)}</span> : <span className="fine">Unknown</span>) },
     { key: 'quality', header: 'Capture', sort: (t) => t.quality, render: (t) => <QualityBadge quality={t.quality} /> },
   ];
+
+  if (isFuture(f)) return <NotYetPage title="Threads" />;
 
   return (
     <>
@@ -205,7 +207,7 @@ function ThreadDetail({ id }: { id: string }) {
           <dl className="facts facts-grid">
             <div><dt>Model</dt><dd>{thread.model ? <ModelName model={thread.model} /> : <Unknown label="Unknown" />}</dd></div>
             <div><dt>Resolved model</dt><dd><Unknown why="Only the requested model is recorded." /></dd></div>
-            <div><dt>Complete-turn tokens</dt><dd><Tokens v={threadUsage?.total ?? thread.tokens} why={TOKEN_WHY} />{threadUsage && threadUsage.withUsage < threadUsage.turns && <small className="fine"> {fmtInt(threadUsage.withUsage)} of {fmtInt(threadUsage.turns)} turns reported</small>}</dd></div>
+            <div><dt>Complete-turn tokens</dt><dd>{threadUsage && !!threadUsage.total && (threadUsage.withTotal ?? threadUsage.withUsage) < threadUsage.turns && <span className="lower-bound" title="Some turns reported no total"><span aria-hidden="true">≥</span><span className="sr-only">at least </span></span>}<Tokens v={threadUsage?.total ?? thread.tokens} why={TOKEN_WHY} />{threadUsage && threadUsage.withUsage < threadUsage.turns && <small className="fine"> {fmtInt(threadUsage.withUsage)} of {fmtInt(threadUsage.turns)} turns reported</small>}</dd></div>
             <div><dt>Branch</dt><dd>{thread.branch ? <span className="mono cell-clip"><GitBranch size={12} aria-hidden="true" /> {thread.branch}</span> : <span className="fine">None recorded</span>}</dd></div>
             <div><dt>Last update</dt><dd title={thread.updated_at ?? undefined}>{thread.updated_at ? fmtShortDateTime(thread.updated_at, timezone) : <Unknown label="Unknown" />}</dd></div>
             <div><dt>Parent</dt><dd>{thread.parent ? (parent ? <AppLink className="link" href={hrefPage('Threads', { id: parent.source_id })}>{parent.title}</AppLink> : <span className="fine">Not imported</span>) : <span className="fine">None</span>}</dd></div>

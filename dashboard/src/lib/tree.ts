@@ -15,6 +15,8 @@ export interface TreeNode {
   cycle: boolean;
   start: number | null;
   end: number | null;
+  /** Every agent record that delegated to this node. The same child thread can be delegated to more than once, and each time counts. */
+  records?: AgentRow[];
 }
 
 export interface Forest {
@@ -39,13 +41,14 @@ const ms = (iso: string | null | undefined) => {
 export function buildForest(threads: ThreadRow[], agents: AgentRow[]): Forest {
   const nodes = new Map<string, TreeNode>();
   const agentByChild = new Map<string, AgentRow>();
-  for (const a of agents) if (a.child) agentByChild.set(a.child, a);
+  const recordsByChild = new Map<string, AgentRow[]>();
+  for (const a of agents) if (a.child) { agentByChild.set(a.child, a); recordsByChild.set(a.child, [...(recordsByChild.get(a.child) ?? []), a]); }
 
   for (const t of threads) {
     const a = agentByChild.get(t.source_id) ?? null;
     nodes.set(t.source_id, {
       key: t.source_id, title: t.title, thread: t, agent: a, children: [], depth: 0, evidence: null, missingParent: null, cycle: false,
-      start: ms(a?.started) ?? ms(t.occurred_at), end: ms(a?.completed),
+      start: ms(a?.started) ?? ms(t.occurred_at), end: ms(a?.completed), records: recordsByChild.get(t.source_id),
     });
   }
 
@@ -58,7 +61,7 @@ export function buildForest(threads: ThreadRow[], agents: AgentRow[]): Forest {
       nodes.set(key, {
         key, title: a.task?.split('\n')[0].slice(0, 120) || (a.agentType === 'provider_native_subagent' ? 'Provider-native sub-agent' : 'Sub-agent'),
         thread: null, agent: a, children: [], depth: 0, evidence: null, missingParent: null, cycle: false,
-        start: ms(a.started) ?? ms(a.occurred_at), end: ms(a.completed),
+        start: ms(a.started) ?? ms(a.occurred_at), end: ms(a.completed), records: a.child ? recordsByChild.get(a.child) : [a],
       });
     }
     if (a.thread_id) parentOf.set(key, { parent: a.thread_id, evidence: 'agent_record' });
@@ -145,8 +148,18 @@ export function treeStats(root: TreeNode, win?: StatsWindow): TreeStats {
   const windowed = from > -Infinity || to < Infinity;
   const everyDelegated = all.filter((n) => n.depth > 0);
   // A sub-agent belongs to the window its record falls in, the same rule every other count uses, so this page and the Overview agree.
-  const recordedAt = (n: TreeNode) => { const t = n.agent ? Date.parse(n.agent.occurred_at) : n.thread ? Date.parse(n.thread.occurred_at) : NaN; return Number.isFinite(t) ? t : n.start; };
-  const delegated = windowed ? everyDelegated.filter((n) => { const t = recordedAt(n); return t !== null && t >= from && t <= to; }) : everyDelegated;
+  // Each delegation record counts, including a second delegation to the same child thread. A child known only from thread lineage counts once.
+  const inWindow = (iso: string | null | undefined, fallback: number | null) => { const t = iso ? Date.parse(iso) : NaN; const at = Number.isFinite(t) ? t : fallback; return at !== null && at >= from && at <= to; };
+  type Delegation = { node: TreeNode; returned: boolean | null | undefined };
+  const delegationsOf = (n: TreeNode): Delegation[] => {
+    const recs = n.records?.length ? n.records : n.agent ? [n.agent] : null;
+    if (recs) return recs.filter((r) => !windowed || inWindow(r.occurred_at, n.start)).map((r) => ({ node: n, returned: r.returned }));
+    return !windowed || inWindow(n.thread?.occurred_at, n.start) ? [{ node: n, returned: undefined }] : [];
+  };
+  const records = everyDelegated.flatMap(delegationsOf);
+  const wholeTree = windowed ? everyDelegated.reduce((s, n) => s + (n.records?.length || 1), 0) : records.length;
+  const delegated = [...new Set(records.map((r) => r.node))];
+  const inView = new Set(delegated);
   // Busy time and parallel runs count whatever was running in the window, wherever it started.
   const intervals = everyDelegated.flatMap((n) => {
     if (n.start === null || n.end === null || n.end < n.start) return [];
@@ -154,18 +167,18 @@ export function treeStats(root: TreeNode, win?: StatsWindow): TreeStats {
   }).filter(([a, b]) => b >= a);
   const merged = mergeIntervals(intervals);
   return {
-    nodes: all.length, delegated: delegated.length,
+    nodes: all.length, delegated: records.length,
     maxDepth: windowed ? Math.max(0, ...delegated.map((n) => n.depth)) : Math.max(...all.map((n) => n.depth)),
-    maxFanout: Math.max(...all.map((n) => n.children.length)),
+    maxFanout: windowed ? Math.max(0, ...all.map((n) => n.children.filter((c) => inView.has(c)).length)) : Math.max(...all.map((n) => n.children.length)),
     peakParallel: peakConcurrency(intervals),
     busyMs: merged.reduce((s, [a, b]) => s + (b - a), 0),
     spanMs: merged.length ? merged[merged.length - 1][1] - merged[0][0] : 0,
-    returned: delegated.filter((n) => n.agent?.returned === true).length,
-    notReturned: delegated.filter((n) => n.agent?.returned === false).length,
-    returnUnknown: delegated.filter((n) => !n.agent || n.agent.returned === null).length,
+    returned: records.filter((r) => r.returned === true).length,
+    notReturned: records.filter((r) => r.returned === false).length,
+    returnUnknown: records.filter((r) => r.returned !== true && r.returned !== false).length,
     openEnded: delegated.filter((n) => n.start === null || n.end === null || n.end < n.start).length,
     timed: delegated.length - delegated.filter((n) => n.start === null || n.end === null || n.end < n.start).length,
-    wholeTree: everyDelegated.length,
+    wholeTree,
   };
 }
 

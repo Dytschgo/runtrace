@@ -821,3 +821,4 @@ pre { margin: 0; padding: 0.6rem 0.75rem; max-block-size: 24rem; overflow: auto;
 .quota-alert-mini:active { background: var(--surface-2); }
 @media (max-width: 760px) { .quota-alert-mini { display: grid; } }
 .unnamed-toggle[aria-pressed='true'] { background: var(--ink-1); color: var(--on-accent); border-color: var(--ink-1); background-image: none; }
+.trace-tip-pinned { background: oklch(0.13 0 none); }

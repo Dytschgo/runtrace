@@ -139,3 +139,15 @@ describe('tree numbers inside a window', () => {
     expect(s).toMatchObject({ delegated: 1, wholeTree: 4, maxDepth: 2, busyMs: 1.5 * H });
   });
 });
+
+describe('repeat delegations', () => {
+  it('count every delegation record, and fan-out in a window counts only children in it', async () => {
+    const { treeStats } = await import('./tree');
+    const H = 3_600_000;
+    const rec = (id: string, at: number, returned: boolean | null): any => ({ source_id: id, occurred_at: new Date(at).toISOString(), returned });
+    const node = (key: string, depth: number, start: number, records: any[] | undefined, children: any[] = []): any => ({ key, title: key, thread: null, agent: records?.[0] ?? null, records, children, depth, evidence: null, missingParent: null, cycle: false, start, end: start + H / 2 });
+    const root = node('r', 0, 0, undefined, [node('a', 1, 0, [rec('x1', 0, true), rec('x2', 5 * H, true), rec('x3', 6 * H, false)]), node('b', 1, 2 * H, [rec('y', 2 * H, null)])]);
+    expect(treeStats(root)).toMatchObject({ delegated: 4, returned: 2, notReturned: 1, returnUnknown: 1, maxFanout: 2 });
+    expect(treeStats(root, { since: new Date(4 * H).toISOString(), until: new Date(7 * H).toISOString() })).toMatchObject({ delegated: 2, wholeTree: 4, maxFanout: 1, returned: 1, notReturned: 1 });
+  });
+});

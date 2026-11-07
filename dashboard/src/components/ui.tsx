@@ -332,3 +332,13 @@ export function DisclosurePanel({ title, sub, children }: { title: string; sub?:
     </details>
   );
 }
+
+/** The whole page for a window that has not happened yet. Nothing is shown as zero. */
+export function NotYetPage({ title }: { title: string }) {
+  return (
+    <>
+      <PageHeader title={title} />
+      <Panel><EmptyState title="Not yet"><p>This window starts later than now, so nothing is known about it yet.</p></EmptyState></Panel>
+    </>
+  );
+}

@@ -732,10 +732,14 @@ test('Overview and Agent Trees give the same delegation numbers for the same win
   await expect(panel).toBeVisible({ timeout: 60_000 });
   const read = async (dt: string) => (await panel.locator('div', { hasText: dt }).locator('dd').first().innerText()).trim();
   const trees = await read('Delegating threads');
+  const results = await read('Results delivered');
+  const tile = (await page.locator('.tile', { hasText: 'Sub-agents' }).locator('strong').getAttribute('title'))!;
   await page.goto('/?page=Agent+Trees&range=7d');
   await page.waitForLoadState('networkidle');
-  const stat = page.locator('.stat', { hasText: 'Delegating threads' }).first();
-  await expect(stat).toContainText(trees);
+  await expect(page.locator('.stat', { hasText: 'Delegating threads' }).first()).toContainText(trees);
+  // Every delegation record counts on both pages, a repeat delegation to the same child included.
+  await expect(page.locator('.stat', { hasText: 'Sub-agents' }).first()).toContainText(tile);
+  await expect(page.locator('.stat', { hasText: 'Results delivered' }).first()).toContainText(results.replace(' recorded', ''));
 });
 
 test('a row with tokens only from session logs says so', async ({ page }) => {
@@ -814,4 +818,73 @@ test('Shift and an arrow carry the week along its framed track', async ({ page }
   await expect(page).toHaveURL(/zs=/);
   await expect(page.getByRole('button', { name: 'Show the whole history on the track' })).toBeVisible();
   expect(Math.abs((await bars()) - framed)).toBeLessThan(5);
+});
+
+test('an hour is too coarse for a 45-minute window', async ({ page }) => {
+  await open(page, '?since=2026-11-06T18:00:00.000Z&until=2026-11-06T18:45:00.000Z&res=1h');
+  await expect(page.locator('.res-note')).toBeVisible({ timeout: 60_000 });
+  await expect(page.locator('.hero-chart h2')).not.toContainText('per hour');
+});
+
+test('a model whose turns did not all report a total reads as a lower bound on Models', async ({ page, request }) => {
+  const models = (await (await request.get('/api/v1/models')).json()).data as { model: string | null; total_tokens: number | null; complete_usage_turns?: number; observed_provider_turns?: number }[];
+  const partial = models.find((m) => m.model && m.total_tokens && (m.complete_usage_turns ?? 0) < (m.observed_provider_turns ?? 0));
+  test.skip(!partial, 'Every model reported complete totals.');
+  await page.goto('/?page=Models&range=all');
+  const row = page.getByRole('table', { name: 'Usage by requested model' }).locator('tbody tr', { hasText: partial!.model! }).first();
+  await expect(row.locator('.lower-bound').first()).toBeVisible({ timeout: 30_000 });
+});
+
+test('a selected tree reads its numbers inside the window and names the whole tree', async ({ page }) => {
+  await page.goto('/?page=Agent+Trees&range=24h');
+  await page.waitForLoadState('networkidle');
+  const partialRow = page.locator('tbody tr', { has: page.locator('small', { hasText: /^of \d/ }) }).first();
+  test.skip(!(await partialRow.count()), 'No tree in the last day is larger than the window.');
+  await partialRow.locator('a').first().click();
+  await expect(page.locator('.tree-stats')).toContainText('in the tree');
+  await expect(page.locator('.tree-stats')).toContainText('busy in this window');
+});
+
+test('a future window is not yet known on every page, and no row reads zero', async ({ page }) => {
+  const day = new Date(Date.now() + 5 * 86_400_000).toISOString().slice(0, 10);
+  const win = `since=${day}T00:00:00.000Z&until=${day}T23:59:59.999Z`;
+  for (const p of ['Activity', 'Models', 'Projects', 'Threads', 'Tool+Calls']) {
+    await page.goto(`/?page=${p}&${win}`);
+    await expect(page.getByRole('heading', { name: 'Not yet' })).toBeVisible({ timeout: 30_000 });
+  }
+  await open(page, `?${win}`);
+  await expect(page.locator('.tokens-hero strong')).toContainText('Not yet');
+  await expect(page.locator('.model-lines b[title]')).toHaveCount(0);
+  await expect(page.locator('.model-lines small', { hasText: /0\.0%/ })).toHaveCount(0);
+});
+
+test('a share is never shown for a group that measured nothing', async ({ page }) => {
+  await open(page, '?range=7d');
+  const silent = page.locator('.model-lines li', { has: page.locator('b .unknown', { hasText: 'Not reported' }) });
+  test.skip(!(await silent.count()), 'Every group reported in this week.');
+  await expect(silent.first().locator('small')).toContainText('Share unknown');
+});
+
+test('a bucket longer than a past window falls back to the automatic resolution', async ({ page }) => {
+  await open(page, '?since=2026-11-07T08:00:00.000Z&until=2026-11-07T13:00:00.000Z&res=6h');
+  await expect(page.locator('.res-note')).toBeVisible({ timeout: 60_000 });
+  await expect(page.locator('.hero-chart h2')).not.toContainText('per 6 hours');
+});
+
+test('quota windows state what readings can only bound', async ({ page }) => {
+  await page.goto('/?page=Quota+and+Resets');
+  const table = page.getByRole('region', { name: 'Quota windows' });
+  await expect(table).toBeVisible({ timeout: 30_000 });
+  const cells = await table.locator('tbody td.num').allInnerTexts();
+  for (const c of cells.filter((t) => /%/.test(t))) expect(c).toMatch(/^[≥≤] /);
+});
+
+test('Agent Trees lists only trees that delegated inside the window', async ({ page }) => {
+  await page.goto('/?page=Agent+Trees&range=24h');
+  await page.waitForLoadState('networkidle');
+  const rows = page.locator('tbody tr');
+  test.skip(!(await rows.count()), 'Nothing delegated in the last day.');
+  const shown = await page.locator('.stat', { hasText: 'Delegating threads' }).locator('.stat-value').innerText();
+  expect(Number(shown.replace(/\D/g, ''))).toBe(await rows.count());
+  for (const cell of await rows.locator('td:nth-child(2)').allInnerTexts()) expect(cell.trim().startsWith('0')).toBe(false);
 });

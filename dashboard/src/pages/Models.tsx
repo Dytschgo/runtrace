@@ -3,10 +3,10 @@ import { modelIcon } from '../lib/icons';
 import { OTHER_COLOR, seriesColor, StackedDays, type StackSeries } from '../components/charts';
 import { DataTable, type Column } from '../components/DataTable';
 import { CHART_MODELS, TokenFacts, useTokenStack } from '../components/tokens';
-import { AppLink, Async, ChartPanel, CoverageBar, NoRecords, PageHeader, Panel, Segmented, Skeleton, SkeletonRows, Stat, StatRow, Tag, Tokens, Unknown, Val } from '../components/ui';
+import { AppLink, Async, ChartPanel, CoverageBar, NoRecords, PageHeader, Panel, Segmented, Skeleton, SkeletonRows, Stat, StatRow, Tag, Tokens, Unknown, Val, NotYetPage } from '../components/ui';
 import { percentile, stackByDay, tokenSummary } from '../lib/analytics';
 import { useAgents, useFilters, useModels, useModelSlots, useModelTurns, useOverviews, useThreads } from '../lib/data';
-import { inTimeRange } from '../lib/filters';
+import { inTimeRange, isFuture } from '../lib/filters';
 import { fmtCompact, fmtDuration, fmtInt, fmtPct, isKnown } from '../lib/format';
 import { useSettings } from '../lib/settings';
 import type { ModelRow } from '../lib/types';
@@ -90,7 +90,7 @@ export default function Models() {
       render: (r) => (
         <span className="token-cell">
           <span className="bar-cell-track" aria-hidden="true"><span style={{ inlineSize: `${r.share * 100}%` }} /></span>
-          {isKnown(r.total_tokens) && (r.turns_with_usage ?? 0) < (r.observed_provider_turns ?? 0) && <span className="lower-bound" title="Some turns reported no usage"><span aria-hidden="true">≥</span><span className="sr-only">at least </span></span>}
+          {isKnown(r.total_tokens) && (r.complete_usage_turns ?? r.turns_with_usage ?? 0) < (r.observed_provider_turns ?? 0) && <span className="lower-bound" title="Some turns reported no complete total"><span aria-hidden="true">≥</span><span className="sr-only">at least </span></span>}
           <Tokens v={r.total_tokens} why={(r.turns_with_usage ?? 0) > 0 ? 'Total is only computed for turns with complete usage.' : NO_USAGE} />
         </span>
       ),
@@ -144,6 +144,8 @@ export default function Models() {
 
   const top = rows.reduce<Row | undefined>((best, r) => (r.model && (!best || (hasTotals ? (r.total_tokens ?? -1) > (best.total_tokens ?? -1) : r.observed_runs > best.observed_runs)) ? r : best), undefined);
 
+  if (isFuture(f)) return <NotYetPage title="Models" />;
+
   return (
     <>
       <PageHeader title="Models" lead="Tokens are per provider turn, not per model call." />
@@ -157,7 +159,7 @@ export default function Models() {
               <Stat label="Model calls" value={rows.some((r) => isKnown(r.calls)) ? 'Partial' : <Unknown why={CALLS_WHY} />} sub="Not the same as provider turns" />
             </StatRow>
 
-            <Panel title="Model ledger" sub="Counts follow the current filters." flush>
+            <Panel title="Model ledger" sub="Counts follow the current filters. Total counts only turns that reported one, so input can exceed it." flush>
               {absent.length > 0 && (
                 <p className="table-gap">{absent.map((m) => <span key={m.key}>{m.header} <Unknown why={m.why} /></span>)}<small>for every model</small></p>
               )}

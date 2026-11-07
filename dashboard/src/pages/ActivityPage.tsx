@@ -3,9 +3,10 @@ import { useMemo } from 'react';
 import { Bot, Coins, FileText, Globe, MessageSquare, MessageSquareReply, Play, Wrench, type LucideIcon } from 'lucide-react';
 import { ActivityHeatmap, ColumnChart } from '../components/charts';
 import { Pager } from '../components/DataTable';
-import { AppLink, Async, ChartPanel, EmptyState, NoRecords, PageHeader, Panel, Segmented, Skeleton, SkeletonRows, Stat, StatRow, StatusBadge } from '../components/ui';
+import { AppLink, Async, ChartPanel, EmptyState, NoRecords, PageHeader, Panel, Segmented, Skeleton, SkeletonRows, Stat, StatRow, StatusBadge, NotYetPage } from '../components/ui';
 import { bucketActivity, buildHeatmap } from '../lib/analytics';
 import { useFilters, useHourly, useOverview, useTimelinePage } from '../lib/data';
+import { isFuture } from '../lib/filters';
 import { contentField, parseContent, toTool, toTurn } from '../lib/entities';
 import { fmtClock, fmtCompact, fmtDay, fmtInt, isKnown, cleanText, repairText } from '../lib/format';
 import { useSettings } from '../lib/settings';
@@ -61,6 +62,8 @@ export default function ActivityPage() {
   const total = totals.data ? (kind === 'all' ? Object.values(totals.data).reduce((a, b) => a + b, 0) : totals.data[kind] ?? 0) : undefined;
   const rows = feed.data ?? [];
   const shownRows = rows;
+
+  if (isFuture(f)) return <NotYetPage title="Activity" />;
 
   return (
     <>

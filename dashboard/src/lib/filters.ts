@@ -152,3 +152,6 @@ export function zoomOutPatch(params: URLSearchParams, now = Date.now()): Patch {
   const wideStart = wideEnd - span * 4;
   return { range: null, since: new Date(wideStart).toISOString(), until: wideEnd >= now - MINUTE ? null : new Date(wideEnd - 1).toISOString(), up: null, ...CLEAR_TRACK };
 }
+
+/** A window that starts later than now has not happened, so nothing in it is known, not even a zero. */
+export const isFuture = (f: Pick<Filters, 'since'>, now = Date.now()) => !!f.since && Date.parse(f.since) > now;

@@ -165,7 +165,10 @@ test('agent graph draws only edges present in the API', async ({ page, request }
   const summary = page.locator('.stat', { hasText: 'Sub-agents' });
   const shown = Number((await summary.locator('.stat-value').innerText()).replace(/\D/g, ''));
   expect(shown).toBeGreaterThan(0);
-  expect(shown).toBeLessThanOrEqual(edges.length);
+  // Each delegation record counts, a repeat delegation to the same child included, plus children known only from thread lineage.
+  const childOfAgent = new Set(agents.map((a) => a.data.child_thread_id).filter(Boolean));
+  const lineageOnly = threads.filter((t) => t.data.relationship_to_parent === 'subagent' && t.data.parent_thread_id && !childOfAgent.has(t.source_id)).length;
+  expect(shown).toBeLessThanOrEqual(agents.length + lineageOnly);
 
   // Every direct child in the rendered tree must be a recorded child of the selected root.
   const rootLink = page.locator('.row-link[aria-current="true"]');

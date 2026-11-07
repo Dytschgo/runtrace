@@ -23,7 +23,6 @@ interface Tile { label: string; kind: string; page: PageName; icon: ComponentTyp
 
 const GROUPS: { value: GroupBy; label: string }[] = [{ value: 'model', label: 'Models' }, { value: 'provider', label: 'Providers' }, { value: 'project', label: 'Projects' }];
 const RES_OPTIONS: { value: Resolution | 'auto'; label: string }[] = [{ value: 'auto', label: 'Auto' }, { value: '5m', label: '5m' }, { value: '15m', label: '15m' }, { value: '1h', label: '1h' }, { value: '6h', label: '6h' }, { value: '1d', label: '1d' }, { value: '1w', label: '1w' }];
-const ORDER_FINER: Record<Resolution, Resolution> = { '5m': '5m', '15m': '5m', '1h': '15m', '6h': '1h', '1d': '6h', '1w': '1d' };
 const RES_WORDS: Record<Resolution, string> = { '5m': '5 minutes', '15m': '15 minutes', '1h': 'hour', '6h': '6 hours', '1d': 'day', '1w': 'week' };
 const isGroup = (v: string | null): v is GroupBy => v === 'model' || v === 'provider' || v === 'project';
 const isMetric = (v: string | null): v is Metric => METRICS.some((m) => m.key === v);
@@ -180,8 +179,9 @@ export default function Overview() {
   const plotSince = clipped ? firstRecord : since;
   const span = Math.max(1, until - plotSince);
   // A bucket much longer than the window would draw one point that reads as a whole week or day, so those are switched off too.
-  const tooCoarse = (r: Resolution) => RESOLUTION_MS[r] > span * 1.5;
-  const res = (() => { let r = effectiveResolution(resChoice, span); while (tooCoarse(r) && r !== '5m') r = ORDER_FINER[r]; return r; })();
+  const tooCoarse = (r: Resolution) => RESOLUTION_MS[r] > span * 1.02;
+  // A bucket longer than the window falls back to the automatic choice, which always fits.
+  const res = (() => { const r = effectiveResolution(resChoice, span); return tooCoarse(r) ? effectiveResolution('auto', span) : r; })();
   const resOptions = RES_OPTIONS.map((o) => (o.value === 'auto' ? o : effectiveResolution(o.value, span) !== o.value ? { ...o, disabled: true, title: 'Too fine for this window' } : tooCoarse(o.value) ? { ...o, disabled: true, title: 'Longer than this window' } : o));
   // The list always ranks every group. The chart and the headline follow the rows chosen, and turns that name no model stay off the chart until asked for.
   const chartTurns = useMemo(
@@ -430,7 +430,7 @@ export default function Overview() {
               {() => (
                 <>
                   <ul className="model-lines" onKeyDown={roveTo} aria-label={`${GROUPS.find((g) => g.value === by)!.label}. Arrow keys move between rows.`} data-focus={focus ? 'true' : undefined} data-picking={picks.size ? 'true' : undefined}>
-                    {shownLines.map((l, i) => <GroupLine key={l.key} tabIndex={i === Math.min(rove, shownLines.length - 1) ? 0 : -1} onRove={() => setRove(i)} offChart={l.key === 'not-recorded' && !showUnnamed && !picks.has('not-recorded')} line={l} total={listTrace.total ?? total} top={topValue} by={by} unit={metricInfo.unit} draft={!!draft} focused={focus === (drawn.has(l.key) ? l.key : 'Other')} seriesKey={l.key === 'not-recorded' && !drawn.has(l.key) ? '' : drawn.has(l.key) ? l.key : 'Other'} onFocus={setFocus} selected={picks.has(l.key)} onToggle={togglePick} why={whyMissing(l.partial)} />)}
+                    {shownLines.map((l, i) => <GroupLine key={l.key} tabIndex={i === Math.min(rove, shownLines.length - 1) ? 0 : -1} onRove={() => setRove(i)} offChart={l.key === 'not-recorded' && !showUnnamed && !picks.has('not-recorded')} line={l} total={listTrace.total ?? total} top={topValue} by={by} unit={metricInfo.unit} draft={!!draft} focused={focus === (drawn.has(l.key) ? l.key : 'Other')} seriesKey={l.key === 'not-recorded' && !drawn.has(l.key) ? '' : drawn.has(l.key) ? l.key : 'Other'} onFocus={setFocus} selected={picks.has(l.key)} onToggle={togglePick} why={whyMissing(l.partial)} unknown={unknownWindow} />)}
                   </ul>
                   {unnamed && !picks.size && (
                     <button type="button" className="usage-chip unnamed-toggle" aria-pressed={showUnnamed} onClick={() => set({ nr: showUnnamed ? null : 1 })} title={showUnnamed ? 'Take turns that name no model off the chart' : 'Draw turns that name no model on the chart'}>
@@ -627,24 +627,25 @@ function ChangeArrow({ change }: { change: number }) {
 }
 
 /** One row of the list: a logo in its colour, its share of the window, and a line drawn to scale. */
-function GroupLine({ line, total, top, by, unit, draft, focused, seriesKey, onFocus, selected, onToggle, why, tabIndex, onRove, offChart }: {
+function GroupLine({ line, total, top, by, unit, draft, focused, seriesKey, onFocus, selected, onToggle, why, tabIndex, onRove, offChart, unknown }: {
   line: LineTotal; total: number | null; top: number; by: GroupBy; unit: string; draft: boolean; focused: boolean; seriesKey: string; onFocus: (key: string | null) => void; selected: boolean; onToggle: (key: string) => void; why: string;
-  tabIndex: number; onRove: () => void; offChart: boolean;
+  tabIndex: number; onRove: () => void; offChart: boolean; unknown?: { title: string; text: string } | null;
 }) {
   const { info, value, turns, reported } = line;
   const atLeast = unit !== 'provider turns' && reported < turns && value > 0;
   // Only nothing measured at all is unknown. Tokens from session logs still count when its turns reported none.
   const silent = turns > 0 && reported === 0 && value === 0;
   // Tokens with no turns behind them come from session-log hours, which are never turns. The row says so instead of reading as tokens from nothing.
-  const logOnly = turns === 0 && value > 0;
+  // When grouped by provider a row can hold turns that reported nothing next to session-log hours, so "nothing reported" is the test, not "no turns".
+  const logOnly = reported === 0 && value > 0;
   const Icon = by === 'project' ? Folder : info.model ? modelIcon(info.model) : info.provider ? providerIcon(info.provider) : Cpu;
   const share = isKnown(total) && total > 0 ? value / total : 0;
   const body: ReactNode = (
     <>
       <Icon size={15} aria-hidden="true" style={{ color: info.color }} />
       <span className={by === 'model' ? 'model-line-name mono' : 'model-line-name'}>{info.label}</span>
-      {silent ? <b><Unknown label="Not reported" why={why} /></b> : <b title={`${atLeast ? 'At least ' : ''}${fmtInt(value)} ${unit}`}>{atLeast && <span className="lower-bound"><span aria-hidden="true">≥</span><span className="sr-only">at least </span></span>}<Counter value={value} ms={draft ? 160 : 900} /></b>}
-      <small title={logOnly ? "These tokens come from the agents' session logs, kept per hour. Session-log hours are never counted as turns." : undefined}>{fmtPct(share, 1)}{unit !== 'provider turns' ? ` · ${logOnly ? 'session logs only' : reported < turns ? `${fmtInt(reported)} of ${plural(turns, 'turn')}` : plural(turns, 'turn')}` : ''}</small>
+      {unknown ? <b><Unknown label={unknown.title} why={unknown.text} /></b> : silent ? <b><Unknown label="Not reported" why={why} /></b> : <b title={`${atLeast ? 'At least ' : ''}${fmtInt(value)} ${unit}`}>{atLeast && <span className="lower-bound"><span aria-hidden="true">≥</span><span className="sr-only">at least </span></span>}<Counter value={value} ms={draft ? 160 : 900} /></b>}
+      <small title={logOnly ? "These tokens come from the agents' session logs, kept per hour. Session-log hours are never counted as turns." : undefined}>{unknown ? 'Unknown' : silent ? 'Share unknown' : fmtPct(share, 1)}{unknown ? '' : unit !== 'provider turns' ? ` · ${logOnly ? (turns ? `session logs only · ${plural(turns, 'turn')} reported nothing` : 'session logs only') : reported < turns ? `${fmtInt(reported)} of ${plural(turns, 'turn')}` : plural(turns, 'turn')}` : ''}</small>
       <span className="model-line-share" aria-hidden="true"><i style={{ '--share': value / top, background: info.dashArray ? `repeating-linear-gradient(90deg, ${info.color} 0 6px, transparent 6px 10px)` : info.color } as React.CSSProperties} /></span>
     </>
   );

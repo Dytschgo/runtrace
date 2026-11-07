@@ -4,10 +4,11 @@ import { useQuery } from '@tanstack/react-query';
 import { X } from 'lucide-react';
 import { StackedDays, type StackSeries } from '../components/charts';
 import { DataTable, type Column } from '../components/DataTable';
-import { AppLink, Async, ChartPanel, NoRecords, PageHeader, Panel, RankedBars, ScanNote, SelectField, Skeleton, SkeletonRows, Stat, StatRow, StatusBadge, Tag, Unknown } from '../components/ui';
+import { AppLink, Async, ChartPanel, NoRecords, PageHeader, Panel, RankedBars, ScanNote, SelectField, Skeleton, SkeletonRows, Stat, StatRow, StatusBadge, Tag, Unknown, NotYetPage } from '../components/ui';
 import { getEntities } from '../lib/api';
 import { stackByDay, toolHeadline, toolStats, toolSummary, type ToolStat } from '../lib/analytics';
 import { useFilters, useToolAggregates, useToolAnalysis, useToolHours, type ToolHour, useToolSummary } from '../lib/data';
+import { isFuture } from '../lib/filters';
 import { fmtCompact, fmtDateTime, fmtDuration, fmtInt, fmtPct, fmtShortDateTime, isKnown } from '../lib/format';
 import type { ToolRow } from '../lib/entities';
 import { useSettings } from '../lib/settings';
@@ -40,7 +41,7 @@ export default function ToolCalls() {
   const filtered = useMemo(() => rows.filter((r) =>
     (!tool || r.name === tool) && (!status || (status === 'unknown' ? r.status === null : r.status === status)) && (!category || r.category === category)), [rows, tool, status, category]);
   const complete = scan.data?.complete !== false;
-  const fullSummary = useToolSummary(f, !!scan.data && !complete && !tool && !category && !status);
+  const fullSummary = useToolSummary(f, !tool && !category && !status);
   const sum = useMemo(
     () => toolHeadline(toolSummary(filtered), complete, { full: fullSummary.data, stats: aggregate.data, tool, category, status }),
     [filtered, complete, fullSummary.data, aggregate.data, tool, category, status],
@@ -86,6 +87,8 @@ export default function ToolCalls() {
   ];
 
   const hasFilter = !!(tool || status || category);
+
+  if (isFuture(f)) return <NotYetPage title="Tool Calls" />;
 
   return (
     <>

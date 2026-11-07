@@ -169,14 +169,15 @@ const RECENT_DAYS = 15;
  * without re-reading thousands of rows, and the headline, list and chart all move together.
  * New turns build up between polls, and a full page with nothing already known means some were missed, so history is read again.
  */
-export function useLiveTurns(f: Pick<Filters, 'project' | 'instance'>) {
+export function useLiveTurns(f: Pick<Filters, 'project' | 'instance'>, enabled = true) {
   const [coversFrom] = useState(() => Math.floor((Date.now() - RECENT_DAYS * 86_400_000) / 3_600_000) * 3_600_000);
   const recentParams = apiParams('model-turns', { project: f.project, instance: f.instance, since: new Date(coversFrom).toISOString() });
   const recent = useQuery({
     queryKey: ['turns-recent', recentParams.toString()],
+    enabled,
     queryFn: ({ signal }) => scanPages('model-turns', recentParams, toTurn, TURN_MAX, signal, BIG_PAGE),
   });
-  const all = useModelTurns({ project: f.project, instance: f.instance }, !recent.isPending);
+  const all = useModelTurns({ project: f.project, instance: f.instance }, enabled && !recent.isPending);
   const queryClient = useQueryClient();
   const params = apiParams('model-turns', { project: f.project, instance: f.instance }, { limit: TAIL });
   const tailKey = ['turn-tail', params.toString()];

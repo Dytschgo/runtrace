@@ -5,11 +5,11 @@ import { ChevronRight } from 'lucide-react';
 import { ActivityChart } from '../components/charts';
 import { DataTable, type Column } from '../components/DataTable';
 import { TokenFacts } from '../components/tokens';
-import { AppLink, Async, ChartPanel, NoRecords, PageHeader, Panel, plural, RankedBars, Skeleton, SkeletonRows, Stat, StatRow, Tag, Tokens, Unknown } from '../components/ui';
+import { AppLink, Async, ChartPanel, NoRecords, PageHeader, Panel, plural, RankedBars, Skeleton, SkeletonRows, Stat, StatRow, Tag, Tokens, Unknown, NotYetPage } from '../components/ui';
 import { bucketActivity, tokensByKey, tokenSummary } from '../lib/analytics';
 import { useAgents, useFilters, useHourly, useModels, useModelTurns, useOverview, useOverviews, useProjects, useThreads, useUsage } from '../lib/data';
 import type { Filters } from '../lib/filters';
-import { inTimeRange } from '../lib/filters';
+import { inTimeRange, isFuture } from '../lib/filters';
 import { fmtCompact, fmtDateTime, fmtInt, fmtRelative, fmtShortDateTime, repairText } from '../lib/format';
 import { useSettings } from '../lib/settings';
 import { useUrl } from '../lib/url';
@@ -93,6 +93,8 @@ export default function Projects() {
 
   const focusId = f.project ?? (list.length === 1 ? list[0].source_id : undefined);
   const focus = list.find((p) => p.source_id === focusId);
+
+  if (isFuture(f)) return <NotYetPage title="Projects" />;
 
   return (
     <>

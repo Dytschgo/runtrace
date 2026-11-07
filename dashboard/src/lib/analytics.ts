@@ -137,9 +137,10 @@ export function toolHeadline(loaded: ToolSummary, complete: boolean, opts: {
   full?: ToolSummary | null; stats?: ToolStat[] | null; tool?: string; category?: string; status?: string;
 }): ToolHeadline {
   const all = { calls: false, time: false, exit: false };
-  if (complete) return { ...loaded, sampled: all };
   const { full, stats, tool, category, status } = opts;
+  // With nothing chosen, the service's window totals come first: they refresh with the chart, while the loaded calls are read once.
   if (!tool && !category && !status && full) return { ...full, sampled: all };
+  if (complete) return { ...loaded, sampled: all };
   if (!status && stats) {
     const match = tool ? stats.filter((s) => s.name === tool && (!category || s.category === category)) : category ? stats.filter((s) => s.category === category) : [];
     if (match.length === 1 || (match.length && !tool)) {

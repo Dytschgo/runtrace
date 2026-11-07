@@ -465,7 +465,8 @@ describe('page totals', () => {
     const { toolHeadline } = await import('./analytics');
     const loaded = { calls: 1000, failed: 10, statusKnown: 1000, shell: 400, exitKnown: 400, nonZero: 4, p50: 10, p95: 50, timed: 1000 };
     const full = { ...loaded, calls: 250_000, failed: 2000, statusKnown: 249_000 };
-    expect(toolHeadline(loaded, true, { full })).toMatchObject({ calls: 1000, sampled: { calls: false } });
+    expect(toolHeadline(loaded, true, { full })).toMatchObject({ calls: 250_000, sampled: { calls: false } });
+    expect(toolHeadline(loaded, true, {})).toMatchObject({ calls: 1000, sampled: { calls: false } });
     expect(toolHeadline(loaded, false, { full })).toMatchObject({ calls: 250_000, failed: 2000, sampled: { calls: false, time: false, exit: false } });
     const stats = [
       { name: 'Read', category: 'unknown', calls: 500, failed: 5, statusKnown: 500, p50: 3, p95: 9, max: 20, timed: 500, chars: 0 },

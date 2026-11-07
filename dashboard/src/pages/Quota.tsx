@@ -160,13 +160,14 @@ function Live({ rows, samples, tz, now }: { rows: Row[]; samples: Row[]; tz: str
 /** One track per agent window: how full it got over time. A step line, because a reading holds until the next one. */
 function Tracks({ samples, hits, since, until, tz }: { samples: Row[]; hits: Row[]; since: number; until: number; tz: string }) {
   const tracks = useMemo(() => {
-    const m = new Map<string, { provider: string; window: string; points: [number, number][] }>();
+    const m = new Map<string, { provider: string; window: string; points: [number, number][]; resetAt: number | null; lastAt: number }>();
     for (const s of samples) {
       const t = Date.parse(String(s.sampled_at)); const v = s.used_percentage;
       if (!Number.isFinite(t) || !isKnown(v)) continue;
       const key = `${s.provider}|${s.window}`;
-      const e = m.get(key) ?? { provider: String(s.provider), window: String(s.window), points: [] };
+      const e = m.get(key) ?? { provider: String(s.provider), window: String(s.window), points: [], resetAt: null, lastAt: -Infinity };
       e.points.push([t, v]);
+      if (t >= e.lastAt) { e.lastAt = t; const rs = typeof s.reset_at === 'string' ? Date.parse(s.reset_at) : NaN; e.resetAt = Number.isFinite(rs) ? rs : null; }
       m.set(key, e);
     }
     return [...m.values()].map((e) => ({ ...e, points: e.points.sort((a, b) => a[0] - b[0]) }));
@@ -192,7 +193,8 @@ function Tracks({ samples, hits, since, until, tz }: { samples: Row[]; hits: Row
               <path d={d} className="quota-path" style={{ stroke: colorOf(tr.provider) }} vectorEffect="non-scaling-stroke" />
               {marks.map((t) => <line key={t} x1={x(t)} x2={x(t)} y1="0" y2={H} className="quota-hit" vectorEffect="non-scaling-stroke"><title>Limit reached {fmtDateTime(new Date(t).toISOString(), tz)}</title></line>)}
             </svg>
-            <span className="quota-track-last">{last ? pct(last[1]) : '–'}</span>
+            {/* After its reset the last reading no longer says what is used now. */}
+            <span className="quota-track-last" title={tr.resetAt !== null && tr.resetAt <= until ? 'Reset since the last reading, so what is used now is unknown' : undefined}>{tr.resetAt !== null && tr.resetAt <= until ? <span className="fine">reset</span> : last ? pct(last[1]) : '–'}</span>
             {tr.points.length === 1 && <span className="quota-track-note fine">Collecting since {fmtDateTime(new Date(tr.points[0][0]).toISOString(), tz)}. The agent keeps only its latest reading.</span>}
           </div>
         );
@@ -212,8 +214,9 @@ function WindowTable({ rows, tz }: { rows: Row[]; tz: string }) {
             <td><span className="quota-who"><i style={{ background: colorOf(r.provider) }} />{agentName(r.provider)}</span></td>
             <td>{windowName(r.window)}</td>
             <td>{fmtDateTime(r.reset_at, tz)}{typeof r.ended_early_at === 'string' && <small className="fine quota-early">ended early {fmtDateTime(r.ended_early_at, tz)}</small>}</td>
-            <td className="num">{pct(r.peak_used_percentage) ?? <Unknown label="Unknown" />}</td>
-            <td className="num">{r.ended === false ? <span className="fine">running</span> : pct(r.unused_percentage_before_reset, 1) ?? <Unknown label="Unknown" />}</td>
+            {/* Readings are samples, so the highest one seen is at least what was used and what was left is at most this. */}
+            <td className="num" title="The highest reading seen. More may have been used between readings.">{isKnown(r.peak_used_percentage) ? <>≥ {pct(r.peak_used_percentage)}</> : <Unknown label="Unknown" />}</td>
+            <td className="num" title="From the last reading before the reset. Less may have been left.">{r.ended === false ? <span className="fine">running</span> : isKnown(r.unused_percentage_before_reset) ? <>≤ {pct(r.unused_percentage_before_reset, 1)}</> : <Unknown label="Unknown" />}</td>
             <td><QualityBadge quality={String(r.capture_quality ?? 'partial')} /></td>
           </tr>
         ))}</tbody>

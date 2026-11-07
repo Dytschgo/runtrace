@@ -4,9 +4,9 @@ import { useQuery } from '@tanstack/react-query';
 import { ChevronDown, ChevronRight, ExternalLink, Network, TriangleAlert } from 'lucide-react';
 import { DataTable, type Column } from '../components/DataTable';
 import { AppLink, EmptyState, ErrorState, PageHeader, Panel, SkeletonRows, Stat, StatRow, StatusBadge, Tag, Tokens, Unknown } from '../components/ui';
-import type { ThreadTokens } from '../lib/analytics';
+import { windowTokens, type ThreadTokens } from '../lib/analytics';
 import { getEntities } from '../lib/api';
-import { useAgents, useFilters, useThreads, useThreadTokens } from '../lib/data';
+import { useAgents, useFilters, useLiveTurns, useThreads, useThreadTokens } from '../lib/data';
 import { toAgent } from '../lib/entities';
 import type { Entity } from '../lib/types';
 import { fmtClock, fmtDateTime, fmtDay, fmtDuration, fmtInt } from '../lib/format';
@@ -27,12 +27,23 @@ export default function AgentTrees() {
   // Lineage is read whole per project: a time or model filter must never cut a parent out and orphan its children.
   const threads = useThreads({ project: f.project, instance: f.instance });
   const agents = useAgents({ project: f.project, instance: f.instance });
-  const tokens = useThreadTokens({ project: f.project, instance: f.instance });
+  const lifetime = useThreadTokens({ project: f.project, instance: f.instance });
+  // With a window, tokens are the ones used inside it, from the same turns the Overview reads. The tree itself is still drawn whole.
+  const windowed = !!(f.since || f.until);
+  const liveTurns = useLiveTurns(f, windowed);
+  const windowStart = f.since ? Date.parse(f.since) : -Infinity;
+  const turnsReady = !windowed || (windowStart >= liveTurns.coversFrom ? !!(liveTurns.recent.data || liveTurns.all.data) : !!liveTurns.all.data);
+  const win = useMemo(() => (windowed ? windowTokens(liveTurns.rows, f) : null), [windowed, liveTurns.rows, f]);
+  const tokens = win ? win.byThread : lifetime;
   const treeTokens = (root: TreeNode) => flatten(root).reduce<number | null>((s, n) => { const v = tokens.get(n.key)?.total; return v == null ? s : (s ?? 0) + v; }, null);
+  const treeShort = (root: TreeNode) => flatten(root).some((n) => { const u = tokens.get(n.key); return !!u && (u.withTotal ?? u.withUsage) < u.turns; });
 
   const forest = useMemo(() => (threads.data && agents.data ? buildForest(threads.data.rows, agents.data.rows) : null), [threads.data, agents.data]);
   const view = useMemo(() => (forest ? forestInView(forest.roots, f) : null), [forest, f]);
-  const trees = useMemo(() => (view?.trees ?? []).map((root) => ({ root, stats: treeStats(root, f) })), [view, f]);
+  // With a window, a tree is listed only when it delegated inside it, so the list, the counts and the Overview agree.
+  const scored = useMemo(() => (view?.trees ?? []).map((root) => ({ root, stats: treeStats(root, f) })), [view, f]);
+  const trees = useMemo(() => (f.since || f.until ? scored.filter((t) => t.stats.delegated > 0) : scored), [scored, f.since, f.until]);
+  const quietTrees = scored.length - trees.length;
 
   const selectedKey = params.get('root');
   const selected = trees.find((t) => t.root.key === selectedKey) ?? trees[0];
@@ -49,7 +60,7 @@ export default function AgentTrees() {
     { key: 'fanout', header: 'Fan-out', align: 'end', sort: (t) => t.stats.maxFanout, render: (t) => fmtInt(t.stats.maxFanout) },
     { key: 'parallel', header: 'Peak parallel', align: 'end', sort: (t) => t.stats.peakParallel, render: (t) => fmtInt(t.stats.peakParallel) },
     { key: 'busy', header: 'Busy time', align: 'end', sort: (t) => t.stats.busyMs, render: (t) => fmtDuration(t.stats.busyMs) },
-    { key: 'tokens', header: 'Tokens', align: 'end', sort: (t) => treeTokens(t.root), render: (t) => <Tokens v={treeTokens(t.root)} /> },
+    { key: 'tokens', header: windowed ? 'Tokens here' : 'Tokens', align: 'end', sort: (t) => treeTokens(t.root), render: (t) => { if (!turnsReady) return <span className="fine" aria-label="Loading">…</span>; const v = treeTokens(t.root); return v === null && windowed ? <span className="fine">None here</span> : <>{v !== null && treeShort(t.root) && <span className="lower-bound" title="Some turns reported no total"><span aria-hidden="true">≥</span><span className="sr-only">at least </span></span>}<Tokens v={v} /></>; } },
     { key: 'start', header: 'Started', sort: (t) => t.root.start, render: (t) => (t.root.start ? <time dateTime={new Date(t.root.start).toISOString()}>{fmtDay(new Date(t.root.start).toISOString(), timezone)}</time> : <span className="fine">Unknown</span>) },
   ];
 
@@ -75,14 +86,14 @@ export default function AgentTrees() {
                 </EmptyState>
               ) : (
               <EmptyState icon={<Network size={20} />} title="No delegation recorded in this view">
-                <p>{view?.standalone ? `${fmtInt(view.standalone)} ${view.standalone === 1 ? 'thread' : 'threads'} in this view had no recorded sub-agents.` : 'No threads ran in this view.'} Widen the filters to see other trees.</p>
+                <p>{(view?.standalone ?? 0) + quietTrees ? `${fmtInt((view?.standalone ?? 0) + quietTrees)} ${(view?.standalone ?? 0) + quietTrees === 1 ? 'thread' : 'threads'} in this view started no sub-agent here.` : 'No threads ran in this view.'} Widen the filters to see other trees.</p>
               </EmptyState>
               )}
             </Panel>
           ) : (
             <>
               <StatRow label="Delegation summary">
-                <Stat label="Delegating threads" value={fmtInt(trees.filter((t) => t.stats.delegated > 0).length)} sub={`${fmtInt(view?.standalone ?? 0)} other threads in view did not delegate`} />
+                <Stat label="Delegating threads" value={fmtInt(trees.length)} sub={`${fmtInt((view?.standalone ?? 0) + quietTrees)} other threads in view did not delegate here`} />
                 <Stat label="Sub-agents" value={fmtInt(totals.agents)} sub={f.since || f.until ? 'Started in this window' : 'Each one a recorded parent link'} />
                 <Stat label="Deepest level" value={fmtInt(totals.deepest)} />
                 <Stat
@@ -107,19 +118,19 @@ export default function AgentTrees() {
                 <DataTable rows={trees} columns={columns} rowKey={(t) => t.root.key} caption="Threads that delegated" prefix="tr" defaultSort={{ key: 'start', dir: 'desc' }} />
               </Panel>
 
-              {selected && <TreeView key={selected.root.key} root={selected.root} tz={timezone} tokens={tokens} />}
+              {selected && <TreeView key={selected.root.key} root={selected.root} tz={timezone} tokens={tokens} win={windowed ? f : undefined} />}
             </>
           )}
     </>
   );
 }
 
-function TreeView({ root, tz, tokens }: { root: TreeNode; tz: string; tokens: Map<string, ThreadTokens> }) {
+function TreeView({ root, tz, tokens, win }: { root: TreeNode; tz: string; tokens: Map<string, ThreadTokens>; win?: { since?: string; until?: string } }) {
   const { params, set, hrefPage } = useUrl();
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const rows = useMemo(() => flatten(root, collapsed), [root, collapsed]);
   const all = useMemo(() => flatten(root), [root]);
-  const stats = useMemo(() => treeStats(root), [root]);
+  const stats = useMemo(() => treeStats(root, win), [root, win]);
   const axis = useMemo(() => compressAxis(all.filter((n) => n.depth > 0).flatMap((n) => (n.start !== null && n.end !== null && n.end >= n.start ? [[n.start, n.end] as [number, number]] : []))), [all]);
   const nodeKey = params.get('node');
   const selected = all.find((n) => n.key === nodeKey) ?? root;
@@ -184,10 +195,10 @@ function TreeView({ root, tz, tokens }: { root: TreeNode; tz: string; tokens: Ma
         flush
       >
         <div className="tree-stats">
-          <span><b>{fmtInt(stats.delegated)}</b> sub-agents</span>
+          <span><b>{fmtInt(stats.delegated)}</b> sub-agents{win && stats.wholeTree !== stats.delegated ? <> <small className="fine">of {fmtInt(stats.wholeTree)} in the tree</small></> : null}</span>
           <span><b>{fmtInt(stats.maxFanout)}</b> max fan-out</span>
           <span><b>{fmtInt(stats.peakParallel)}</b> peak parallel</span>
-          <span><b>{fmtDuration(stats.busyMs)}</b> busy</span>
+          <span><b>{fmtDuration(stats.busyMs)}</b> busy{win ? ' in this window' : ''}</span>
           {rootTokens !== null && <span><b><Tokens v={rootTokens} /></b> root tokens</span>}
           {childTokens !== null && <span><b><Tokens v={childTokens} /></b> sub-agent tokens</span>}
           {stats.openEnded > 0 && <span><b>{fmtInt(stats.openEnded)}</b> <span className="unknown unknown-inline">no end time</span></span>}
