@@ -404,6 +404,10 @@ describe('providerFromThread', () => {
     expect(providerFromThread('provider-thread:provider:codex:native-thread:01a')).toBe('codex');
     expect(providerFromThread('provider-thread:provider:claudeAgent:native-thread:x')).toBe('claudeAgent');
   });
+  it('falls back to the thread a turn ran in, as the service does', () => {
+    expect(toTurn(entity({ provider: null, provider_thread_id: null }, { kind: 'model_turn', thread_id: 'thread:provider:codex:native-thread:abc' })).provider).toBe('codex');
+    expect(toTurn(entity({ provider: 'grok' }, { kind: 'model_turn', thread_id: 'thread:provider:codex:native-thread:abc' })).provider).toBe('grok');
+  });
   it('says nothing about an id it cannot read', () => {
     expect(providerFromThread('something-else')).toBeNull();
     expect(providerFromThread(null)).toBeNull();

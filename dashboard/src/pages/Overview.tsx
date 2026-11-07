@@ -88,9 +88,10 @@ export default function Overview() {
   const scopes = useMemo<typeof f[]>(() => {
     const chosen = [...picks].filter((k) => k !== 'not-recorded');
     if (by === 'project') return chosen.map((project) => ({ ...f, project }));
-    const named = by === 'model' ? chosen : [...slots.keys()].filter((m) => { const p = modelProvider(m); return !!p && picks.has(p); });
-    return named.map((model) => ({ ...f, model }));
-  }, [picks, by, slots, f]);
+    // The service works out each record's provider the way the rows do, so a provider's counts include turns that name no model.
+    if (by === 'provider') return chosen.map((provider) => ({ ...f, provider }));
+    return chosen.map((model) => ({ ...f, model }));
+  }, [picks, by, f]);
   const previousScopes = useMemo(() => (prevWindow ? scopes.map((s) => ({ ...s, ...prevWindow, range: undefined })) : []), [scopes, prevWindow]);
   const pickedCounts = useOverviews(scopes);
   const pickedPrevious = useOverviews(previousScopes);
@@ -123,8 +124,6 @@ export default function Overview() {
 
   const threadRows = threads.data?.rows;
   const agentRows = agents.data?.rows;
-  // A provider's turns can name no model, and the API can only be asked by model, so these counts may fall short.
-  const tilesAtLeast = picks.size > 0 && by === 'provider';
   const childCounts = useMemo(() => {
     const m = new Map<string, number>();
     for (const a of agentRows ?? []) m.set(a.thread_id, (m.get(a.thread_id) ?? 0) + 1);
@@ -351,11 +350,6 @@ export default function Overview() {
       known: stats.reduce((sum, s) => sum + s.returned + s.notReturned, 0),
     };
   }, [forest, f.model, live, picks.size, activity]);
-  const logHours = useMemo(() => {
-    const rows = picks.size ? chartTurns : scoped;
-    const count = (from: string | undefined, to: string | undefined) => rows.filter((t) => t.log && inTimeRange(t.occurred_at, { since: from, until: to })).length;
-    return { now: count(f.since, f.until), before: prevWindow ? count(prevWindow.since, prevWindow.until) : 0 };
-  }, [picks.size, chartTurns, scoped, f.since, f.until, prevWindow]);
   const mainThreads = useMemo(() => inWindow.filter((t) => t.type !== 'child').length, [inWindow]);
   const recent = useMemo(() => {
     const lastSeen = (id: string, fallback: string) => activity.get(id)?.last ?? fallback;
@@ -487,15 +481,15 @@ export default function Overview() {
             {!overview.isError && (
         <section className="stats" aria-label="Key totals" data-stale={draft || overview.isPlaceholderData ? 'true' : undefined}>
           {visibleTiles.map((t) => {
-            // The service counts session-log hours with turns, so they are taken back out here.
-            const value = t.kind === 'model_turn' && fromTurns && isKnown(c[t.kind]) ? Math.max(0, c[t.kind] - logHours.now) : c[t.kind];
-            const before = t.kind === 'model_turn' && fromTurns && prev ? Math.max(0, (prev[t.kind] ?? 0) - logHours.before) : prev?.[t.kind] ?? 0;
+            // The service never counts session-log hours as provider turns.
+            const value = c[t.kind];
+            const before = prev?.[t.kind] ?? 0;
             const d = comparable && prev && isKnown(value) ? delta(value, before) : null;
             const Icon = t.icon;
             return (
               <article key={t.kind} className="tile" title={t.hint}>
                 <h2><AppLink className="tile-link" href={hrefPage(t.page)}><Icon size={14} aria-hidden="true" />{t.label}</AppLink></h2>
-                {overview.isPending ? <div className="skeleton tile-skeleton" role="status" aria-label={`Loading ${t.label}`} /> : <strong title={isKnown(value) ? fmtInt(value) : undefined}>{unscopable ? <Unknown label="Unknown" why="Records that name no model cannot be counted on their own." /> : unknownWindow && !value ? <Unknown label="Unknown" why={unknownWindow.text} /> : isKnown(value) ? <>{tilesAtLeast && value > 0 && <span className="lower-bound" title="Turns that name no model cannot be counted by provider"><span aria-hidden="true">≥</span><span className="sr-only">at least </span></span>}<Counter value={value} /></> : '0'}</strong>}
+                {overview.isPending ? <div className="skeleton tile-skeleton" role="status" aria-label={`Loading ${t.label}`} /> : <strong title={isKnown(value) ? fmtInt(value) : undefined}>{unscopable ? <Unknown label="Unknown" why="Records that name no model cannot be counted on their own." /> : unknownWindow && !value ? <Unknown label="Unknown" why={unknownWindow.text} /> : isKnown(value) ? <Counter value={value} /> : '0'}</strong>}
                 {d !== null && (
                   <span className="delta" title="Compared with the same length of time just before">
                     <ChangeArrow change={d} />

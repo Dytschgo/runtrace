@@ -1509,3 +1509,30 @@ fn session_log_hours_add_tokens_but_never_count_as_provider_turns() {
     assert_eq!(p["reported_turns"], 1);
     assert_eq!(p["total_tokens"], 100);
 }
+// The service counts the same turns as a provider's row on the dashboard, including turns that name only the agent.
+#[test]
+fn provider_filter_counts_turns_that_name_no_model() {
+    let (_tmp, c) = fixture();
+    let s = Store::open(&c).unwrap();
+    s.put("local","model_turn","named","p","t","r","2026-01-01T00:00:00Z","2026-01-01T00:00:00Z","partial","synthetic",json!({"model":"gpt-6.1-sol","usage_status":"complete","total_tokens":10})).unwrap();
+    s.put("local","model_turn","driver","p","t","r","2026-01-01T00:01:00Z","2026-01-01T00:01:00Z","partial","synthetic",json!({"model":null,"provider":"codex","usage_status":"complete","total_tokens":20})).unwrap();
+    s.put("local","model_turn","thread-id","p","t","r","2026-01-01T00:02:00Z","2026-01-01T00:02:00Z","partial","synthetic",json!({"model":null,"provider":null,"provider_thread_id":"provider-thread:provider:codex:native-thread:x","usage_status":"complete","total_tokens":30})).unwrap();
+    s.put("local","prompt","native","p","thread:provider:codex:native-thread:y","r","2026-01-01T00:03:00Z","2026-01-01T00:03:00Z","partial","synthetic",json!({})).unwrap();
+    s.put("local","model_turn","claude","p","t","r","2026-01-01T00:04:00Z","2026-01-01T00:04:00Z","partial","synthetic",json!({"model":"claude-opus-5-5","usage_status":"complete","total_tokens":40})).unwrap();
+    s.put("local","model_turn","unknown","p","t","r","2026-01-01T00:05:00Z","2026-01-01T00:05:00Z","partial","synthetic",json!({"usage_status":"complete","total_tokens":50})).unwrap();
+    s.capture_source.set("session_logs");
+    s.put("local","model_turn","log:x:1:m","p","","","2026-01-01T01:00:00Z","2026-01-01T02:00:00Z","partial","session_logs",json!({"model":"gpt-6.1-sol","usage_status":"complete","usage_source":"session_log","total_tokens":90})).unwrap();
+    s.capture_source.set("t3_sqlite_v2");
+    let count = |provider: Option<&str>, kind: &str| {
+        let f = Filter { provider: provider.map(str::to_owned), ..Default::default() };
+        analytics::query(&s, "overview", &f).unwrap()["data"].as_array().unwrap().iter().find(|r| r["kind"] == kind).map(|r| r["count"].as_i64().unwrap()).unwrap_or(0)
+    };
+    assert_eq!(count(Some("openai"), "model_turn"), 3, "named, by driver and by provider thread, never the session-log hour");
+    assert_eq!(count(Some("openai"), "prompt"), 1);
+    assert_eq!(count(Some("anthropic"), "model_turn"), 1);
+    assert_eq!(count(None, "model_turn"), 5, "session-log hours are not provider turns");
+    let models = analytics::query(&s, "models", &Filter { provider: Some("openai".into()), ..Default::default() }).unwrap();
+    let total: i64 = models["data"].as_array().unwrap().iter().map(|r| r["total_tokens"].as_i64().unwrap_or(0)).sum();
+    assert_eq!(total, 150, "tokens include the session-log hour");
+    assert!(Filter { provider: Some("Open AI".into()), ..Default::default() }.validate().is_err());
+}

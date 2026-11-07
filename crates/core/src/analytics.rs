@@ -15,6 +15,8 @@ pub struct Filter {
     pub offset: Option<u32>,
     pub project: Option<String>,
     pub model: Option<String>,
+    /// A provider family (openai, anthropic, xai, meta, google, qwen, other), worked out per record as the dashboard does.
+    pub provider: Option<String>,
     pub instance: Option<String>,
     pub since: Option<String>,
     pub until: Option<String>,
@@ -43,15 +45,31 @@ impl Filter {
             chrono::DateTime::parse_from_rfc3339(d)?;
         }
         ensure!(
+            self.provider.as_ref().is_none_or(|p| p.len() <= 32 && p.chars().all(|c| c.is_ascii_lowercase())),
+            "provider must be a provider family"
+        );
+        ensure!(
             self.q.as_ref().is_none_or(|q| q.len() <= 500),
             "Search must be <= 500 characters"
         );
         Ok(())
     }
 }
+/// The agent that ran a record, from its own field or from a provider thread id such as provider-thread:provider:codex:native-thread:abc.
+const DRIVER: &str = "coalesce(nullif(json_extract_string(data,'$.provider'),''),nullif(regexp_extract(coalesce(json_extract_string(data,'$.provider_thread_id'),''),'(?:^|:)provider:([^:]+)',1),''),nullif(regexp_extract(coalesce(thread_id,''),'(?:^|:)provider:([^:]+)',1),''))";
+
+/// A record's provider family. The model name decides when it is recorded, otherwise the agent that ran it does.
+/// This matches modelProvider and turnProvider in the dashboard, so a provider's rows and its counts agree.
+pub fn provider_sql() -> String {
+    format!(
+        "CASE WHEN nullif(model,'') IS NOT NULL THEN CASE WHEN regexp_matches(model,'(?i)^(gpt|codex|o[0-9]|chatgpt)') THEN 'openai' WHEN regexp_matches(model,'(?i)claude') THEN 'anthropic' WHEN regexp_matches(model,'(?i)grok') THEN 'xai' WHEN regexp_matches(model,'(?i)muse|llama') THEN 'meta' WHEN regexp_matches(model,'(?i)gemini') THEN 'google' WHEN regexp_matches(model,'(?i)qwen') THEN 'qwen' ELSE 'other' END WHEN {DRIVER} IS NULL THEN NULL WHEN {DRIVER}='codex' THEN 'openai' WHEN {DRIVER} IN ('claudeAgent','claude') THEN 'anthropic' WHEN {DRIVER}='grok' THEN 'xai' WHEN {DRIVER}='muse' THEN 'meta' WHEN {DRIVER} IN ('gemini','antigravity') THEN 'google' ELSE 'other' END"
+    )
+}
+
 pub fn query(s: &Store, name: &str, f: &Filter) -> Result<Value> {
     f.validate()?;
-    let filter = "(? IS NULL OR project_id=?) AND (? IS NULL OR instance_id=?) AND (? IS NULL OR try_cast(occurred_at AS TIMESTAMPTZ)>=try_cast(? AS TIMESTAMPTZ)) AND (? IS NULL OR try_cast(occurred_at AS TIMESTAMPTZ)<=try_cast(? AS TIMESTAMPTZ)) AND (? IS NULL OR model=?)";
+    let filter = format!("(? IS NULL OR project_id=?) AND (? IS NULL OR instance_id=?) AND (? IS NULL OR try_cast(occurred_at AS TIMESTAMPTZ)>=try_cast(? AS TIMESTAMPTZ)) AND (? IS NULL OR try_cast(occurred_at AS TIMESTAMPTZ)<=try_cast(? AS TIMESTAMPTZ)) AND (? IS NULL OR model=?) AND (? IS NULL OR ({})=?)", provider_sql());
+    let filter = filter.as_str();
     let args: Vec<&dyn duckdb::ToSql> = vec![
         &f.project,
         &f.project,
@@ -63,9 +81,12 @@ pub fn query(s: &Store, name: &str, f: &Filter) -> Result<Value> {
         &f.until,
         &f.model,
         &f.model,
+        &f.provider,
+        &f.provider,
     ];
     let rows=match name{
- "overview"=>s.rows(&format!("SELECT json_object('kind',kind,'count',count(*))::VARCHAR FROM records WHERE {filter} GROUP BY kind ORDER BY kind"),&args)?,
+ // Session-log hours are not provider turns, so they are never counted as records here.
+ "overview"=>s.rows(&format!("SELECT json_object('kind',kind,'count',count(*))::VARCHAR FROM records WHERE {filter} AND NOT (kind='model_turn' AND capture_source IS NOT DISTINCT FROM 'session_logs') GROUP BY kind ORDER BY kind"),&args)?,
  // Session-log hours add their tokens but are never provider turns, so turn counts, coverage and latency leave them out.
  "models"=>s.rows(&format!("SELECT json_object('model',model,'calls',NULL,'observed_runs',count(*) FILTER(WHERE kind='run'),'observed_provider_turns',count(*) FILTER(WHERE kind='model_turn' AND capture_source IS DISTINCT FROM 'session_logs'),'session_log_blocks',count(*) FILTER(WHERE kind='model_turn' AND capture_source='session_logs'),'input_tokens',sum(CASE WHEN kind='model_turn' THEN input_tokens END),'cached_input_tokens',sum(CASE WHEN kind='model_turn' THEN cached_input_tokens END),'cache_write_tokens',sum(CASE WHEN kind='model_turn' THEN try_cast(json_extract_string(data,'$.cache_write_tokens') AS BIGINT) END),'cache_write_observed_turns',count(*) FILTER(WHERE kind='model_turn' AND capture_source IS DISTINCT FROM 'session_logs' AND try_cast(json_extract_string(data,'$.cache_write_tokens') AS BIGINT) IS NOT NULL),'output_tokens',sum(CASE WHEN kind='model_turn' THEN output_tokens END),'reasoning_tokens',sum(CASE WHEN kind='model_turn' THEN reasoning_tokens END),'total_tokens',sum(CASE WHEN kind='model_turn' THEN total_tokens END),'complete_usage_turns',count(*) FILTER(WHERE kind='model_turn' AND capture_source IS DISTINCT FROM 'session_logs' AND usage_status='complete'),'turns_with_usage',count(*) FILTER(WHERE kind='model_turn' AND capture_source IS DISTINCT FROM 'session_logs' AND (input_tokens IS NOT NULL OR cached_input_tokens IS NOT NULL OR output_tokens IS NOT NULL OR reasoning_tokens IS NOT NULL OR try_cast(json_extract_string(data,'$.cache_write_tokens') AS BIGINT) IS NOT NULL)),'median_latency_ms',median(duration_ms) FILTER(WHERE kind='model_turn' AND capture_source IS DISTINCT FROM 'session_logs'),'p95_latency_ms',quantile_cont(duration_ms,0.95) FILTER(WHERE kind='model_turn' AND capture_source IS DISTINCT FROM 'session_logs'),'capture_quality','partial')::VARCHAR FROM records WHERE kind IN ('run','model_turn') AND {filter} GROUP BY model ORDER BY count(*) FILTER(WHERE kind='run') DESC,model ASC NULLS LAST LIMIT 500"),&args)?,
  "activity/hourly"=>s.rows(&format!("SELECT json_object('hour',substr(occurred_at,1,13)||':00:00Z','prompts',count(*))::VARCHAR FROM records WHERE kind='prompt' AND {filter} GROUP BY substr(occurred_at,1,13) ORDER BY substr(occurred_at,1,13) LIMIT 500"),&args)?,

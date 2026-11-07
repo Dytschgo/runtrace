@@ -149,7 +149,7 @@ export function toTurn(e: Entity): TurnRow {
   const d = e.data ?? {};
   return {
     id: e.id, source_id: e.source_id, thread_id: e.thread_id, run_id: e.run_id, project_id: e.project_id, instance_id: e.instance_id, occurred_at: e.occurred_at,
-    quality: e.capture_quality ?? 'unavailable', provider: str(d.provider) ?? providerFromThread(d.provider_thread_id), model: str(d.model) ?? str(d.requested_model), resolved: str(d.resolved_model), status: str(d.status),
+    quality: e.capture_quality ?? 'unavailable', provider: str(d.provider) ?? providerFromThread(d.provider_thread_id) ?? providerFromThread(e.thread_id), model: str(d.model) ?? str(d.requested_model), resolved: str(d.resolved_model), status: str(d.status),
     cacheWrite: num(d.cache_write_tokens), duration: durationMs(d), input: num(d.input_tokens), cached: num(d.cached_input_tokens), output: num(d.output_tokens), reasoning: num(d.reasoning_tokens), total: num(d.total_tokens),
     usage: str(d.usage_status) ?? 'unavailable', scope: str(d.usage_scope), hasSubagents: bool(d.has_subagents),
     log: d.usage_source === 'session_log',

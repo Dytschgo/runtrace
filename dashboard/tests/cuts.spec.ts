@@ -967,3 +967,15 @@ test('tokens by type count provider turns only, never session-log hours', async 
   const of = Number((await page.locator('.type-coverage small').innerText()).match(/of ([\d,]+) turns/)![1].replace(/,/g, ''));
   expect(of).toBe(turns);
 });
+
+test('a chosen provider is counted exactly, including turns that name no model', async ({ page }) => {
+  test.slow();
+  await open(page, '?by=provider&range=7d&pick=openai');
+  const tile = page.locator('.stats .tile').filter({ hasText: 'Provider turns' }).locator('strong');
+  const row = page.locator('.model-lines li').filter({ hasText: 'OpenAI' }).locator('small');
+  const turnsInRow = async () => Number(/([\d,]+) turns?\b/.exec((await row.textContent()) ?? '')?.[1].replace(/,/g, '') ?? NaN);
+  const turnsInTile = async () => Number((await tile.getAttribute('title'))?.replace(/[^0-9]/g, '') || NaN);
+  // Capture keeps running, so the two are read together until they agree.
+  await expect.poll(async () => { const [a, b] = [await turnsInRow(), await turnsInTile()]; return a > 0 && a === b; }, { timeout: 20_000 }).toBe(true);
+  await expect(page.locator('.stats .lower-bound')).toHaveCount(0);
+});
