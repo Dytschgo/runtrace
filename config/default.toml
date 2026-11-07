@@ -1,0 +1,31 @@
+[server]
+host = "127.0.0.1"
+port = 4310
+[dashboard]
+timezone = "Europe/Zurich"
+assets_path = "dashboard/dist"
+[storage]
+duckdb_path = "./data/t3-usage.duckdb"
+archive_path = "./data/archive"
+hot_retention_days = 30
+content_retention_days = 90
+zstd_level = 8
+memory_limit_mb = 2048
+[capture]
+default_policy = "redacted_only"
+store_stream_chunks = false
+[source]
+instance_id = "local"
+display_name = "Local T3"
+# Empty resolves to the current user's .t3/userdata/statev2.sqlite
+sqlite_path = ""
+poll_seconds = 60
+collect_on_serve = true
+[quota]
+normal_interval_seconds = 600
+near_reset_interval_seconds = 120
+near_reset_window_minutes = 30
+waste_threshold_percentage = 10
+[mcp]
+enabled = true
+redacted_content_only = true

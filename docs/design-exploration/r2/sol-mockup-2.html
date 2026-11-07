@@ -1,0 +1,259 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Runtrace · Sol 2 · Editorial Paper</title>
+<style>*{box-sizing:border-box;margin:0}
+body{font:14px/1.4 "Segoe UI",system-ui,-apple-system,sans-serif;-webkit-font-smoothing:antialiased}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer;padding:0}
+ul{list-style:none;padding:0}
+.ic{width:1.25em;height:1.25em;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex:none;vertical-align:-.22em}
+.ic.f{fill:currentColor}
+:focus-visible{outline:2px solid var(--focus,#4aa3ff);outline-offset:2px}
+#tip{position:fixed;z-index:99;pointer-events:none;opacity:0;transform:translateY(4px);transition:opacity .12s,transform .12s;background:#0d0e10;color:#fff;padding:7px 10px;border-radius:6px;font-size:12px;line-height:1.5;white-space:nowrap;box-shadow:0 6px 20px #0006;border:1px solid #fff2}
+#tip.on{opacity:1;transform:none}
+#tip i{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:6px}
+.histo{display:flex;align-items:flex-end;gap:2px}
+.histo>i{flex:1;min-width:0;display:flex;flex-direction:column;transform-origin:bottom;animation:grow .7s cubic-bezier(.2,.8,.2,1) both;animation-delay:calc(var(--d)*10ms);transition:height .35s,opacity .25s,background-color .25s}
+.histo b{min-height:0;transition:flex .35s}
+.gpt{background:var(--gpt)}.cla{background:var(--cla)}.gem{background:var(--gem)}
+.ticks{position:relative;height:18px}
+.ticks span{position:absolute;transform:translateX(-50%);white-space:nowrap}
+.tnum{font-variant-numeric:tabular-nums}
+.hd{touch-action:none;cursor:ew-resize}
+.fake{opacity:.55;font-size:11.5px;padding:10px 0 2px;text-align:right}
+@keyframes grow{from{transform:scaleY(0)}}
+@keyframes growx{from{transform:scaleX(0)}}
+@keyframes up{from{opacity:0;transform:translateY(12px)}}
+@keyframes pop{from{opacity:0;transform:scale(.85)}}
+@keyframes fade{from{opacity:0}}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
+
+:root{--bg:#fcf8f1;--ink:#101010;--line:#b9b3a8;--soft:#e6dfd3;--mut:#5d5a54;--gpt:#27cfe0;--cla:#fb7c6e;--gem:#a877f5;--focus:#101010}
+body{background:var(--bg);color:var(--ink);padding:0 26px 20px;max-width:1560px;margin:auto}
+.nav{display:flex;align-items:center;gap:8px;padding:10px 4px;border-bottom:1.5px solid var(--line);overflow-x:auto}
+.brand{display:flex;align-items:center;gap:10px;font-size:30px;font-weight:800;letter-spacing:-.02em;padding:0 44px 0 16px;border-right:1.5px solid var(--line);margin-right:30px}
+.brand .ic{font-size:34px}
+.nav button{display:flex;align-items:center;gap:12px;font-size:20px;padding:8px 24px;border-radius:6px;white-space:nowrap;transition:background .2s}
+.nav button .ic{font-size:26px}
+.nav button:hover{background:#0000000a}
+.nav button[aria-current]{background:var(--soft);font-weight:700}
+.nav .set{margin-left:auto;border-left:1.5px solid var(--line);border-radius:0;padding-left:50px}
+.hero{display:flex;justify-content:space-between;align-items:baseline;gap:20px;animation:up .6s both}
+h1{font-size:clamp(44px,5.6vw,74px);font-weight:800;letter-spacing:-.035em;line-height:1.25}
+.hero span{font-size:clamp(26px,3.4vw,46px);font-weight:500;letter-spacing:-.02em}
+.rg{position:relative;margin:34px 34px 0;animation:up .6s .08s both}
+#h{height:110px;border-bottom:1.5px solid var(--ink)}
+#h>i{opacity:.32}#h>i.in{opacity:1}
+.sel{position:absolute;top:-16px;height:126px;background:#f3d9b340;border-left:2px solid var(--ink);border-right:2px solid var(--ink);pointer-events:none}
+.sel .hd{pointer-events:auto;position:absolute;top:0;width:22px;height:30px;margin:0 -12px;border:2px solid var(--ink);border-radius:6px;background:var(--bg);display:grid;place-items:center;transition:transform .15s,background .15s}
+.sel .hd::after{content:"";width:2px;height:12px;background:var(--ink)}
+.sel .hd:hover,.sel .hd.drag{transform:scale(1.15);background:#ffe9c7}
+#ha{left:0}#hb{right:0}
+.arrow{position:absolute;bottom:100%;left:4px;right:4px;margin-bottom:6px;display:flex;align-items:center;gap:14px;font-size:24px;font-weight:700;white-space:nowrap}
+.arrow::before,.arrow::after{content:"";flex:1;height:1.5px;background:var(--ink);min-width:6px}
+
+.arrow i{position:absolute;top:50%;border:6px solid transparent;margin-top:-6px}
+.arrow i.l{left:-8px;border-right-color:var(--ink)}.arrow i.r{right:-8px;border-left-color:var(--ink)}
+.ticks{font-size:16px;margin:8px 0 22px}
+.mid{display:grid;grid-template-columns:270px minmax(0,1fr) 400px;border-top:1.5px solid var(--line);border-bottom:1.5px solid var(--line);padding:18px 0}
+.mid>*{padding:0 28px}.mid>*+*{border-left:1.5px solid var(--line)}
+.stats{padding-left:6px!important}
+.stats div{display:flex;align-items:baseline;gap:14px;padding:4px 0;border-bottom:1.5px solid var(--line);animation:up .5s both}
+.stats div:last-child{border:0}
+.stats div:nth-child(2){animation-delay:.07s}.stats div:nth-child(3){animation-delay:.14s}.stats div:nth-child(4){animation-delay:.21s}
+.stats b{font-size:56px;font-weight:800;letter-spacing:-.04em;line-height:1.25}
+.stats span{font-size:25px}
+h2{font-size:27px;font-weight:800;letter-spacing:-.02em}h2 small{font-weight:400;font-size:.8em}
+.ch{display:flex;align-items:center;gap:22px;flex-wrap:wrap}
+.legend{display:flex;gap:22px;margin-left:auto;font-size:16px;flex-wrap:wrap}
+.legend button{display:flex;gap:10px;align-items:center;transition:opacity .2s}
+.legend i,.sw{display:inline-block;width:16px;height:16px;border-radius:3px;flex:none}
+.legend button[aria-pressed=false]{opacity:.35;text-decoration:line-through}
+.area{position:relative;height:216px;margin:26px 6px 30px 56px;border-left:1.5px solid var(--mut);border-bottom:1.5px solid var(--mut)}
+.area svg{position:absolute;inset:0;width:100%;height:100%;animation:wipe 1.2s .2s cubic-bezier(.4,0,.2,1) both}
+@keyframes wipe{from{clip-path:inset(0 100% 0 0)}to{clip-path:inset(0 0 0 0)}}
+.area .y div{position:absolute;left:0;right:0;border-top:1px solid #0000001a}
+.area .y span{position:absolute;right:100%;margin-right:10px;transform:translateY(-50%);font-size:15.5px}
+.area .x span{position:absolute;top:100%;margin-top:8px;transform:translateX(-50%);font-size:15.5px}
+.cross{position:absolute;top:0;bottom:0;width:1.5px;background:var(--ink);opacity:0;pointer-events:none;transition:opacity .15s}
+.area:hover .cross{opacity:1}
+.rank{display:grid;gap:16px;margin-top:22px}
+.rank button{display:grid;grid-template-columns:28px 1fr 82px;align-items:center;text-align:left;font-size:21px;transition:opacity .2s}
+.rank button[aria-pressed=false]{opacity:.35}
+.rank .bar{grid-column:2;height:22px;margin-top:6px;transform-origin:left;animation:growx .9s .3s cubic-bezier(.2,.8,.2,1) both;transition:width .4s;border-radius:1px}
+.rank b{font-size:25px;font-weight:800;text-align:right;grid-column:3;grid-row:2}
+.rank .sw{grid-row:1}
+.bot{display:grid;grid-template-columns:minmax(0,1.9fr) 280px 380px;padding-top:20px}
+.bot>*{padding:0 26px}.bot>*+*{border-left:1.5px solid var(--line)}
+.bot>:first-child{padding-left:4px}
+.scroll{overflow-x:auto}
+.rt{min-width:600px;margin-top:8px;font-size:17px}
+.row{display:grid;grid-template-columns:48px 86px 162px 1fr 78px 70px 78px;align-items:center;padding:9px 6px;border-bottom:1.5px solid var(--line);width:100%;text-align:left;position:relative}
+.row.h{font-weight:700;font-size:16px}
+.row>:nth-child(n+5){text-align:center}
+button.row{transition:background .15s,padding .2s}
+button.row:hover{background:#0000000a}
+button.row.on{background:var(--soft)}
+button.row .ic{transition:transform .2s}
+button.row:hover .ic,button.row.on .ic{transform:translateX(4px)}
+button.row.on .ic{fill:currentColor}
+.row .sw{vertical-align:-2px;margin-right:10px;width:14px;height:14px}
+.tl{display:grid;grid-template-columns:auto 1fr auto;align-items:center;font-size:22px;margin-top:14px}
+.tl>*{padding:16px 0;border-bottom:1.5px solid var(--line)}
+.tl>.ic{width:30px;height:30px;padding:0;border:0;margin-right:26px}
+.tl b{font-size:27px;font-weight:800}
+.tl>:nth-last-child(-n+2){border:0}
+.t2{margin-top:18px;text-align:center}
+.t2 ul{display:flex;justify-content:center;padding-top:26px;position:relative}
+.t2 ul::before{content:"";position:absolute;top:0;left:50%;height:26px;border-left:1.5px solid var(--ink)}
+.t2 li{padding:26px 6px 0;position:relative}
+.t2 li::before,.t2 li::after{content:"";position:absolute;top:0;width:50%;height:26px;border-top:1.5px solid var(--ink)}
+.t2 li::before{right:50%}.t2 li::after{left:50%;border-left:1.5px solid var(--ink)}
+.t2 li:first-child::before{border:0}.t2 li:first-child::after{border-top-left-radius:9px}
+.t2 li:last-child::after{border:0}.t2 li:last-child::before{border-right:1.5px solid var(--ink);border-top-right-radius:9px}
+.t2 li:only-child::before{border-top:0;border-radius:0}
+.node{display:inline-flex;align-items:center;gap:10px;border:1.5px solid var(--line);background:#f3eee6;border-radius:6px;padding:9px 14px;font-size:18px;white-space:nowrap;animation:pop .4s both;animation-delay:calc(var(--i)*110ms)}
+.node.root{padding:10px 22px;font-size:20px}
+.node .ic{font-size:21px}
+.t2.tight li{padding-left:3px;padding-right:3px}.t2.tight li .node{font-size:15.5px;padding:8px 9px}.t2.tight li .ic{display:none}
+.t2 small{display:block;color:var(--mut);margin-bottom:10px;font-size:14px}
+@media(max-width:1250px){.mid{grid-template-columns:230px minmax(0,1fr)}.mid>:last-child{grid-column:1/-1;border-left:0;border-top:1.5px solid var(--line);padding-top:18px;margin-top:18px}.bot{grid-template-columns:1fr 1fr}.bot>:first-child{grid-column:1/-1;padding:0 0 22px}.bot>:nth-child(2){border-left:0;padding-left:4px}}
+@media(max-width:760px){body{padding:0 14px 16px}.mid,.bot{grid-template-columns:minmax(0,1fr)}.mid>*,.bot>*{border-left:0!important;padding:16px 0!important;grid-column:1}.stats{display:grid;grid-template-columns:1fr 1fr;gap:0 16px}.stats b{font-size:40px}.stats span{font-size:18px}.rg{margin:34px 14px 0}.arrow{font-size:16px}.ticks span:nth-child(even){display:none}.brand{padding:0 16px 0 0;margin-right:8px;font-size:22px}}
+</style></head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+<symbol id="i-home" viewBox="0 0 24 24"><path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></symbol>
+<symbol id="i-bars" viewBox="0 0 24 24"><path d="M5 20v-6M12 20V4M19 20V10"/></symbol>
+<symbol id="i-layers" viewBox="0 0 24 24"><path d="m12 3 9 4.5-9 4.5-9-4.5zM3 12l9 4.5 9-4.5M3 16.5 12 21l9-4.5"/></symbol>
+<symbol id="i-term" viewBox="0 0 24 24"><path d="m5 7 5 5-5 5M12 18h7"/></symbol>
+<symbol id="i-net" viewBox="0 0 24 24"><rect x="9" y="2" width="6" height="6" rx="1"/><rect x="2" y="16" width="6" height="6" rx="1"/><rect x="16" y="16" width="6" height="6" rx="1"/><path d="M12 8v4M5 16v-2a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v2"/></symbol>
+<symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/></symbol>
+<symbol id="i-play" viewBox="0 0 24 24"><path d="M7 4.5v15l12.5-7.5z"/></symbol>
+<symbol id="i-pause" viewBox="0 0 24 24"><path d="M8 5v14M16 5v14"/></symbol>
+<symbol id="i-wrench" viewBox="0 0 24 24"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></symbol>
+<symbol id="i-file" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6"/></symbol>
+<symbol id="i-pen" viewBox="0 0 24 24"><path d="m17 3 4 4L8 20l-5 1 1-5zM14 6l4 4"/></symbol>
+<symbol id="i-cal" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></symbol>
+<symbol id="i-chev" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+<symbol id="i-left" viewBox="0 0 24 24"><path d="m15 6-6 6 6 6"/></symbol>
+<symbol id="i-right" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></symbol>
+<symbol id="i-users" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0M16 4.6a3.5 3.5 0 0 1 0 6.8M18 14.5a6.5 6.5 0 0 1 3.5 5.5"/></symbol>
+<symbol id="i-branch" viewBox="0 0 24 24"><circle cx="6" cy="5" r="2.5"/><circle cx="6" cy="19" r="2.5"/><circle cx="18" cy="7" r="2.5"/><path d="M6 7.5v9M18 9.5c0 4.5-12 2-12 7"/></symbol>
+<symbol id="i-bot" viewBox="0 0 24 24"><rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 8V4M9 13v2M15 13v2M2 14h2M20 14h2"/></symbol>
+<symbol id="i-code" viewBox="0 0 24 24"><path d="m8 7-5 5 5 5M16 7l5 5-5 5M14 4l-4 16"/></symbol>
+<symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+<symbol id="i-filter" viewBox="0 0 24 24"><path d="M3 5h18l-7 8v6l-4 2v-8z"/></symbol>
+<symbol id="i-target" viewBox="0 0 24 24"><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></symbol>
+<symbol id="i-pin" viewBox="0 0 24 24"><path d="M12 17v5M8 3h8l-1 6 3 4H6l3-4z"/></symbol>
+<symbol id="i-zin" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4M8 11h6M11 8v6"/></symbol>
+<symbol id="i-zout" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4M8 11h6"/></symbol>
+<symbol id="i-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></symbol>
+<symbol id="i-box" viewBox="0 0 24 24"><path d="M12 2 3 7v10l9 5 9-5V7zM3 7l9 5 9-5M12 12v10"/></symbol>
+</defs></svg>
+
+<nav class="nav" aria-label="Sections"><div class="brand"><svg class="ic"><use href="#i-branch"/></svg>Runtrace</div>
+<button aria-current="page"><svg class="ic"><use href="#i-bars"/></svg>Overview</button>
+<button><svg class="ic"><use href="#i-play"/></svg>Runs</button>
+<button><svg class="ic"><use href="#i-code"/></svg>Code</button>
+<button><svg class="ic"><use href="#i-layers"/></svg>Tools</button>
+<button><svg class="ic"><use href="#i-bot"/></svg>Agents</button>
+<button><svg class="ic"><use href="#i-bars"/></svg>Models</button>
+<button class="set" aria-label="Settings"><svg class="ic"><use href="#i-gear"/></svg></button></nav>
+
+<div class="hero"><h1>Overview</h1><span>Nov 6</span></div>
+<div class="rg"><div id="h"></div>
+<div class="sel" id="sel"><div class="arrow"><i class="l"></i><span id="rl"></span><i class="r"></i></div><div id="ha"></div><div id="hb"></div></div>
+<div id="tk"></div></div>
+
+<div class="mid">
+<div class="stats"><div><b id="sRuns" class="tnum">0</b><span>Runs</span></div><div><b id="sTok" class="tnum">0</b><span>Tokens</span></div><div><b id="sTools" class="tnum">0</b><span>Tools</span></div><div><b id="sAg" class="tnum">0</b><span>Agents</span></div></div>
+<div><div class="ch"><h2>Tokens by Model</h2><div class="legend"><button data-m="gpt"><i class="gpt"></i>GPT-5.1</button><button data-m="cla"><i class="cla"></i>Claude Sonnet</button><button data-m="gem"><i class="gem"></i>Gemini 2.5</button></div></div>
+<div class="area" id="area"><div class="y" id="ay"></div><svg viewBox="0 0 700 220" preserveAspectRatio="none"><path id="a-gem" fill="var(--gem)"/><path id="a-cla" fill="var(--cla)"/><path id="a-gpt" fill="var(--gpt)"/></svg><div class="x" id="ax"></div><div class="cross" id="cross"></div></div></div>
+<div><h2>Model Ranking <small>(Tokens)</small></h2><div class="rank" id="rank"></div></div>
+</div>
+
+<div class="bot">
+<div><h2>Recent Runs</h2><div class="scroll"><div class="rt" id="rt"></div></div></div>
+<div><h2>Tools <small>(Count)</small></h2><div class="tl">
+<svg class="ic"><use href="#i-file"/></svg><span>Read</span><b id="tR" class="tnum">0</b>
+<svg class="ic"><use href="#i-pen"/></svg><span>Edit</span><b id="tE" class="tnum">0</b>
+<svg class="ic"><use href="#i-term"/></svg><span>Shell</span><b id="tS" class="tnum">0</b></div></div>
+<div><h2>Sub-Agent Tree</h2><div class="t2" id="tr"></div></div>
+</div>
+<p class="fake">Mockup · synthetic data · drag the brackets, toggle models, pick a run</p>
+<script>const $=(s,r=document)=>r.querySelector(s),$$=(s,r=document)=>[...r.querySelectorAll(s)];
+const MODELS=[{k:'gpt',name:'GPT-5.1',w:.484375},{k:'cla',name:'Claude Sonnet',w:.3203125},{k:'gem',name:'Gemini 2.5',w:.1953125}];
+const MN={gpt:'GPT-5.1',cla:'Claude Sonnet',gem:'Gemini 2.5'};
+const BINS=54,R={a:12,b:42},OFF=new Set();let DATA=[];
+function rng(s){return()=>(s=(s*1664525+1013904223)>>>0)/4294967296}
+function gen(seed=7,scale=1){const r=rng(seed),raw=[];
+  for(let i=0;i<BINS;i++){const x=(i-27)/11,base=Math.exp(-x*x)+.05;raw.push(MODELS.map(m=>base*m.w*(.55+r()*.9)))}
+  MODELS.forEach((m,j)=>{let s=0;for(let i=12;i<42;i++)s+=raw[i][j];const t=m.w*1.28e6*scale/s;raw.forEach(b=>b[j]*=t)});
+  DATA=raw.map(b=>({gpt:b[0],cla:b[1],gem:b[2]}))}
+gen();
+const val=(b,k)=>OFF.has(k)?0:b[k];
+const binTot=b=>val(b,'gpt')+val(b,'cla')+val(b,'gem');
+function sum(a=R.a,b=R.b){const o={gpt:0,cla:0,gem:0};for(let i=a;i<b;i++)for(const k in o)o[k]+=val(DATA[i],k);
+  o.total=o.gpt+o.cla+o.gem;const s=o.s=o.total/1.28e6;o.runs=Math.round(24*s);o.tools=Math.round(342*s);o.agents=Math.round(18*s);
+  o.read=Math.round(148*s);o.edit=Math.round(96*s);o.shell=Math.max(0,o.tools-o.read-o.edit);return o}
+function fmt(n){n=Math.round(n);if(n>=1e6)return(n/1e6).toFixed(2)+'M';if(n>=1e4)return Math.round(n/1e3)+'K';if(n>=1e3)return(n/1e3).toFixed(1)+'K';return''+n}
+const int=n=>''+Math.round(n);
+const tm=i=>{const m=540+i*10;return String(m/60|0).padStart(2,'0')+':'+String(m%60).padStart(2,'0')};
+const dur=()=>{const m=(R.b-R.a)*10;return(m/60|0)+'h '+String(m%60).padStart(2,'0')+'m'};
+const still=matchMedia('(prefers-reduced-motion: reduce)').matches;
+function tween(el,to,f=fmt){if(!el)return;const from=el._v??0;el._v=to;cancelAnimationFrame(el._r);
+  if(still||from===to){el.textContent=f(to);return}const t0=performance.now();
+  const step=t=>{const p=Math.min(1,(t-t0)/450),e=1-Math.pow(1-p,3);el.textContent=f(from+(to-from)*e);if(p<1)el._r=requestAnimationFrame(step)};el._r=requestAnimationFrame(step)}
+function bindRange(track,ha,hb,cb){
+  const clamp=w=>{if(w==='a')R.a=Math.max(0,Math.min(R.a,R.b-3));else R.b=Math.min(BINS,Math.max(R.b,R.a+3))};
+  [[ha,'a'],[hb,'b']].forEach(([h,w])=>{h.classList.add('hd');h.tabIndex=0;h.setAttribute('role','slider');h.setAttribute('aria-label',w==='a'?'Range start':'Range end');
+    h.addEventListener('pointerdown',e=>{h.setPointerCapture(e.pointerId);h.classList.add('drag');e.preventDefault();h.focus()});
+    h.addEventListener('pointermove',e=>{if(!h.hasPointerCapture(e.pointerId))return;const r=track.getBoundingClientRect();
+      R[w]=Math.max(0,Math.min(BINS,Math.round((e.clientX-r.left)/r.width*BINS)));clamp(w);cb()});
+    h.addEventListener('pointerup',()=>h.classList.remove('drag'));
+    h.addEventListener('keydown',e=>{const d=e.key==='ArrowLeft'?-1:e.key==='ArrowRight'?1:0;if(d){e.preventDefault();R[w]+=d;clamp(w);cb()}})})}
+function place(el){el.style.left=R.a/BINS*100+'%';el.style.right=(1-R.b/BINS)*100+'%'}
+const tipEl=document.createElement('div');tipEl.id='tip';document.body.append(tipEl);
+function tip(e,html){tipEl.innerHTML=html;tipEl.classList.add('on');const w=tipEl.offsetWidth,h=tipEl.offsetHeight;let x=e.clientX+14,y=e.clientY+14;
+  if(x+w>innerWidth-8)x=e.clientX-w-14;if(y+h>innerHeight-8)y=e.clientY-h-14;tipEl.style.left=x+'px';tipEl.style.top=y+'px'}
+function untip(){tipEl.classList.remove('on')}
+const ic=(n,c='')=>`<svg class="ic ${c}" aria-hidden="true"><use href="#i-${n}"/></svg>`;
+const binTip=n=>`<b>${tm(n)}</b>`+MODELS.map(m=>`<br><i class="${m.k}"></i>${m.name} ${fmt(DATA[n][m.k])}`).join('');
+function histo(box,stacked){box.classList.add('histo');box.innerHTML=DATA.map((_,i)=>`<i style="--d:${i}">${stacked?'<b class="gem"></b><b class="cla"></b><b class="gpt"></b>':''}</i>`).join('');
+  box.addEventListener('pointermove',e=>{const i=e.target.closest('.histo>i');if(!i)return untip();tip(e,binTip([...box.children].indexOf(i)))});
+  box.addEventListener('pointerleave',untip)}
+function paintHisto(box){const mx=Math.max(...DATA.map(b=>b.gpt+b.cla+b.gem));[...box.children].forEach((el,i)=>{
+  el.style.height=Math.max(1.5,binTot(DATA[i])/mx*100)+'%';el.classList.toggle('in',i>=R.a&&i<R.b);
+  ['gem','cla','gpt'].forEach((k,j)=>{if(el.children[j])el.children[j].style.flex=val(DATA[i],k)||0})})}
+function ticks(el){el.classList.add('ticks');el.innerHTML=Array.from({length:10},(_,i)=>`<span style="left:${i/9*100}%">${String(9+i).padStart(2,'0')}:00</span>`).join('')}
+function nice(mx){const st=[5e3,1e4,2e4,2.5e4,5e4,1e5,2e5,2.5e5,5e5].find(s=>mx/s<=4.5)||1e6;return{st,top:Math.ceil(mx/st)*st}}
+function curve(p){let d=`M${p[0][0].toFixed(1)} ${p[0][1].toFixed(1)}`;for(let i=1;i<p.length;i++){const m=((p[i-1][0]+p[i][0])/2).toFixed(1);d+=`C${m} ${p[i-1][1].toFixed(1)} ${m} ${p[i][1].toFixed(1)} ${p[i][0].toFixed(1)} ${p[i][1].toFixed(1)}`}return d}
+const smooth=a=>a.map((v,i)=>(v*2+(a[i-1]??v)+(a[i+1]??v))/4);
+function toggles(sel,cb){$$(sel).forEach(b=>{b.setAttribute('aria-pressed','true');b.addEventListener('click',()=>{const k=b.dataset.m;
+  if(OFF.has(k))OFF.delete(k);else if(OFF.size<2)OFF.add(k);$$(sel).forEach(x=>x.setAttribute('aria-pressed',String(!OFF.has(x.dataset.m))));cb()})})}
+function navs(sel){$$(sel).forEach(b=>b.addEventListener('click',()=>{$$(sel).forEach(x=>x.removeAttribute('aria-current'));b.setAttribute('aria-current','page')}))}
+
+const RUNS=[['15:47','gpt','Implement search and filters',142,7,3],['14:26','cla','Refactor adapter layer',98,5,2],['13:08','gem','Add tests for parsing',76,4,2],['11:12','gpt','Build run history view',185,9,4]];
+histo($('#h'),true);ticks($('#tk'));
+$('#rank').innerHTML=MODELS.map(m=>`<button data-m="${m.k}"><i class="sw ${m.k}"></i><span>${m.name}</span><i class="bar ${m.k}" id="b-${m.k}"></i><b class="tnum" id="v-${m.k}">0</b></button>`).join('');
+$('#rt').innerHTML=`<div class="row h"><span></span><span>Time</span><span>Model</span><span>Main Task</span><span>Tokens</span><span>Tools</span><span>Agents</span></div>`+
+ RUNS.map((r,i)=>`<button class="row" data-i="${i}">${ic('play')}<span class="tnum">${r[0]}</span><span><i class="sw ${r[1]}"></i>${MN[r[1]]}</span><span>${r[2]}</span><span>${r[3]}K</span><span>${r[4]}</span><span>${r[5]}</span></button>`).join('');
+function pick(i){$$('button.row').forEach((b,j)=>b.classList.toggle("on",j===i));const r=RUNS[i],kids=['Plan','Code','Verify','Review'].slice(0,r[5]);
+ $("#tr").classList.toggle("tight",kids.length>3);$("#tr").innerHTML=`<small>${r[0]} · ${r[2]}</small><span class="node root" style="--i:0">${ic('bot')}Main Agent</span><ul>${kids.map((k,j)=>`<li><span class="node" style="--i:${j+1}">${ic('bot')}${k}</span></li>`).join('')}</ul>`}
+$('#rt').addEventListener('click',e=>{const b=e.target.closest('button.row');if(b)pick(+b.dataset.i)});
+let AR=[];
+function update(){const s=sum();place($('#sel'));paintHisto($('#h'));$('#rl').textContent=tm(R.a)+' – '+tm(R.b);
+ tween($('#sRuns'),s.runs,int);tween($('#sTok'),s.total);tween($('#sTools'),s.tools,int);tween($('#sAg'),s.agents,int);
+ tween($('#tR'),s.read,int);tween($('#tE'),s.edit,int);tween($('#tS'),s.shell,int);
+ const mx=Math.max(s.gpt,s.cla,s.gem)||1;MODELS.forEach(m=>{tween($('#v-'+m.k),s[m.k]);$('#b-'+m.k).style.width=s[m.k]/mx*100+'%'});
+ const n=R.b-R.a,W=700,H=220,sl=k=>smooth(DATA.slice(R.a,R.b).map(b=>val(b,k)));
+ const g=sl('gpt'),c=sl('cla').map((v,i)=>v+g[i]),e=sl('gem').map((v,i)=>v+c[i]);AR={g,c,e};
+ const{st,top}=nice(Math.max(...e,1)),P=a=>a.map((v,i)=>[i/(n-1)*W,H-v/top*H]);
+ const fill=(a,id)=>$(id).setAttribute('d',curve(P(a))+`L${W} ${H}L0 ${H}Z`);fill(e,'#a-gem');fill(c,'#a-cla');fill(g,'#a-gpt');
+ $('#ay').innerHTML=Array.from({length:Math.round(top/st)+1},(_,i)=>`<div style="bottom:${i*st/top*100}%"><span>${i?fmt(i*st):0}</span></div>`).join('');
+ const every=n>36?12:6;let x='';for(let i=R.a;i<=R.b;i++)if(i%every===0)x+=`<span style="left:${(i-R.a)/n*100}%">${tm(i)}</span>`;$('#ax').innerHTML=x}
+$('#area').addEventListener('pointermove',e=>{const r=$('#area').getBoundingClientRect(),n=R.b-R.a,p=Math.max(0,Math.min(1,(e.clientX-r.left)/r.width)),i=Math.round(p*(n-1));
+ $('#cross').style.left=i/(n-1)*100+'%';const b=DATA[R.a+i];tip(e,`<b>${tm(R.a+i)}</b> · ${fmt(binTot(b))}`+MODELS.map(m=>`<br><i class="${m.k}"></i>${m.name} ${fmt(val(b,m.k))}`).join(''))});
+$('#area').addEventListener('pointerleave',untip);
+bindRange($('#h'),$('#ha'),$('#hb'),update);toggles('.legend button,.rank button',update);navs('.nav button');
+update();pick(0);
+</script></body></html>

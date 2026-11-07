@@ -1,0 +1,34 @@
+{
+  "id": "R1-C",
+  "name": "Liquid Glass",
+  "by": "codex, gpt-6.1-sol",
+  "pitch": "Your model mix becomes light, held in deep glass and measured in liquid.",
+  "tradeoff": "Atmospheric depth uses more space and GPU work than a compact table.",
+  "fonts": {
+    "display": "Host Grotesk",
+    "ui": "Instrument Sans",
+    "data": "Geist Mono"
+  },
+  "fontWhy": "Host gives the brand softness, Instrument keeps labels crisp, and Geist Mono supplies fixed-width tabular numerals.",
+  "palette": [
+    "#090e17",
+    "#17202b",
+    "#f2f8fa",
+    "#79eadb"
+  ],
+  "modelColors": {
+    "gpt-6.1-sol": "#79eadb",
+    "claude-opus-5-5": "#ffbb9a",
+    "gpt-6-luna": "#c5afff",
+    "gpt-6-astra": "#89baff",
+    "claude-fable-5-1": "#f8db85",
+    "claude-sonnet-5-5": "#f5a5d1",
+    "gpt-6-sol": "#b7ed91",
+    "claude-haiku-5-5": "#96deff",
+    "grok-4.7": "#e7c2a7",
+    "muse-wonder-1.0": "#d2c7ff"
+  },
+  "logoIdea": "A travelling droplet pulls a horizontal trace upward into its meniscus.",
+  "sliderIdea": "Two refractive glass beads contain a luminous liquid window inside a thick glass tube.",
+  "signatureMotion": "Share-weighted light pools drift and remix while liquid tubes settle with a soft slosh."
+}

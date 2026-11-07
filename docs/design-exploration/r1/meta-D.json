@@ -1,0 +1,25 @@
+{
+  "id": "R1-D",
+  "name": "Signal Matrix",
+  "by": "grok, grok-4.7",
+  "pitch": "A premium LED matrix where every metric is a lit dot.",
+  "tradeoff": "The strict grid spends its space on black, so names stay short and detail waits on hover.",
+  "fonts": { "display": "Doto", "ui": "Martian Mono", "data": "Martian Mono" },
+  "fontWhy": "Doto is a designed dot-matrix face for the big numerals, and Martian Mono keeps 12px labels and changing figures tabular.",
+  "palette": ["#000000", "#141414", "#F2F2F0", "#F4F4F2"],
+  "modelColors": {
+    "gpt-6.1-sol": "#FFD15A",
+    "claude-opus-5-5": "#FF6A45",
+    "gpt-6-luna": "#8FD4FF",
+    "gpt-6-astra": "#C9A2FF",
+    "claude-fable-5-1": "#3DDC9A",
+    "claude-sonnet-5-5": "#FF7AA8",
+    "gpt-6-sol": "#FF8C32",
+    "claude-haiku-5-5": "#D2F25A",
+    "grok-4.7": "#5CE6EA",
+    "muse-wonder-1.0": "#F58CFF"
+  },
+  "logoIdea": "An R of dots on one path, lighting in order like a run leaving its trace.",
+  "sliderIdea": "A 35-lamp step sequencer, one lamp per day, bright inside the selected window.",
+  "signatureMotion": "A scan sweeps the matrix, and dots flip on in a wave when the window changes."
+}

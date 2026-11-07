@@ -1,0 +1,438 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Runtrace</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600&family=Parkinsans:wght@500;600&family=Reddit+Mono:wght@500;600&display=swap">
+<style>:root{--ink:#2A241E;--muted:#5E534A;--brand:#A33B28;--slab:#FBF8F3;--panel:#F3EBE2;--recess:#E7DDD2;--ease:cubic-bezier(0.22,1,0.36,1);--spring:cubic-bezier(0.22,1.28,0.36,1);color-scheme:light}*,*::before,*::after{box-sizing:border-box;min-width:0}html,body{margin:0;width:1440px;height:900px;overflow:hidden;background:#F3EEE6}body{background:radial-gradient(980px 560px at 12% -10%,#FBF6EE,transparent 58%),radial-gradient(820px 640px at 110% 120%,#E7D9C8,transparent 52%),#F3EEE6;color:var(--ink);font-family:Onest,sans-serif;font-size:13px;font-synthesis:none;-webkit-font-smoothing:antialiased}button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer}button,[role="slider"]{user-select:none;touch-action:none}svg{display:block}:focus-visible{outline:2px solid var(--ink);outline-offset:3px}.num{font-family:"Reddit Mono",monospace;font-weight:500;font-variant-numeric:tabular-nums;font-feature-settings:"tnum" 1}.stage{width:1440px;height:900px;padding:18px}.slab{height:100%;background:var(--slab);--radius:22px;--pad:16px;border-radius:calc(var(--radius) + var(--pad));padding:var(--pad) 18px 14px;display:grid;grid-template-rows:56px 92px 58px minmax(0,1fr);gap:8px;box-shadow:inset 0 1px 0 oklch(1 0 none / 0.95),0 8px 18px oklch(0.45 0.04 55 / 0.10),0 1px 2px oklch(0.4 0.03 50 / 0.06)}.top{display:flex;align-items:center;justify-content:space-between;gap:16px;position:relative;z-index:3}.brand{display:flex;align-items:center;gap:10px}.mark{inline-size:42px;block-size:42px;flex:none}.mark path{fill:none;stroke:var(--brand);stroke-width:6.5;stroke-linecap:round;stroke-linejoin:round}.wm{font-family:Parkinsans,sans-serif;font-weight:500;font-size:28px;letter-spacing:-0.035em;line-height:1}.rail{position:relative;display:flex;flex:none;padding:4px;border-radius:999px;background:var(--recess);box-shadow:inset 0 2px 3px oklch(0.38 0.03 50 / 0.18),inset 0 -1px 0 oklch(1 0 none / 0.7)}.rail button{position:relative;z-index:1;inline-size:40px;block-size:40px;border-radius:50%;display:grid;place-items:center;color:var(--ink)}.rail button svg{inline-size:18px;block-size:18px}.rail button[aria-current="page"]{color:white}.pip{position:absolute;z-index:0;inline-size:40px;block-size:40px;border-radius:50%;pointer-events:none;overflow:clip;background:radial-gradient(circle at 32% 28%,oklch(1 0 none / 0.55),transparent 42%),radial-gradient(circle at 70% 80%,oklch(0.3 0.08 30 / 0.35),transparent 46%),var(--brand);box-shadow:inset 0 1px 1px oklch(1 0 none / 0.6),inset 0 -2px 3px oklch(0 0 none / 0.22),0 2px 4px oklch(0.45 0.08 30 / 0.25)}.tip{position:absolute;inset-block-start:calc(100% + 8px);inset-inline-start:50%;translate:-50% 0;opacity:0;pointer-events:none;white-space:nowrap;background:var(--ink);color:#FBF8F3;font-size:12px;line-height:1;padding:6px 9px;border-radius:999px;z-index:4}.hero{display:flex;align-items:center;justify-content:space-between;gap:28px}.hero-n{display:flex;align-items:baseline;gap:10px}.hero-n strong{font-size:76px;line-height:0.78;letter-spacing:-0.045em}.hero-n em{font-style:normal;font-size:14px;color:var(--muted)}.stats{display:flex;align-items:center;gap:26px}.stat{display:flex;align-items:center;gap:8px}.stat .ic{color:var(--muted);display:grid}.stat .ic svg{inline-size:18px;block-size:18px}.stat b{display:block;font-size:18px;line-height:1}.stat .lab{display:block;margin-block-start:3px;font-size:12px;color:var(--muted)}.srow{display:flex;align-items:center;gap:16px;position:relative;z-index:2}.when{display:flex;align-items:baseline;gap:6px;flex:none;font-size:13px}.when b{font-size:13px}.when .tz{margin-inline-start:6px;font-size:12px;color:var(--muted)}.groove{position:relative;flex:1;block-size:22px;border-radius:999px;background:var(--recess);box-shadow:inset 0 3px 5px oklch(0.35 0.03 50 / 0.28),inset 0 -1px 0 oklch(1 0 none / 0.8)}.fill{position:absolute;inset-block-start:50%;inset-inline-start:0;translate:0 -50%;block-size:12px;border-radius:999px;background:color-mix(in oklch,var(--brand) 72%,white);pointer-events:none}.bead{position:absolute;inset-block-start:50%;inset-inline-start:0;translate:0 -50%;inline-size:44px;block-size:44px;display:grid;place-items:center;border-radius:50%}.bead i{inline-size:32px;block-size:32px;border-radius:50%;pointer-events:none;position:relative;overflow:clip;background:radial-gradient(circle at 34% 30%,oklch(1 0 none / 0.85),transparent 22%),radial-gradient(circle at 32% 32%,#E7A090,transparent 38%),radial-gradient(circle at 68% 78%,#6E2418,var(--brand));box-shadow:inset 0 1px 1px oklch(1 0 none / 0.65),inset 0 -3px 4px oklch(0.25 0.08 30 / 0.45),0 3px 6px oklch(0.4 0.06 35 / 0.28)}.deck{display:grid;grid-template-columns:minmax(0,1fr) 420px;gap:14px;min-block-size:0}.panel{min-block-size:0;display:grid;grid-template-rows:minmax(0,1fr) 176px;gap:8px;padding:12px;border-radius:var(--radius);background:var(--panel);box-shadow:inset 0 1px 2px oklch(0.4 0.03 55 / 0.12),inset 0 -1px 0 oklch(1 0 none / 0.55)}.rods{display:flex;align-items:stretch;min-block-size:0}.rod{flex:1 1 0;min-inline-size:0;display:flex;justify-content:center;align-items:end}.rod.out{flex-grow:0;opacity:0}.tube{inline-size:88%;max-inline-size:28px;min-block-size:8px;border-radius:999px;overflow:clip;position:relative;display:flex;flex-direction:column;justify-content:flex-end;box-shadow:0 2px 4px oklch(0.4 0.04 50 / 0.14)}.tube::after{content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none;background:linear-gradient(90deg,oklch(1 0 none / 0.32),transparent 34%,transparent 76%,oklch(0.35 0.03 50 / 0.1))}.ink{inline-size:100%;block-size:100%;display:flex;flex-direction:column-reverse;gap:1px;min-block-size:0;transform-origin:50% 100%}.seg{flex:var(--v) 0 0;min-block-size:0;background:var(--c)}.seg.other{--c:#B08968}.foot{display:flex;flex-direction:column;gap:6px;min-block-size:0}.stamp{margin:0;font-family:Parkinsans,sans-serif;font-weight:500;font-size:12px;letter-spacing:0.16em;color:var(--muted);line-height:1}.heat{flex:1;min-block-size:0;display:grid;grid-template-columns:14px minmax(0,1fr);grid-template-rows:minmax(0,1fr) 14px;gap:3px 6px}.cells{grid-column:2;grid-row:1;display:grid;grid-template-columns:repeat(24,minmax(0,1fr));grid-template-rows:repeat(7,minmax(0,1fr));gap:3px}.cell{display:block;border-radius:999px;box-shadow:inset 0 1px 1px oklch(0.35 0.03 50 / 0.14)}.dows{grid-column:1;grid-row:1;display:grid;grid-template-rows:repeat(7,minmax(0,1fr))}.dows span,.hrs span{font-size:12px;color:var(--muted);display:grid;place-items:center}.hrs{grid-column:2;grid-row:2;display:grid;grid-template-columns:repeat(24,minmax(0,1fr))}.hrs span{font-family:"Reddit Mono",monospace;font-variant-numeric:tabular-nums}.models{display:grid;grid-auto-rows:1fr;min-block-size:0;align-content:stretch}.mrow{display:grid;grid-template-columns:24px minmax(0,1fr) auto;grid-template-rows:1fr 5px;column-gap:8px;row-gap:3px;align-items:center;padding-inline:6px;border-radius:12px;text-align:start;color:var(--ink)}.jewel{grid-row:1 / 3;inline-size:24px;block-size:24px;border-radius:50%;position:relative;overflow:clip;display:grid;place-items:center;color:white;background:radial-gradient(circle at 32% 28%,oklch(1 0 none / 0.72),transparent 36%),radial-gradient(circle at 72% 80%,oklch(0 0 none / 0.22),transparent 42%),var(--c);box-shadow:inset 0 1px 1px oklch(1 0 none / 0.65),inset 0 -2px 3px oklch(0 0 none / 0.22),0 1px 2px oklch(0.4 0.04 50 / 0.16)}.jewel svg{inline-size:13px;block-size:13px;position:relative;z-index:1}.mrow.miss .jewel{background:radial-gradient(circle at 32% 28%,oklch(1 0 none / 0.35),transparent 36%),repeating-linear-gradient(135deg,oklch(1 0 none / 0.62) 0 2px,transparent 2px 5px),var(--c)}.mname{font-size:13px;line-height:1;white-space:nowrap}.mpct{font-size:12px;line-height:1;color:var(--c);text-align:end;min-inline-size:46px}.mrow.miss .mpct{color:var(--muted)}.meter{grid-column:2 / 4;block-size:7px;border-radius:999px;background:var(--recess);box-shadow:inset 0 1px 1px oklch(0.38 0.03 50 / 0.16);overflow:clip}.meter i{display:block;block-size:100%;inline-size:0;border-radius:inherit;background:var(--c)}.meter.hatch{background-color:var(--recess);background-image:repeating-linear-gradient(135deg,oklch(0.45 0.02 55 / 0.45) 0 2px,transparent 2px 5px)}.tlist{flex:1;min-block-size:0;display:flex;flex-direction:column;justify-content:space-between}.trow{display:grid;grid-template-columns:22px minmax(0,1fr) auto;gap:8px;align-items:center}.trow .ic{inline-size:22px;block-size:22px;border-radius:50%;display:grid;place-items:center;color:var(--ink);background:var(--slab);box-shadow:inset 0 1px 1px oklch(1 0 none / 0.8),0 1px 1px oklch(0.4 0.03 50 / 0.08)}.trow .ic svg{inline-size:13px;block-size:13px}.trow b{font-size:13px}.trow em{font-style:normal;font-size:12px;color:var(--brand);min-inline-size:42px;text-align:end}@media (hover:hover) and (pointer:fine){.rail button:hover .tip{opacity:1}.mrow:hover{background:color-mix(in oklch,var(--c) 12%,var(--slab));box-shadow:0 8px 16px oklch(0.42 0.04 50 / 0.12)}.bead:hover i{box-shadow:inset 0 1px 1px oklch(1 0 none / 0.7),inset 0 -3px 4px oklch(0.25 0.08 30 / 0.45),0 8px 14px oklch(0.4 0.06 35 / 0.32)}.stat:hover{translate:0 -1px}}.rail button:focus-visible .tip{opacity:1}.rail button:active,.mrow:active{scale:0.97}.bead:active i{scale:0.94}@media (prefers-reduced-motion:no-preference){.mark path{stroke-dasharray:180;stroke-dashoffset:180;animation:draw 0.9s var(--ease) forwards}.wm{animation:rise 0.7s var(--spring) 0.2s backwards}.hero-n strong{animation:rise 0.75s var(--spring) 0.12s backwards}.stat{animation:rise 0.6s var(--spring) backwards;animation-delay:calc(0.18s + var(--i) * 45ms)}.mrow{animation:pop 0.65s var(--spring) backwards;animation-delay:calc(0.22s + var(--i) * 38ms)}.ink{animation:grow 0.85s var(--spring) backwards}.rail.ready .pip{transition:transform 0.5s var(--spring)}.rod{transition:flex-grow 0.32s var(--ease),opacity 0.22s linear}.meter i{transition:inline-size 0.4s var(--ease)}.mrow{transition:translate 0.3s var(--spring),box-shadow 0.3s var(--ease),background-color 0.2s linear,opacity 0.18s linear}.bead i{transition:box-shadow 0.3s var(--ease),scale 0.16s var(--ease)}.jewel,.bead i,.pip{}.jewel::before,.bead i::before,.pip::before{content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none;background:linear-gradient(105deg,transparent 38%,oklch(1 0 none / 0.55) 50%,transparent 62%);transform:translateX(-140%);animation:sheen 7.5s var(--ease) infinite;animation-delay:calc(var(--i,0) * 0.4s)}.mrow:hover{translate:0 -2px}.bead:hover i{scale:1.06}}html.drag .rod,html.drag .meter i{transition:none}html[data-paused] .jewel::before,html[data-paused] .bead i::before,html[data-paused] .pip::before{animation-play-state:paused}.dim{opacity:0.2}.mrow.hot{background:color-mix(in oklch,var(--c) 16%,var(--slab))}@keyframes draw{to{stroke-dashoffset:0}}@keyframes rise{from{opacity:0;transform:translateY(8px)}}@keyframes pop{from{opacity:0;transform:translateY(10px) scale(0.84)}}@keyframes grow{from{transform:scaleY(0.02)}}@keyframes sheen{0%,68%{transform:translateX(-140%)}100%{transform:translateX(140%)}}</style>
+</head>
+<body>
+<div class="stage">
+  <div class="slab">
+    <header class="top">
+      <div class="brand" data-logo>
+        <svg class="mark" viewBox="0 0 64 64" aria-hidden="true"><path d="M18 56C18 36 18 20 18 16C18 8 32 6 42 6C56 6 60 15 60 27C60 39 50 45 38 45H22L50 60"/></svg>
+        <span class="wm">Runtrace</span>
+      </div>
+      <nav><div class="rail" id="rail"></div></nav>
+    </header>
+    <section class="hero">
+      <div class="hero-n">
+        <strong class="num" data-readout id="tok">0</strong>
+        <em>tokens</em>
+      </div>
+      <div class="stats" id="stats">
+        <div class="stat" style="--i:0" title="Prompts"><span class="ic" data-ico="message-square"></span><span><b class="num" data-readout id="n-prompts">0</b><span class="lab">Prompts</span></span></div>
+        <div class="stat" style="--i:1" title="Provider turns"><span class="ic" data-ico="arrow-left-right"></span><span><b class="num" data-readout id="n-turns">0</b><span class="lab">Turns</span></span></div>
+        <div class="stat" style="--i:2" title="Threads"><span class="ic" data-ico="git-branch"></span><span><b class="num" data-readout id="n-threads">0</b><span class="lab">Threads</span></span></div>
+        <div class="stat" style="--i:3" title="Sub-agents"><span class="ic" data-ico="bot"></span><span><b class="num" data-readout id="n-agents">0</b><span class="lab">Agents</span></span></div>
+        <div class="stat" style="--i:4" title="Tool calls"><span class="ic" data-ico="wrench"></span><span><b class="num" data-readout id="n-calls">0</b><span class="lab">Calls</span></span></div>
+      </div>
+    </section>
+    <div class="srow">
+      <div class="when" title="Europe/Zurich">
+        <b class="num" id="d0"></b><span>–</span><b class="num" id="d1"></b><span class="tz">Zurich</span>
+      </div>
+      <div class="groove" id="groove">
+        <div class="fill" id="fill"></div>
+        <button type="button" class="bead" id="b0" data-time-slider role="slider" aria-label="Window start" aria-valuemin="0" aria-valuemax="34" aria-valuenow="0"><i></i></button>
+        <button type="button" class="bead" id="b1" data-time-slider role="slider" aria-label="Window end" aria-valuemin="0" aria-valuemax="34" aria-valuenow="34"><i></i></button>
+      </div>
+    </div>
+    <div class="deck">
+      <section class="panel">
+        <div class="rods" id="rods" role="img" aria-label="Tokens per day by model"></div>
+        <div class="foot">
+          <p class="stamp">all time</p>
+          <div class="heat" id="heat" role="img" aria-label="Prompts by weekday and hour, all time"></div>
+        </div>
+      </section>
+      <section class="panel">
+        <div class="models" id="models"></div>
+        <div class="foot">
+          <p class="stamp">all time</p>
+          <div class="tlist" id="tools"></div>
+        </div>
+      </section>
+    </div>
+  </div>
+</div>
+<script id="rt-data">window.RT={"generatedAt":"2026-11-06T17:35:07.076Z","timezone":"Europe/Zurich","note":"Real aggregate numbers from the local Runtrace service. Project names are aliased except Runtrace and t3code.","totals":{"prompts":13416,"answers":41988,"runs":11463,"providerTurns":12141,"threads":2970,"subAgents":2858,"toolCalls":192823,"projects":34},"notCaptured":["Model calls","Cost","Resolved model","Quota"],"delegation":{"delegatingThreads":174,"largestFanout":274,"peakParallel":24},"models":[{"id":"gpt-6.1-sol","provider":"codex","icon":"sun","tokens":10478570938,"turns":4507,"runs":4479,"cachedShare":0.979,"p50ms":41927,"p95ms":1334436.4},{"id":"claude-opus-5-5","provider":"claude","icon":"feather","tokens":6678832258,"turns":1993,"runs":2051,"cachedShare":0.985,"p50ms":46797,"p95ms":1245377.599999996},{"id":"gpt-6-luna","provider":"codex","icon":"moon","tokens":2331309507,"turns":1033,"runs":1041,"cachedShare":0.975,"p50ms":19811,"p95ms":938525.8},{"id":"gpt-6-astra","provider":"codex","icon":"sparkles","tokens":2008031828,"turns":2832,"runs":2907,"cachedShare":0.969,"p50ms":20844.5,"p95ms":456539.9499999999},{"id":"claude-fable-5-1","provider":"claude","icon":"book-open","tokens":119717487,"turns":40,"runs":40,"cachedShare":0.972,"p50ms":50441,"p95ms":1115011.8499999987},{"id":"claude-sonnet-5-5","provider":"claude","icon":"music","tokens":112335974,"turns":27,"runs":27,"cachedShare":0.969,"p50ms":127946,"p95ms":641842.4999999999},{"id":"gpt-6-sol","provider":"codex","icon":"sunrise","tokens":62699661,"turns":49,"runs":49,"cachedShare":0.967,"p50ms":77270,"p95ms":1088250.1999999993},{"id":"claude-haiku-5-5","provider":"claude","icon":"leaf","tokens":5524030,"turns":2,"runs":2,"cachedShare":0.951,"p50ms":369367.5,"p95ms":586733.25},{"id":"grok-4.7","provider":"grok","icon":"zap","tokens":null,"turns":741,"runs":774,"cachedShare":null,"p50ms":22137,"p95ms":1049690},{"id":"muse-wonder-1.0","provider":"muse","icon":"wand-sparkles","tokens":null,"turns":56,"runs":57,"cachedShare":0.962,"p50ms":169952,"p95ms":570643}],"tools":[{"name":"command_execution","calls":109123,"failed":8272,"p50ms":287,"p95ms":18355.89999999999},{"name":"file_change","calls":19360,"failed":39,"p50ms":11,"p95ms":82},{"name":"Read","calls":10094,"failed":55,"p50ms":25,"p95ms":306},{"name":"t3-code.preview_evaluate","calls":7171,"failed":245,"p50ms":45,"p95ms":357.5},{"name":"t3-code.preview_snapshot","calls":4148,"failed":194,"p50ms":112,"p95ms":396.6499999999997},{"name":"t3-code.t3_thread_read","calls":3498,"failed":13,"p50ms":45,"p95ms":117}],"projects":[{"name":"Project A","tokens":11971375230,"threads":1059,"prompts":4831},{"name":"Project B","tokens":3321148390,"threads":514,"prompts":5473},{"name":"Project C","tokens":1366124147,"threads":282,"prompts":715},{"name":"Project D","tokens":956550300,"threads":106,"prompts":254},{"name":"Other","tokens":930634481,"threads":96,"prompts":376},{"name":"Other","tokens":781475062,"threads":144,"prompts":285}],"heatmap":{"rows":["Mon","Tue","Wed","Thu","Fri","Sat","Sun"],"prompts":[[51,20,23,25,27,9,5,1,10,15,8,13,11,4,14,19,32,37,6,17,15,13,43,43],[53,55,13,13,4,2,0,1,14,9,22,2,14,13,1,16,20,54,73,46,27,39,26,40],[54,42,12,21,2,0,0,0,0,0,11,40,26,179,225,154,168,156,161,148,109,97,90,164],[121,122,122,130,40,31,24,36,54,64,40,58,75,82,64,40,25,44,70,63,104,104,125,112],[128,91,62,40,36,26,13,12,25,40,22,26,30,18,24,37,41,40,51,79,98,70,112,79],[118,106,106,202,147,124,107,69,83,85,74,51,86,74,122,154,133,147,72,182,607,1064,673,937],[395,381,263,261,139,137,80,53,6,6,18,62,88,38,25,24,9,10,5,3,3,11,25,24]]},"dayColumns":["date","prompts","providerTurns","threads","subAgents","toolCalls","otherModelTokens","gpt-6.1-sol","claude-opus-5-5","gpt-6-luna","gpt-6-astra","claude-fable-5-1","claude-sonnet-5-5","gpt-6-sol","claude-haiku-5-5","grok-4.7","muse-wonder-1.0"],"days":[["2026-10-03",3275,2907,135,116,17812,76380904,345226785,48435296,41970702,677236085,1731208,0,0,0,0,0],["2026-10-04",1377,1331,106,94,10142,4988250,305437428,315022019,212961542,293883309,9022082,0,24373702,0,0,0],["2026-10-05",189,148,60,56,5313,0,411981842,106763984,14404681,26624454,0,324329,0,0,0,0],["2026-10-06",125,119,48,45,5034,0,134843227,426547230,10863356,28020453,0,0,0,0,0,0],["2026-10-07",229,229,106,95,5899,9633074,151040366,304936106,36344785,26656196,0,314130,13240986,0,0,0],["2026-10-08",241,223,98,93,7598,0,280573583,215292232,50771571,675440,0,0,0,0,0,0],["2026-10-09",282,250,97,83,4686,60553998,171873749,133564358,31413679,0,2650513,0,0,5524030,0,0],["2026-10-10",153,152,79,66,2384,9007037,71526986,99875456,165934,4811339,11166323,0,0,0,0,0],["2026-10-11",389,285,130,124,8629,0,242339183,15444317,112403842,31046980,181556,0,0,0,0,0],["2026-10-12",28,26,12,11,1251,0,944589,346179,0,0,1537711,0,0,0,0,0],["2026-10-13",291,303,169,165,8707,249842324,179265627,215318288,94903578,55096757,0,0,0,0,0,0],["2026-10-14",599,586,215,208,9556,57705853,340367321,630921916,4350813,8942189,0,27736726,0,0,0,0],["2026-10-15",903,902,152,172,8914,28823762,612139750,656843688,0,0,0,43398488,0,0,0,0],["2026-10-16",371,424,96,102,3355,96695664,431028062,139962601,0,0,11058899,37761597,0,0,0,0],["2026-10-17",1148,820,107,262,18266,405771,459756175,44098460,999713375,374665167,15244437,0,0,0,0,0],["2026-10-18",31,46,16,15,1042,98580364,7534348,35222528,19499530,64961551,50752313,0,0,0,0,0],["2026-10-19",9,9,11,6,63,0,0,5259054,0,0,0,0,0,0,0,0],["2026-10-20",48,52,22,25,747,5751544,29665776,31113974,27077214,4065967,0,0,21892287,0,0,0],["2026-10-21",774,294,139,196,9577,1517459,993647676,172727237,236493383,84000762,0,0,0,0,0,0],["2026-10-22",251,153,64,82,3490,1216171,203959394,199838941,885873,32501319,0,0,0,0,0,0],["2026-10-23",85,66,15,14,2464,0,125540454,442589861,0,1968749,0,0,0,0,0,0],["2026-10-24",570,521,97,111,11476,0,242709253,816143390,367355965,121919812,0,0,0,0,0,0],["2026-10-25",164,150,66,72,5287,0,364795215,267320509,13371045,145198126,0,0,0,0,0,0],["2026-10-26",136,124,50,45,3604,39045147,476114072,75200095,7822578,3661539,0,0,0,0,0,0],["2026-10-27",65,63,28,27,1056,9968912,169520641,11579124,5399596,0,0,1849159,0,0,0,0],["2026-10-28",122,119,48,48,2328,30822081,34314159,184357727,13129823,0,0,0,0,0,0,0],["2026-10-29",100,82,33,26,2004,65763959,274520217,120714311,3534481,0,0,360331,0,0,0,0],["2026-10-30",235,239,77,75,3798,84896811,441243700,108146415,23489563,6611498,793875,0,0,0,0,0],["2026-10-31",377,373,135,112,6582,192731048,963794255,285411024,0,0,0,591214,0,0,0,0],["2026-11-01",105,214,24,23,2892,31733431,360090472,183434632,0,0,0,0,0,0,0,0],["2026-11-02",99,89,36,33,1743,2333583,142043459,105051501,113468,6517768,0,0,0,0,0,0],["2026-11-03",28,27,8,6,567,4763247,81196863,36599954,0,0,0,0,0,0,0,0],["2026-11-04",135,129,36,28,2906,21334364,266286013,31236659,0,0,0,0,0,0,0,0],["2026-11-05",255,266,109,101,7870,24893932,412453820,104900298,336552,6550947,15578570,0,3192686,0,0,0],["2026-11-06",227,420,126,121,5781,166726909,750796478,108612894,2532578,2415421,0,0,0,0,0,0]]};</script>
+<script>
+const I = {"sun":"<circle cx=\"12\" cy=\"12\" r=\"4\"/><path d=\"M12 2v2\"/><path d=\"M12 20v2\"/><path d=\"m4.93 4.93 1.41 1.41\"/><path d=\"m17.66 17.66 1.41 1.41\"/><path d=\"M2 12h2\"/><path d=\"M20 12h2\"/><path d=\"m6.34 17.66-1.41 1.41\"/><path d=\"m19.07 4.93-1.41 1.41\"/>","moon":"<path d=\"M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z\"/>","sparkles":"<path d=\"M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z\"/><path d=\"M20 3v4\"/><path d=\"M22 5h-4\"/><path d=\"M4 17v2\"/><path d=\"M5 18H3\"/>","sunrise":"<path d=\"M12 2v8\"/><path d=\"m4.93 10.93 1.41 1.41\"/><path d=\"M2 18h2\"/><path d=\"M20 18h2\"/><path d=\"m19.07 10.93-1.41 1.41\"/><path d=\"M22 22H2\"/><path d=\"m8 6 4-4 4 4\"/><path d=\"M16 18a4 4 0 0 0-8 0\"/>","feather":"<path d=\"M12.67 19a2 2 0 0 0 1.416-.588l6.154-6.172a6 6 0 0 0-8.49-8.49L5.586 9.914A2 2 0 0 0 5 11.328V18a1 1 0 0 0 1 1z\"/><path d=\"M16 8 2 22\"/><path d=\"M17.5 15H9\"/>","music":"<path d=\"M9 18V5l12-2v13\"/><circle cx=\"6\" cy=\"18\" r=\"3\"/><circle cx=\"18\" cy=\"16\" r=\"3\"/>","book-open":"<path d=\"M12 7v14\"/><path d=\"M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z\"/>","leaf":"<path d=\"M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.48 19 2c1 2 2 4.18 2 8 0 5.5-4.78 10-10 10Z\"/><path d=\"M2 21c0-3 1.85-5.36 5.08-6C9.5 14.52 12 13 13 12\"/>","zap":"<path d=\"M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z\"/>","wand-sparkles":"<path d=\"m21.64 3.64-1.28-1.28a1.21 1.21 0 0 0-1.72 0L2.36 18.64a1.21 1.21 0 0 0 0 1.72l1.28 1.28a1.2 1.2 0 0 0 1.72 0L21.64 5.36a1.2 1.2 0 0 0 0-1.72\"/><path d=\"m14 7 3 3\"/><path d=\"M5 6v4\"/><path d=\"M19 14v4\"/><path d=\"M10 2v2\"/><path d=\"M7 8H3\"/><path d=\"M21 16h-4\"/><path d=\"M11 3H9\"/>","layout-dashboard":"<rect width=\"7\" height=\"9\" x=\"3\" y=\"3\" rx=\"1\"/><rect width=\"7\" height=\"5\" x=\"14\" y=\"3\" rx=\"1\"/><rect width=\"7\" height=\"9\" x=\"14\" y=\"12\" rx=\"1\"/><rect width=\"7\" height=\"5\" x=\"3\" y=\"16\" rx=\"1\"/>","activity":"<path d=\"M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2\"/>","layers":"<path d=\"M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83z\"/><path d=\"M2 12a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 12\"/><path d=\"M2 17a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 17\"/>","folder":"<path d=\"M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z\"/>","git-branch":"<line x1=\"6\" x2=\"6\" y1=\"3\" y2=\"15\"/><circle cx=\"18\" cy=\"6\" r=\"3\"/><circle cx=\"6\" cy=\"18\" r=\"3\"/><path d=\"M18 9a9 9 0 0 1-9 9\"/>","network":"<rect x=\"16\" y=\"16\" width=\"6\" height=\"6\" rx=\"1\"/><rect x=\"2\" y=\"16\" width=\"6\" height=\"6\" rx=\"1\"/><rect x=\"9\" y=\"2\" width=\"6\" height=\"6\" rx=\"1\"/><path d=\"M5 16v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3\"/><path d=\"M12 12V8\"/>","wrench":"<path d=\"M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z\"/>","gauge":"<path d=\"m12 14 4-4\"/><path d=\"M3.34 19a10 10 0 1 1 17.32 0\"/>","database":"<ellipse cx=\"12\" cy=\"5\" rx=\"9\" ry=\"3\"/><path d=\"M3 5V19A9 3 0 0 0 21 19V5\"/><path d=\"M3 12A9 3 0 0 0 21 12\"/>","shield-check":"<path d=\"M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z\"/><path d=\"m9 12 2 2 4-4\"/>","settings":"<path d=\"M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z\"/><circle cx=\"12\" cy=\"12\" r=\"3\"/>","search":"<circle cx=\"11\" cy=\"11\" r=\"8\"/><path d=\"m21 21-4.3-4.3\"/>","message-square":"<path d=\"M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z\"/>","arrow-left-right":"<path d=\"M8 3 4 7l4 4\"/><path d=\"M4 7h16\"/><path d=\"m16 21 4-4-4-4\"/><path d=\"M20 17H4\"/>","bot":"<path d=\"M12 8V4H8\"/><rect width=\"16\" height=\"12\" x=\"4\" y=\"8\" rx=\"2\"/><path d=\"M2 14h2\"/><path d=\"M20 14h2\"/><path d=\"M15 13v2\"/><path d=\"M9 13v2\"/>","terminal":"<polyline points=\"4 17 10 11 4 5\"/><line x1=\"12\" x2=\"20\" y1=\"19\" y2=\"19\"/>","file-pen":"<path d=\"M12.5 22H18a2 2 0 0 0 2-2V7l-5-5H6a2 2 0 0 0-2 2v9.5\"/><path d=\"M14 2v4a2 2 0 0 0 2 2h4\"/><path d=\"M13.378 15.626a1 1 0 1 0-3.004-3.004l-5.01 5.012a2 2 0 0 0-.506.854l-.837 2.87a.5.5 0 0 0 .62.62l2.87-.837a2 2 0 0 0 .854-.506z\"/>","file-text":"<path d=\"M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z\"/><path d=\"M14 2v4a2 2 0 0 0 2 2h4\"/><path d=\"M10 9H8\"/><path d=\"M16 13H8\"/><path d=\"M16 17H8\"/>","scan":"<path d=\"M3 7V5a2 2 0 0 1 2-2h2\"/><path d=\"M17 3h2a2 2 0 0 1 2 2v2\"/><path d=\"M21 17v2a2 2 0 0 1-2 2h-2\"/><path d=\"M7 21H5a2 2 0 0 1-2-2v-2\"/>","camera":"<path d=\"M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z\"/><circle cx=\"12\" cy=\"13\" r=\"3\"/>"};
+const RT = window.RT;
+const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const ix = Object.fromEntries(RT.dayColumns.map((c, i) => [c, i]));
+const COLOR = {"gpt-6.1-sol":"#9A5600","claude-opus-5-5":"#8C2438","gpt-6-luna":"#1A4A92","gpt-6-astra":"#572FA8","claude-fable-5-1":"#0C6842","claude-sonnet-5-5":"#A12E54","gpt-6-sol":"#B23E18","claude-haiku-5-5":"#0C6860","grok-4.7":"#3A4666","muse-wonder-1.0":"#6A3864"};
+const last = RT.days.length - 1;
+let A = 0, B = last, vis = [0, 1], vel = [0, 0], goal = [0, 1], dragging = null, looping = false, countGen = 0;
+
+function ico(name) {
+  return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${I[name]}</svg>`;
+}
+function fmt(n) {
+  n = Math.round(Math.abs(n));
+  if (n >= 1e9) return (n / 1e9).toFixed(1) + 'B';
+  if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+  if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K';
+  return String(n);
+}
+function pct(part, whole) {
+  if (!whole) return '0%';
+  const p = part / whole * 100;
+  if (p > 0 && p < 0.1) return '<0.1%';
+  return (p < 10 ? p.toFixed(1) : p.toFixed(0)) + '%';
+}
+function short(iso) { return iso.slice(5).replace('-', '.'); }
+function dayTotal(row) {
+  let t = row[ix.otherModelTokens];
+  for (const m of RT.models) if (m.tokens != null) t += row[ix[m.id]];
+  return t;
+}
+function sum(a, b) {
+  const s = { prompts: 0, providerTurns: 0, threads: 0, subAgents: 0, toolCalls: 0, other: 0, tok: {} };
+  for (const m of RT.models) s.tok[m.id] = 0;
+  for (let i = a; i <= b; i++) {
+    const r = RT.days[i];
+    s.prompts += r[ix.prompts];
+    s.providerTurns += r[ix.providerTurns];
+    s.threads += r[ix.threads];
+    s.subAgents += r[ix.subAgents];
+    s.toolCalls += r[ix.toolCalls];
+    s.other += r[ix.otherModelTokens];
+    for (const m of RT.models) s.tok[m.id] += r[ix[m.id]];
+  }
+  let total = s.other;
+  for (const m of RT.models) if (m.tokens != null) total += s.tok[m.id];
+  s.total = total;
+  return s;
+}
+
+const NAV = [['Overview','layout-dashboard'],['Activity','activity'],['Models','layers'],['Projects','folder'],['Threads','git-branch'],['Agent Trees','network'],['Tool Calls','wrench'],['Quota','gauge'],['Storage','database'],['Data Quality','shield-check'],['Settings','settings'],['Search','search']];
+const rail = document.getElementById('rail');
+const pip = document.createElement('i');
+pip.className = 'pip';
+pip.setAttribute('aria-hidden', 'true');
+rail.appendChild(pip);
+NAV.forEach(([label, icon], i) => {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.setAttribute('aria-label', label);
+  if (!i) b.setAttribute('aria-current', 'page');
+  b.innerHTML = ico(icon) + `<span class="tip">${label}</span>`;
+  b.addEventListener('click', () => {
+    rail.querySelector('[aria-current]')?.removeAttribute('aria-current');
+    b.setAttribute('aria-current', 'page');
+    pip.style.transform = `translate(${b.offsetLeft}px,${b.offsetTop}px)`;
+  });
+  rail.appendChild(b);
+});
+const cur = rail.querySelector('[aria-current]');
+pip.style.transform = `translate(${cur.offsetLeft}px,${cur.offsetTop}px)`;
+requestAnimationFrame(() => rail.classList.add('ready'));
+
+document.querySelectorAll('[data-ico]').forEach((el) => { el.innerHTML = ico(el.dataset.ico); });
+
+const maxDay = Math.max(...RT.days.map(dayTotal)) || 1;
+const rodsEl = document.getElementById('rods');
+const rodNodes = RT.days.map((row, i) => {
+  const rod = document.createElement('div');
+  rod.className = 'rod';
+  const tube = document.createElement('div');
+  tube.className = 'tube';
+  const ink = document.createElement('div');
+  ink.className = 'ink';
+  tube.style.blockSize = (dayTotal(row) / maxDay * 100) + '%';
+  ink.style.animationDelay = (i * 14) + 'ms';
+  const parts = [];
+  if (row[ix.otherModelTokens] > 0) parts.push(['other', row[ix.otherModelTokens]]);
+  for (const m of RT.models) {
+    if (m.tokens == null) continue;
+    const v = row[ix[m.id]];
+    if (v > 0) parts.push([m.id, v]);
+  }
+  for (const [id, v] of parts) {
+    const seg = document.createElement('i');
+    seg.className = 'seg' + (id === 'other' ? ' other' : '');
+    if (id !== 'other') seg.dataset.model = id;
+    seg.style.setProperty('--v', v);
+    seg.style.setProperty('--c', id === 'other' ? '#B08968' : COLOR[id]);
+    seg.title = (id === 'other' ? 'Other models' : id) + ' · ' + fmt(v);
+    ink.appendChild(seg);
+  }
+  tube.appendChild(ink);
+  rod.appendChild(tube);
+  rodsEl.appendChild(rod);
+  return rod;
+});
+
+const modelsEl = document.getElementById('models');
+const bars = [];
+function addRow(id, icon, miss, other) {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'mrow' + (miss ? ' miss' : '') + (other ? ' other-row other' : '');
+  b.style.setProperty('--c', other ? '#B08968' : COLOR[id]);
+  b.style.setProperty('--i', bars.length);
+  if (!other) b.dataset.model = id;
+  const jewel = document.createElement('span');
+  jewel.className = 'jewel';
+  jewel.setAttribute('aria-hidden', 'true');
+  if (icon) jewel.innerHTML = ico(icon);
+  const name = document.createElement('span');
+  name.className = 'mname';
+  name.textContent = id;
+  const pc = document.createElement('span');
+  pc.className = 'mpct num';
+  pc.textContent = miss ? '–' : '';
+  const meter = document.createElement('span');
+  meter.className = 'meter' + (miss ? ' hatch' : '');
+  const fill = document.createElement('i');
+  if (!miss) meter.appendChild(fill);
+  b.append(jewel, name, pc, meter);
+  b.title = miss ? 'no usage reported' : id;
+  if (miss) b.setAttribute('aria-label', id + ', no usage reported');
+  modelsEl.appendChild(b);
+  bars.push({ id, pc, fill, miss, other, el: b });
+}
+for (const m of RT.models) addRow(m.id, m.icon, m.tokens == null, false);
+addRow('Other', '', false, true);
+
+const heat = document.getElementById('heat');
+const cells = document.createElement('div');
+cells.className = 'cells';
+const dows = document.createElement('div');
+dows.className = 'dows';
+const hrs = document.createElement('div');
+hrs.className = 'hrs';
+const hmax = Math.max(...RT.heatmap.prompts.flat());
+RT.heatmap.rows.forEach((name, r) => {
+  const s = document.createElement('span');
+  s.textContent = name[0];
+  s.title = name;
+  dows.appendChild(s);
+  RT.heatmap.prompts[r].forEach((v, h) => {
+    const c = document.createElement('i');
+    c.className = 'cell';
+    const t = v ? Math.sqrt(v / hmax) : 0;
+    c.style.background = v ? `oklch(${(90 - t * 48).toFixed(1)}% ${(0.02 + t * 0.14).toFixed(3)} ${(46 - t * 16).toFixed(0)})` : 'oklch(0.91 0.012 82)';
+    c.title = name + ' ' + String(h).padStart(2, '0') + ':00 · ' + v;
+    cells.appendChild(c);
+  });
+});
+for (let h = 0; h < 24; h++) {
+  const s = document.createElement('span');
+  if (h % 6 === 0) s.textContent = String(h);
+  hrs.appendChild(s);
+}
+heat.append(dows, cells, hrs);
+
+const TICO = { command_execution: 'terminal', file_change: 'file-pen', Read: 'file-text', 't3-code.preview_evaluate': 'scan', 't3-code.preview_snapshot': 'camera', 't3-code.t3_thread_read': 'message-square' };
+const toolsEl = document.getElementById('tools');
+for (const t of RT.tools) {
+  const row = document.createElement('div');
+  row.className = 'trow';
+  row.setAttribute('role', 'img');
+  const fail = t.calls ? (t.failed / t.calls * 100) : 0;
+  row.setAttribute('aria-label', t.name + ', ' + fmt(t.calls) + ' calls, ' + fail.toFixed(1) + '% failed');
+  row.innerHTML = `<span class="ic">${ico(TICO[t.name])}</span><b class="num">${fmt(t.calls)}</b><em class="num" title="Failure share">${fail.toFixed(1)}%</em>`;
+  toolsEl.appendChild(row);
+}
+
+const tokEl = document.getElementById('tok');
+const outs = {
+  prompts: document.getElementById('n-prompts'),
+  providerTurns: document.getElementById('n-turns'),
+  threads: document.getElementById('n-threads'),
+  subAgents: document.getElementById('n-agents'),
+  toolCalls: document.getElementById('n-calls')
+};
+const d0 = document.getElementById('d0');
+const d1 = document.getElementById('d1');
+const groove = document.getElementById('groove');
+const fill = document.getElementById('fill');
+const b0 = document.getElementById('b0');
+const b1 = document.getElementById('b1');
+b0.setAttribute('aria-valuemax', last);
+b1.setAttribute('aria-valuemax', last);
+
+function paintBeads() {
+  const travel = Math.max(1, groove.clientWidth - 44);
+  const x0 = vis[0] * travel, x1 = vis[1] * travel;
+  b0.style.transform = `translateX(${x0}px)`;
+  b1.style.transform = `translateX(${x1}px)`;
+  fill.style.transform = `translateX(${x0 + 22}px)`;
+  fill.style.width = Math.max(0, x1 - x0) + 'px';
+}
+function springStep() {
+  if (document.hidden || dragging !== null) { if (looping) requestAnimationFrame(springStep); return; }
+  let live = false;
+  for (let i = 0; i < 2; i++) {
+    const d = goal[i] - vis[i];
+    vel[i] = vel[i] * 0.64 + d * 0.2;
+    vis[i] += vel[i];
+    if (Math.abs(d) > 0.0008 || Math.abs(vel[i]) > 0.0008) live = true;
+    else { vis[i] = goal[i]; vel[i] = 0; }
+  }
+  paintBeads();
+  if (live) requestAnimationFrame(springStep);
+  else looping = false;
+}
+function setGoal() {
+  goal[0] = A / last; goal[1] = B / last;
+  if (reduce || dragging !== null) { vis[0] = goal[0]; vis[1] = goal[1]; vel = [0, 0]; paintBeads(); return; }
+  if (!looping) { looping = true; requestAnimationFrame(springStep); }
+}
+function writeNums(s, animate) {
+  const pairs = [[tokEl, s.total], [outs.prompts, s.prompts], [outs.providerTurns, s.providerTurns], [outs.threads, s.threads], [outs.subAgents, s.subAgents], [outs.toolCalls, s.toolCalls]];
+  countGen++;
+  const gen = countGen;
+  if (!animate || reduce) { pairs.forEach(([el, v]) => { el.textContent = fmt(v); }); return; }
+  const t0 = performance.now();
+  let paused = 0, prev = t0;
+  const units = pairs.map(([, v]) => v >= 1e9 ? 1e9 : v >= 1e6 ? 1e6 : v >= 1e3 ? 1e3 : 1);
+  function frame(now) {
+    if (gen !== countGen) return;
+    if (document.hidden) { paused += now - prev; prev = now; requestAnimationFrame(frame); return; }
+    prev = now;
+    const k = Math.min(1, (now - t0 - paused) / 880);
+    const e = 1 - (1 - k) ** 3;
+    pairs.forEach(([el, v], i) => {
+      const u = units[i];
+      const shown = v * e;
+      el.textContent = u === 1 ? String(Math.round(shown)) : (shown / u).toFixed(1) + (u === 1e9 ? 'B' : u === 1e6 ? 'M' : 'K');
+    });
+    if (k < 1) requestAnimationFrame(frame);
+    else pairs.forEach(([el, v]) => { el.textContent = fmt(v); });
+  }
+  requestAnimationFrame(frame);
+}
+let booted = false;
+function render(animate) {
+  const s = sum(A, B);
+  writeNums(s, animate && !booted);
+  booted = true;
+  rodNodes.forEach((rod, i) => rod.classList.toggle('out', i < A || i > B));
+  for (const row of bars) {
+    if (row.miss) continue;
+    const part = row.other ? s.other : s.tok[row.id];
+    const text = pct(part, s.total);
+    row.pc.textContent = text;
+    row.fill.style.inlineSize = (s.total ? part / s.total * 100 : 0) + '%';
+    if (!row.other) row.el.setAttribute('aria-label', row.id + ', ' + text + ' of tokens');
+    else row.el.title = 'Other model tokens';
+  }
+  d0.textContent = short(RT.days[A][0]);
+  d1.textContent = short(RT.days[B][0]);
+  b0.setAttribute('aria-valuenow', A);
+  b1.setAttribute('aria-valuenow', B);
+  b0.setAttribute('aria-valuetext', RT.days[A][0]);
+  b1.setAttribute('aria-valuetext', RT.days[B][0]);
+  if (dragging === null) setGoal();
+  else paintBeads();
+}
+function hi(id) {
+  const on = !!id;
+  document.querySelectorAll('.mrow, .seg').forEach((el) => {
+    const m = el.dataset.model || (el.classList.contains('other') ? 'other' : '');
+    el.classList.toggle('dim', on && m !== id);
+    el.classList.toggle('hot', on && !!m && m === id);
+  });
+}
+document.addEventListener('pointerover', (e) => {
+  const row = e.target.closest('.mrow');
+  if (row) { hi(row.dataset.model || (row.classList.contains('other') ? 'other' : '')); return; }
+  const seg = e.target.closest('.seg');
+  if (seg) hi(seg.dataset.model || (seg.classList.contains('other') ? 'other' : ''));
+});
+document.addEventListener('pointerout', (e) => {
+  if (!e.target.closest('.mrow, .seg')) return;
+  const rel = e.relatedTarget;
+  if (rel && rel.closest && rel.closest('.mrow, .seg')) return;
+  hi('');
+});
+document.addEventListener('focusin', (e) => {
+  const row = e.target.closest('.mrow');
+  if (row) hi(row.dataset.model || (row.classList.contains('other') ? 'other' : ''));
+});
+document.addEventListener('focusout', (e) => {
+  const rel = e.relatedTarget;
+  if (!rel || !rel.closest || !rel.closest('.mrow')) hi('');
+});
+
+function tFrom(e) {
+  const r = groove.getBoundingClientRect();
+  const travel = Math.max(1, r.width - 44);
+  return Math.max(0, Math.min(1, (e.clientX - r.left - 22) / travel));
+}
+function moveDrag(e) {
+  let t = tFrom(e);
+  if (dragging === 0) {
+    t = Math.min(t, B / last);
+    vis[0] = t; vel[0] = 0;
+    const next = Math.min(B, Math.round(t * last));
+    if (next !== A) { A = next; render(false); }
+  } else {
+    t = Math.max(t, A / last);
+    vis[1] = t; vel[1] = 0;
+    const next = Math.max(A, Math.round(t * last));
+    if (next !== B) { B = next; render(false); }
+  }
+  paintBeads();
+  b0.style.zIndex = dragging === 0 ? 3 : 1;
+  b1.style.zIndex = dragging === 1 ? 3 : 2;
+}
+function down(which, e) {
+  dragging = which;
+  document.documentElement.classList.add('drag');
+  (which ? b1 : b0).setPointerCapture(e.pointerId);
+  moveDrag(e);
+  e.preventDefault();
+}
+b0.addEventListener('pointerdown', (e) => down(0, e));
+b1.addEventListener('pointerdown', (e) => down(1, e));
+groove.addEventListener('pointerdown', (e) => {
+  if (e.target.closest('.bead')) return;
+  const t = tFrom(e);
+  down(Math.abs(t - A / last) <= Math.abs(t - B / last) ? 0 : 1, e);
+});
+function up() {
+  if (dragging === null) return;
+  dragging = null;
+  document.documentElement.classList.remove('drag');
+  setGoal();
+}
+b0.addEventListener('pointerup', up);
+b1.addEventListener('pointerup', up);
+b0.addEventListener('pointermove', (e) => { if (dragging !== null) moveDrag(e); });
+b1.addEventListener('pointermove', (e) => { if (dragging !== null) moveDrag(e); });
+groove.addEventListener('pointerup', up);
+groove.addEventListener('pointermove', (e) => { if (dragging !== null) moveDrag(e); });
+function onKey(which, e) {
+  let dir = 0;
+  if (e.key === 'ArrowRight' || e.key === 'ArrowUp') dir = 1;
+  if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') dir = -1;
+  if (e.key === 'Home') dir = -999;
+  if (e.key === 'End') dir = 999;
+  if (!dir) return;
+  e.preventDefault();
+  const step = e.shiftKey ? 7 : 1;
+  if (which === 0) {
+    if (dir === -999) A = 0;
+    else if (dir === 999) A = B;
+    else A = Math.max(0, Math.min(B, A + dir * step));
+  } else if (dir === -999) B = A;
+  else if (dir === 999) B = last;
+  else B = Math.max(A, Math.min(last, B + dir * step));
+  render(false);
+}
+b0.addEventListener('keydown', (e) => onKey(0, e));
+b1.addEventListener('keydown', (e) => onKey(1, e));
+document.addEventListener('visibilitychange', () => {
+  document.documentElement.toggleAttribute('data-paused', document.hidden);
+});
+document.fonts.ready.then(paintBeads);
+render(true);
+</script>
+</body>
+</html>

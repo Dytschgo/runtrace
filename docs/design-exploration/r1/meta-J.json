@@ -1,0 +1,25 @@
+{
+  "id": "R1-J",
+  "name": "Enamel Light",
+  "by": "grok, grok-4.7",
+  "pitch": "Glossy enamel jewels set into warm porcelain.",
+  "tradeoff": "A pale ground cannot glow, so depth has to come from carving and gloss.",
+  "fonts": { "display": "Parkinsans", "ui": "Onest", "data": "Reddit Mono" },
+  "fontWhy": "Parkinsans softens the mark, Onest stays quiet, and Reddit Mono holds every figure still.",
+  "palette": ["#F3EEE6", "#FBF8F3", "#2A241E", "#A33B28"],
+  "modelColors": {
+    "gpt-6.1-sol": "#9A5600",
+    "claude-opus-5-5": "#8C2438",
+    "gpt-6-luna": "#1A4A92",
+    "gpt-6-astra": "#572FA8",
+    "claude-fable-5-1": "#0C6842",
+    "claude-sonnet-5-5": "#A12E54",
+    "gpt-6-sol": "#B23E18",
+    "claude-haiku-5-5": "#0C6860",
+    "grok-4.7": "#3A4666",
+    "muse-wonder-1.0": "#6A3864"
+  },
+  "logoIdea": "One rounded ribbon draws an R, the trace a run leaves behind.",
+  "sliderIdea": "Two carnelian beads spring along a recessed ceramic groove.",
+  "signatureMotion": "Jewels spring into place, then lift and deepen their shadow on hover."
+}

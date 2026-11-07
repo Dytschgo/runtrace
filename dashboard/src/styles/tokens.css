@@ -1,0 +1,66 @@
+:root {
+  color-scheme: dark;
+
+  /* Pure black, with hairlines instead of boxes. Elevation only appears on things that float. */
+  --bg: oklch(0 0 none);
+  --surface-1: oklch(0.145 0 none);
+  --surface-2: oklch(0.18 0 none);
+  --surface-3: oklch(0.235 0 none);
+  --wash: oklch(1 0 none / 0.06);
+  --line: oklch(0.225 0 none);
+  --line-strong: oklch(0.33 0 none);
+
+  /* Ink. Every step clears 4.5:1 on --surface-2. */
+  --ink-1: oklch(1 0 none);
+  --ink-2: oklch(0.84 0 none);
+  --ink-3: oklch(0.68 0 none);
+
+  /* White is the interface's only accent. Colour is reserved for models and status. */
+  --accent: oklch(1 0 none);
+  --accent-ink: oklch(1 0 none);
+  --accent-wash: oklch(1 0 none / 0.1);
+  --on-accent: oklch(0 0 none);
+
+  /* Status colours always travel with an icon and a label. */
+  --good: oklch(0.78 0.15 150);
+  --warn: oklch(0.85 0.15 88);
+  --crit: oklch(0.72 0.18 25);
+
+  /* The product's one rule for absence: measured is solid, missing is hatched. */
+  --hatch-ink: oklch(0.55 0 none / 0.6);
+  --hatch: repeating-linear-gradient(135deg, var(--hatch-ink) 0 1px, transparent 1px 5px);
+
+  --font-sans: 'Geist Variable', ui-sans-serif, system-ui, 'Segoe UI', sans-serif;
+  --font-mono: 'Geist Mono Variable', ui-monospace, 'Cascadia Code', Consolas, monospace;
+
+  --text-xs: 0.786rem;
+  --text-sm: 0.875rem;
+  --text-md: 1rem;
+  --text-lg: 1.143rem;
+  --text-xl: clamp(1.5rem, 1.3rem + 0.8vw, 1.9rem);
+  --text-stat: clamp(1.3rem, 1.15rem + 0.5vw, 1.55rem);
+  --text-hero: clamp(3.25rem, 2.4rem + 3vw, 4.85rem);
+
+  --radius: 12px;
+  --radius-sm: 7px;
+  --page: 1560px;
+  --gutter: clamp(16px, 3.4vw, 44px);
+  --gap: clamp(1.5rem, 1rem + 1.6vw, 2.75rem);
+  --row-pad: 0.78rem;
+
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --fast: 140ms;
+  --rise: 520ms;
+}
+
+[data-density='compact'] { --row-pad: 0.42rem; }
+
+/* Heatmap steps: one ramp from black to white. */
+:root {
+  --heat-0: oklch(0.165 0 none);
+  --heat-1: oklch(0.3 0 none);
+  --heat-2: oklch(0.44 0 none);
+  --heat-3: oklch(0.6 0 none);
+  --heat-4: oklch(0.8 0 none);
+  --heat-5: oklch(1 0 none);
+}

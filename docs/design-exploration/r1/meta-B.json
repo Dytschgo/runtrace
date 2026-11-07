@@ -1,0 +1,25 @@
+{
+  "id": "R1-B",
+  "name": "Orbit Dial",
+  "by": "grok, grok-4.7",
+  "pitch": "Concentric orbits turn model share into one circular instrument.",
+  "tradeoff": "The smallest models shrink to beads, so the legend has to carry their exact share.",
+  "fonts": { "display": "Unbounded", "ui": "Hanken Grotesk", "data": "Azeret Mono" },
+  "fontWhy": "Unbounded gives the wordmark a geometric brand voice, Hanken Grotesk stays quiet beside the dial, and Azeret Mono keeps the figures from jittering as the window moves.",
+  "palette": ["#040a16", "#0c1724", "#ecf3fa", "#9fd4ff"],
+  "modelColors": {
+    "gpt-6.1-sol": "#fbc959",
+    "claude-opus-5-5": "#ff828a",
+    "gpt-6-luna": "#abd8f3",
+    "gpt-6-astra": "#ce9dff",
+    "claude-fable-5-1": "#5ddae0",
+    "claude-sonnet-5-5": "#fa8ecd",
+    "gpt-6-sol": "#ffa85d",
+    "claude-haiku-5-5": "#76eea5",
+    "grok-4.7": "#bdf370",
+    "muse-wonder-1.0": "#a7b7ff"
+  },
+  "logoIdea": "An R whose bowl is an open orbit, with one point riding the trace.",
+  "sliderIdea": "Two handles ride the dial's outer rim and snap to each of the thirty-five days.",
+  "signatureMotion": "The orbits drift at different speeds while their arcs ease into the new window."
+}

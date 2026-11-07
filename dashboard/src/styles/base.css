@@ -1,0 +1,58 @@
+*, *::before, *::after { box-sizing: border-box; min-inline-size: 0; }
+
+:root {
+  font-size: 14px;
+  scrollbar-gutter: stable;
+  overflow-wrap: break-word;
+  font-synthesis: none;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  -webkit-text-size-adjust: 100%;
+  -webkit-tap-highlight-color: transparent;
+  scrollbar-color: var(--line-strong) transparent;
+}
+
+body {
+  margin: 0;
+  min-block-size: 100svh;
+  background: var(--bg);
+  color: var(--ink-2);
+  font-family: var(--font-sans);
+  line-height: 1.5;
+  font-variant-numeric: tabular-nums;
+}
+
+h1, h2, h3, h4 { margin: 0; color: var(--ink-1); font-weight: 560; text-wrap: balance; }
+p { margin: 0; text-wrap: pretty; }
+ol, ul { margin: 0; padding: 0; list-style: none; }
+dl, dd { margin: 0; }
+fieldset { margin: 0; padding: 0; border: 0; }
+img, svg { display: block; flex: none; }
+a { color: inherit; text-decoration: none; }
+code, kbd, pre, .mono { font-family: var(--font-mono); font-size: 0.93em; font-variant-ligatures: none; }
+code { color: var(--ink-1); background: var(--surface-3); padding: 0.1em 0.35em; border-radius: 4px; }
+kbd { color: var(--ink-2); background: var(--surface-3); border: 1px solid var(--line-strong); border-block-end-width: 2px; padding: 0 0.4em; border-radius: 4px; font-size: var(--text-xs); }
+button, input, select { font: inherit; color: inherit; }
+button, a, label, summary { touch-action: manipulation; }
+button { cursor: pointer; background: none; border: 0; padding: 0; user-select: none; }
+summary { cursor: pointer; }
+mark { background: var(--accent-wash); color: var(--ink-1); border-radius: 3px; padding-inline: 2px; box-shadow: inset 0 -1px 0 var(--accent); }
+time, td.num, th.num { font-variant-numeric: tabular-nums; }
+
+:focus-visible { outline: 2px solid var(--accent-ink); outline-offset: 2px; border-radius: 3px; }
+[tabindex='-1']:focus { outline: none; }
+::selection { background: color-mix(in oklch, var(--accent) 40%, transparent); color: var(--ink-1); }
+
+.sr-only {
+  position: absolute; inline-size: 1px; block-size: 1px; margin: -1px; padding: 0; border: 0;
+  overflow: clip; clip-path: inset(50%); white-space: nowrap;
+}
+
+/* Touch screens need 16px inputs so focusing one does not zoom the page. */
+@media (pointer: coarse) {
+  input, select { font-size: 16px; }
+}
+
+@media (forced-colors: active) {
+  .ranked-track span, .coverage-known, .tree-bar, .meter span, .swatch, .heatmap td[data-level], .model-line-share i, .type-bar i, .ts-bars path, .ts-line, .trace-line { forced-color-adjust: none; }
+}

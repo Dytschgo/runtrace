@@ -1,0 +1,25 @@
+{
+  "id": "R1-H",
+  "name": "Noir Editorial",
+  "by": "grok, grok-4.7",
+  "pitch": "A warm-black catalogue page where one bone numeral holds the room.",
+  "tradeoff": "Quiet margins and a single numeral leave less room for comparing every series at once.",
+  "fonts": { "display": "Fraunces", "ui": "Geist", "data": "Fragment Mono" },
+  "fontWhy": "Fraunces softens the catalogue numerals, Geist keeps the interface quiet, and Fragment Mono holds the figures still.",
+  "palette": ["#14110E", "#1C1916", "#F4EFE7", "#E7DCC8"],
+  "modelColors": {
+    "gpt-6.1-sol": "#E6C36A",
+    "claude-opus-5-5": "#E8A3B0",
+    "gpt-6-luna": "#8FC4DE",
+    "gpt-6-astra": "#C5B0E8",
+    "claude-fable-5-1": "#7ECBB0",
+    "claude-sonnet-5-5": "#E09468",
+    "gpt-6-sol": "#F2D2A8",
+    "claude-haiku-5-5": "#C5D48E",
+    "grok-4.7": "#C9D4E2",
+    "muse-wonder-1.0": "#E4B0D4"
+  },
+  "logoIdea": "A geometric R whose leg keeps going, the run leaving one trace.",
+  "sliderIdea": "A full-width hairline with two calipers, the dates set as an italic chapter.",
+  "signatureMotion": "Numerals roll and settle while a model colour floods the hero figure."
+}

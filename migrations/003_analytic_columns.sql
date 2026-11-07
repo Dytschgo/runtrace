@@ -1,0 +1,15 @@
+-- Additive analytical cache. Original JSON and all source fields remain intact.
+ALTER TABLE records ADD COLUMN IF NOT EXISTS model VARCHAR;
+ALTER TABLE records ADD COLUMN IF NOT EXISTS status VARCHAR;
+ALTER TABLE records ADD COLUMN IF NOT EXISTS tool_name VARCHAR;
+ALTER TABLE records ADD COLUMN IF NOT EXISTS tool_category VARCHAR;
+ALTER TABLE records ADD COLUMN IF NOT EXISTS duration_ms BIGINT;
+ALTER TABLE records ADD COLUMN IF NOT EXISTS input_tokens BIGINT;
+ALTER TABLE records ADD COLUMN IF NOT EXISTS cached_input_tokens BIGINT;
+ALTER TABLE records ADD COLUMN IF NOT EXISTS output_tokens BIGINT;
+ALTER TABLE records ADD COLUMN IF NOT EXISTS reasoning_tokens BIGINT;
+ALTER TABLE records ADD COLUMN IF NOT EXISTS total_tokens BIGINT;
+ALTER TABLE records ADD COLUMN IF NOT EXISTS usage_status VARCHAR;
+ALTER TABLE records ADD COLUMN IF NOT EXISTS redacted_characters BIGINT;
+ALTER TABLE records ADD COLUMN IF NOT EXISTS json_characters BIGINT;
+ALTER TABLE records ADD COLUMN IF NOT EXISTS facts_version INTEGER DEFAULT 0;

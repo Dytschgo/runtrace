@@ -1,0 +1,28 @@
+name: Checks
+on: [push, pull_request]
+jobs:
+  rust:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo fmt --all --check
+      - run: cargo build --workspace --locked
+      - shell: pwsh
+        run: |
+          $dll = Get-ChildItem target/debug/build/libduckdb-sys*/out/duckdb.dll | Select-Object -First 1
+          Copy-Item $dll.FullName target/debug/duckdb.dll
+          cargo test --workspace --locked
+  dashboard:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: dashboard
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm ci
+      - run: npm run build
+      - run: npm test -- --exclude 'tests/**'

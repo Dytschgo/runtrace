@@ -1,0 +1,34 @@
+{
+  "id": "R1-A",
+  "name": "Ember Instrument",
+  "by": "codex, gpt-6.1-sol",
+  "pitch": "Your coding history, illuminated as a precision instrument.",
+  "tradeoff": "The theatrical dial uses space that a denser analytical view could put to work.",
+  "fonts": {
+    "display": "Sora",
+    "ui": "Manrope",
+    "data": "DM Mono"
+  },
+  "fontWhy": "Sora gives the instrument its identity, Manrope keeps labels calm, and DM Mono stabilizes every digit.",
+  "palette": [
+    "#151616",
+    "#202222",
+    "#f2eee5",
+    "#e8ad65"
+  ],
+  "modelColors": {
+    "gpt-6.1-sol": "#75dec2",
+    "claude-opus-5-5": "#b8a1ff",
+    "gpt-6-luna": "#8ccaff",
+    "gpt-6-astra": "#ed93c6",
+    "claude-fable-5-1": "#d5c57b",
+    "claude-sonnet-5-5": "#fdac91",
+    "gpt-6-sol": "#99c974",
+    "claude-haiku-5-5": "#c4b8a2",
+    "grok-4.7": "#f78598",
+    "muse-wonder-1.0": "#91b8d5"
+  },
+  "logoIdea": "An open orbit curls into its own luminous trace, ending in a single point of light.",
+  "sliderIdea": "Two illuminated brass grips select days over a miniature activity histogram.",
+  "signatureMotion": "The dial breathes softly; its amber arc sweeps to the selected token volume."
+}

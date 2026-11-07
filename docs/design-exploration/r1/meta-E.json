@@ -1,0 +1,34 @@
+{
+  "id": "R1-E",
+  "name": "Spectrum River",
+  "by": "codex, gpt-6.1-sol",
+  "pitch": "A luminous river of model activity becomes the canvas, the timeline, and the interface.",
+  "tradeoff": "The immersive overview gives up precise daily comparison and persistent tool names.",
+  "fonts": {
+    "display": "Funnel Display",
+    "ui": "Funnel Sans",
+    "data": "JetBrains Mono"
+  },
+  "fontWhy": "Soft display curves echo the river; quiet UI lettering and tabular monospaced data keep it readable.",
+  "palette": [
+    "#080b12",
+    "#111622",
+    "#f1f4fa",
+    "#76edd0"
+  ],
+  "modelColors": {
+    "gpt-6.1-sol": "#76edd0",
+    "claude-opus-5-5": "#aaa2ff",
+    "gpt-6-luna": "#70bfff",
+    "gpt-6-astra": "#f4a7c6",
+    "claude-fable-5-1": "#f2d78a",
+    "claude-sonnet-5-5": "#fbaf80",
+    "gpt-6-sol": "#d2ef90",
+    "claude-haiku-5-5": "#82dedf",
+    "grok-4.7": "#f1b7ee",
+    "muse-wonder-1.0": "#bec9ef"
+  },
+  "logoIdea": "One unbroken run branches into three balanced traces on a geometric river-delta grid.",
+  "sliderIdea": "Two draggable light beams bracket the daily stream, dimming and desaturating everything outside the window.",
+  "signatureMotion": "Fine travelling highlights flow along every band; a hovered model swells while the others recede."
+}

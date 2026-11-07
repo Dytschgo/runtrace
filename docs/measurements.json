@@ -1,0 +1,37 @@
+{
+  "overview": {
+    "min_ms": 2.79,
+    "mean_ms": 6.68,
+    "rows": 8
+  },
+  "activity/hourly": {
+    "min_ms": 3.53,
+    "mean_ms": 3.81,
+    "rows": 24
+  },
+  "models": {
+    "min_ms": 6.22,
+    "mean_ms": 6.27,
+    "rows": 8
+  },
+  "projects": {
+    "min_ms": 5.94,
+    "mean_ms": 6.03,
+    "rows": 1
+  },
+  "threads": {
+    "min_ms": 12.45,
+    "mean_ms": 12.72,
+    "rows": 100
+  },
+  "tool-calls": {
+    "min_ms": 164.58,
+    "mean_ms": 167.64,
+    "rows": 100
+  },
+  "data-quality": {
+    "min_ms": 2.59,
+    "mean_ms": 3.11,
+    "rows": 8
+  }
+}

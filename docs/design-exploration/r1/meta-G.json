@@ -1,0 +1,34 @@
+{
+  "id": "R1-G",
+  "name": "Flight Deck",
+  "by": "codex, gpt-6.1-sol",
+  "pitch": "A quiet flight instrument for tracing your coding history with exacting control.",
+  "tradeoff": "Instrument precision sacrifices casual warmth and requires learning the compact model labels.",
+  "fonts": {
+    "display": "Michroma",
+    "ui": "Saira",
+    "data": "Share Tech Mono"
+  },
+  "fontWhy": "Michroma brings aerospace geometry, Saira readable labels, and Share Tech Mono fixed-width telemetry at 14px.",
+  "palette": [
+    "#060d16",
+    "#0b1725",
+    "#e5f2fa",
+    "#8bddff"
+  ],
+  "modelColors": {
+    "gpt-6.1-sol": "#8bddff",
+    "claude-opus-5-5": "#e7bb83",
+    "gpt-6-luna": "#b4b2ff",
+    "gpt-6-astra": "#91e8ce",
+    "claude-fable-5-1": "#f3a9ca",
+    "claude-sonnet-5-5": "#a5c8ff",
+    "gpt-6-sol": "#e6e990",
+    "claude-haiku-5-5": "#9fe0a4",
+    "grok-4.7": "#ffb896",
+    "muse-wonder-1.0": "#d2b9f5"
+  },
+  "logoIdea": "A target launches a continuous chamfered flight path, resolving into an open R.",
+  "sliderIdea": "Two reticles bracket a day-ticked engineering ruler with readouts that follow each handle.",
+  "signatureMotion": "Hairlines draw in staggered passes, model tapes roll, and a quiet reticle traverses the plot."
+}

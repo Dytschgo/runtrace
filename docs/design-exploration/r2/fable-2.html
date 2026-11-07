@@ -1,0 +1,463 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Runtrace · Tape</title>
+<style>
+:root{
+  --paper:#ece6d8; --sheet:#f8f4ea; --ink:#1c1e24; --ink2:#55554f; --ink3:#77746b;
+  --rule:rgba(28,30,36,.16); --grid:rgba(30,96,74,.15); --grid2:rgba(30,96,74,.07);
+  --pen:#d23f1c; --m0:#2447c4; --m1:#0f7a5b; --m2:#b06d06; --m3:#7b3aa8;
+  --disp:Bahnschrift,"DIN Alternate","Roboto Condensed","Segoe UI",system-ui,sans-serif;
+  --mono:"Cascadia Mono","Cascadia Code","JetBrains Mono",ui-monospace,Consolas,monospace;
+  --hatch:repeating-linear-gradient(135deg,transparent 0 4px,rgba(28,30,36,.17) 4px 5px);
+}
+*{box-sizing:border-box;margin:0}
+html{background:var(--paper)}
+body{font:14px/1.45 var(--disp);color:var(--ink);background:var(--paper);min-height:100vh;padding:0 clamp(14px,2.4vw,32px) 28px;-webkit-font-smoothing:antialiased}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer;padding:0}
+:focus-visible{outline:2px solid var(--pen);outline-offset:2px}
+.lab{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink2);font-stretch:90%}
+.mono{font-family:var(--mono);font-size:12px}
+.num{font-variant-numeric:tabular-nums}
+
+/* header */
+.top{display:flex;align-items:center;gap:18px;padding:14px 0 12px;border-bottom:1px solid var(--ink)}
+.brand{display:flex;align-items:center;gap:10px;font-size:20px;font-weight:700;letter-spacing:.01em}
+.brand svg{display:block}
+.brand path{stroke-dasharray:90;stroke-dashoffset:90;animation:draw 1.4s .1s cubic-bezier(.6,0,.2,1) forwards}
+@keyframes draw{to{stroke-dashoffset:0}}
+.search{margin-left:auto;display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--ink3);padding:4px 2px;width:min(300px,34vw);transition:border-color .2s}
+.search:focus-within{border-color:var(--pen)}
+.search input{flex:1;min-width:0;border:0;background:none;font:13px var(--mono);color:var(--ink);outline:0}
+.search input::placeholder{color:var(--ink3)}
+kbd{font:11px var(--mono);border:1px solid var(--rule);border-bottom-width:2px;border-radius:3px;padding:0 5px;color:var(--ink2);background:var(--sheet)}
+.status{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--ink2);white-space:nowrap}
+.rec{width:9px;height:9px;border-radius:50%;background:var(--pen);box-shadow:0 0 0 0 rgba(210,63,28,.5);animation:rec 2s infinite}
+@keyframes rec{60%{box-shadow:0 0 0 7px rgba(210,63,28,0)}100%{box-shadow:0 0 0 0 rgba(210,63,28,0)}}
+
+/* day strip */
+.days{display:grid;grid-template-columns:minmax(230px,330px) 1fr;gap:28px;align-items:end;padding:18px 0 16px}
+.days h1{font-size:clamp(26px,3vw,36px);line-height:1.02;font-weight:700;font-stretch:88%;letter-spacing:-.01em}
+.days h1 span{display:block;overflow:hidden}
+.days h1 b{display:block;font-weight:inherit;animation:rise .5s cubic-bezier(.2,.8,.2,1) both}
+@keyframes rise{from{transform:translateY(105%)}}
+.sum{margin-top:7px;color:var(--ink2);font-size:13px}
+.strip{display:flex;align-items:flex-end;gap:3px;height:74px;border-bottom:1px solid var(--rule)}
+.day{flex:1;height:100%;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;position:relative;min-width:0}
+.day i{display:block;width:100%;max-width:22px;height:calc(var(--h)*52px + 2px);background:var(--ink);opacity:.26;transform-origin:bottom;animation:grow .6s calc(var(--i)*16ms) cubic-bezier(.2,.9,.2,1) both;transition:opacity .15s,background .15s}
+@keyframes grow{from{transform:scaleY(0)}}
+.day:hover i{opacity:.6}
+.day[aria-pressed=true] i{background:var(--pen);opacity:1}
+.day em{font:10px var(--mono);font-style:normal;color:var(--ink3);height:15px;line-height:15px}
+.day[aria-pressed=true] em{color:var(--pen);font-weight:700}
+.day.we i{background-image:var(--hatch)}
+
+/* layout */
+.grid{display:grid;grid-template-columns:minmax(0,1fr) 316px;gap:18px;align-items:start}
+.panel{background:var(--sheet);border:1px solid var(--rule);border-radius:3px;animation:up .55s cubic-bezier(.2,.8,.2,1) both}
+.panel:nth-child(2){animation-delay:.08s}.right .panel:nth-child(1){animation-delay:.12s}.right .panel:nth-child(2){animation-delay:.18s}.right .panel:nth-child(3){animation-delay:.24s}.right .panel:nth-child(4){animation-delay:.3s}
+@keyframes up{from{opacity:0;transform:translateY(10px)}}
+.left,.right{display:grid;grid-template-columns:minmax(0,1fr);gap:18px;min-width:0}
+.ph{display:flex;align-items:center;gap:12px;padding:10px 14px;border-bottom:1px solid var(--rule);min-height:44px}
+.ph .sp{margin-left:auto}
+
+/* transport */
+.play{display:inline-flex;align-items:center;gap:8px;background:var(--ink);color:var(--sheet);padding:6px 13px 6px 11px;border-radius:2px;font-weight:600;letter-spacing:.04em;transition:background .15s,transform .1s}
+.play:hover{background:var(--pen)}.play:active{transform:scale(.96)}
+.play svg{width:11px;height:11px;fill:currentColor}
+.clock{font-size:30px;font-weight:700;line-height:1;font-stretch:90%;min-width:84px}
+.chip{border:1px solid var(--rule);border-radius:2px;padding:3px 8px;font:11.5px var(--mono);color:var(--ink2);transition:background .15s,color .15s}
+.chip:hover{background:var(--ink);color:var(--sheet)}
+.hint{color:var(--ink3);font-size:12px;display:flex;gap:6px;align-items:center}
+
+/* tape */
+.tapewrap{overflow-x:auto;overflow-y:hidden;padding:10px 0 4px}
+#tape{display:block;overflow:visible;cursor:col-resize;touch-action:pan-y;user-select:none}
+#tape text{font-family:var(--disp);fill:var(--ink)}
+.gh{stroke:var(--grid)}.gq{stroke:var(--grid2)}
+.hr{font:10.5px var(--mono)!important;fill:var(--ink3)!important}
+.tl{font-size:13px;font-weight:600;paint-order:stroke;stroke:var(--sheet);stroke-width:4px;stroke-linejoin:round}
+.tm{font:10.5px var(--mono)!important;fill:var(--ink2)!important;font-weight:400;paint-order:stroke;stroke:var(--sheet);stroke-width:4px}
+.kl{font:10px var(--mono)!important;fill:var(--ink2)!important;paint-order:stroke;stroke:var(--sheet);stroke-width:3px}
+.lane{cursor:pointer;transition:opacity .25s}
+.lane.off{opacity:.16}
+.lane .hit{fill:transparent}
+.lane:hover .hit{fill:rgba(28,30,36,.035)}
+.bar{transition:opacity .25s}.bar.off{opacity:.14}
+#band{fill:rgba(210,63,28,.07);stroke:rgba(210,63,28,.45);stroke-dasharray:3 3;transition:y .3s cubic-bezier(.2,.8,.2,1),height .3s cubic-bezier(.2,.8,.2,1);pointer-events:none}
+#veil{fill:var(--sheet);opacity:.84;pointer-events:none}
+#phg{pointer-events:none}
+#nib{fill:var(--pen);stroke:var(--sheet);stroke-width:2}
+.pulse{fill:none;stroke:var(--pen);animation:ring 1.6s infinite}
+@keyframes ring{from{r:4;opacity:.8}to{r:13;opacity:0}}
+
+/* lower panel */
+.tabs{display:flex;gap:2px}
+.tab{padding:5px 11px;font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:var(--ink2);border-bottom:2px solid transparent;transition:color .15s,border-color .15s}
+.tab[aria-selected=true]{color:var(--ink);border-color:var(--pen);font-weight:700}
+.selt{font-weight:600;font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.dot{display:inline-block;width:9px;height:9px;border-radius:2px;background:var(--c);flex:none}
+.log{height:292px;overflow:auto;position:relative;scroll-behavior:smooth}
+.row{display:grid;grid-template-columns:52px 96px minmax(0,1fr) auto;gap:10px;align-items:baseline;width:100%;text-align:left;padding:5px 14px;border-left:3px solid transparent;transition:opacity .25s,background .2s,border-color .2s;animation:rowin .35s calc(min(var(--i),14)*18ms) both}
+@keyframes rowin{from{opacity:0;transform:translateX(-6px)}}
+.row:hover{background:rgba(28,30,36,.045)}
+.row.fut{opacity:.32}
+.row.now{background:rgba(210,63,28,.08);border-left-color:var(--pen)}
+.row .t{font:12px var(--mono);color:var(--ink2)}
+.row .k{font:11px var(--mono);letter-spacing:.02em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row .x{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row.tool .x,.row.sub .x{font:12px var(--mono);color:var(--ink2)}
+.row.prompt .x{font-weight:600}
+.row.sub{padding-left:34px}
+.row.sub .k::before{content:"└ ";color:var(--ink3)}
+.row .m{font:11px var(--mono);color:var(--ink3)}
+.bad{color:var(--pen)!important;font-weight:700}
+.you{background:var(--ink);color:var(--sheet);padding:0 6px;border-radius:2px}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--ink2);font-weight:400;text-align:left;padding:8px 14px;border-bottom:1px solid var(--rule);position:sticky;top:0;background:var(--sheet)}
+td{white-space:nowrap;padding:7px 14px;border-bottom:1px solid var(--grid2)}
+td.r,th.r{text-align:right}
+tbody tr{cursor:pointer;transition:background .15s}
+tbody tr:hover{background:rgba(28,30,36,.045)}
+tbody tr.on{background:rgba(210,63,28,.08)}
+.empty{padding:40px 14px;text-align:center;color:var(--ink2)}
+
+/* right column */
+.tiles{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--rule)}
+.tile{background:var(--sheet);padding:10px 14px 9px}
+.tile b{display:block;font-size:27px;line-height:1.1;font-stretch:90%}
+.tile small{color:var(--ink2);font-size:11.5px}
+.tile.wide{grid-column:1/-1}
+.tile.na{background:var(--hatch),var(--sheet)}
+.tile.na b{font-size:15px;line-height:1.9;color:var(--ink2);font-weight:400}
+.under{padding:6px 0;min-height:60px}
+.act{display:grid;grid-template-columns:auto minmax(0,1fr);gap:1px 9px;padding:6px 14px;align-items:center;animation:rowin .3s both}
+.act b{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.act span{grid-column:2;font:11.5px var(--mono);color:var(--ink2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.idle{padding:14px;color:var(--ink2);font-size:13px}
+.bars{padding:8px 14px 12px;display:grid;gap:8px}
+.br{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 10px;text-align:left;width:100%;transition:opacity .2s}
+.br[aria-pressed=false]{opacity:.35}
+.br .n{font:12px var(--mono);display:flex;align-items:center;gap:7px}
+.br .v{font-size:13px;font-weight:600}
+.br .track{grid-column:1/-1;height:5px;background:rgba(28,30,36,.08)}
+.br .fill{display:block;height:100%;width:100%;background:var(--c,var(--ink));transform-origin:left;transform:scaleX(var(--w,0));transition:transform .18s linear}
+.foot{margin-top:18px;display:flex;gap:18px;flex-wrap:wrap;color:var(--ink2);font-size:12px}
+.sw{display:inline-block;width:18px;height:10px;background:var(--hatch);border:1px solid var(--rule);vertical-align:-1px;margin-right:5px}
+
+@media (max-width:1040px){.grid{grid-template-columns:1fr}.right{grid-template-columns:repeat(auto-fit,minmax(260px,1fr))}}
+@media (max-width:720px){.days{grid-template-columns:1fr;gap:14px}.status span:last-child,.hint{display:none}.row{grid-template-columns:44px 70px minmax(0,1fr)}.row .m{display:none}}
+@media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
+@media(max-width:500px){#selm{white-space:normal!important}}
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="brand">
+    <svg width="34" height="22" viewBox="0 0 34 22" aria-hidden="true"><path d="M1 14h6l3-9 4 15 4-12 3 6h12" fill="none" stroke="#d23f1c" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    Runtrace
+  </div>
+  <label class="search">
+    <input id="q" type="search" placeholder="Filter threads on the tape" aria-label="Filter threads">
+    <kbd>/</kbd>
+  </label>
+  <div class="status"><i class="rec" aria-hidden="true"></i><span>Capturing</span><span>· latest record 2 min ago · loopback only</span></div>
+</header>
+
+<section class="days" aria-label="Day">
+  <div>
+    <h1 id="title"></h1>
+    <p class="sum num" id="sum"></p>
+  </div>
+  <div>
+    <div class="strip" id="strip" role="group" aria-label="Last 30 days, prompts per day"></div>
+  </div>
+</section>
+
+<div class="grid">
+  <div class="left">
+    <section class="panel" aria-label="Tape">
+      <div class="ph">
+        <button class="play" id="play" aria-label="Play the day"><svg viewBox="0 0 10 10" id="playico"><path d="M1 0l9 5-9 5z"/></svg><span id="playtxt">Play</span></button>
+        <span class="clock num" id="clock" aria-live="off">07:00</span>
+        <button class="chip" id="speed" title="Playback speed">1×</button>
+        <span class="hint sp"><kbd>space</kbd> play <kbd>←</kbd><kbd>→</kbd> scrub · drag the tape · click a lane to read it</span>
+      </div>
+      <div class="tapewrap" id="wrap"><svg id="tape" role="img" aria-label="Timeline of the day's threads, sub-agents, tool calls and token rate"></svg></div>
+    </section>
+
+    <section class="panel">
+      <div class="ph">
+        <div class="tabs" role="tablist">
+          <button class="tab" role="tab" data-tab="trace" aria-selected="true">Trace</button>
+          <button class="tab" role="tab" data-tab="threads" aria-selected="false">Threads</button>
+        </div>
+        <span class="dot" id="seldot"></span><span class="selt" id="selt"></span>
+        <span class="mono sp" id="selm" style="color:var(--ink2);white-space:nowrap"></span>
+      </div>
+      <div class="log" id="lower"></div>
+    </section>
+  </div>
+
+  <aside class="right">
+    <section class="panel">
+      <div class="ph"><span class="lab">Up to the playhead</span></div>
+      <div class="tiles num">
+        <div class="tile"><b id="cP">0</b><small>prompts</small></div>
+        <div class="tile"><b id="cA">0</b><small>answers</small></div>
+        <div class="tile"><b id="cT">0</b><small>tool calls · <span id="cF">0 failed</span></small></div>
+        <div class="tile"><b id="cS">0</b><small>sub-agents</small></div>
+        <div class="tile"><b id="cK">0</b><small>tokens, complete turns</small></div>
+        <div class="tile na" title="Pricing is not captured, so no cost is derived from tokens."><b>Cost</b><small>not captured</small></div>
+      </div>
+    </section>
+    <section class="panel">
+      <div class="ph"><span class="lab">Under the pen</span><span class="mono sp num" id="penT" style="color:var(--ink2)"></span></div>
+      <div class="under" id="under"></div>
+    </section>
+    <section class="panel">
+      <div class="ph"><span class="lab">Models · tokens</span><span class="hint sp">click to mute</span></div>
+      <div class="bars" id="mix"></div>
+    </section>
+    <section class="panel">
+      <div class="ph"><span class="lab">Tools · calls</span></div>
+      <div class="bars" id="tools"></div>
+    </section>
+  </aside>
+</div>
+
+<p class="foot"><span><i class="sw"></i>Hatched means not captured or not yet happened.</span><span>Mockup with synthetic data.</span></p>
+
+<script>
+const $=s=>document.querySelector(s);
+const DAY0=7*60,DAY1=23*60,BIN=2,NB=(DAY1-DAY0)/BIN,NOW=16*60+48;
+const MODELS=['claude-fable-5-1','claude-opus-5-5','claude-sonnet-5-5','claude-haiku-5-5'];
+const MF=[1.5,1.3,1,.45];
+const TITLES=[['Speed up unchanged import','importer'],['Parquet codec benchmark','archive'],['Fix checkpoint retry backoff','importer'],['Entropy threshold for redaction','redact'],['Read-only MCP tool list','mcp'],['Filter bar keyboard access','dashboard'],['Archive restore into empty database','archive'],['Quota adapter sketch','quota'],['Agent tree fan-out stats','dashboard'],['DuckDB writer lock on serve','store'],['Tombstones on purge','store'],['Installer keeps existing config','scripts']];
+const PROMPTS=['Why does an unchanged import still take 55 s?','Cache source revisions and skip unchanged threads','Run the acceptance tests again','Make the checkpoint commit transactional','Compare zstd levels 3, 8 and 19','Tighten the threshold for hex strings','Add a tombstone so reimport skips purged rows','Explain this writer lock error','Now write the docs for capture pause','Move the hot path to prepared statements','Check the round trip field by field','Keep going, then show me the diff'];
+const ANSWERS=['Cached revisions. Unchanged import now takes 0.33 s.','Found it: a missing index on source metadata.','All 41 tests pass.','Patched, and the round trip compares equal.','Two options, listed with tradeoffs. Your call.','Done. Three files changed, diff below.','Reproduced. The second connection takes the writer lock.','Level 8 with 2,048-row groups wins on this dataset.'];
+const SUBS=['Explore importer call sites','Review diff for regressions','Run codec benchmark','Search docs for quota fields','Verify archive round trip','Audit redaction patterns','Find writer lock holders'];
+const FILES=['crates/importer/src/checkpoint.rs','crates/importer/src/snapshot.rs','crates/store/src/duck.rs','crates/redact/src/entropy.rs','crates/mcp/src/tools.rs','dashboard/src/pages/Overview.tsx','migrations/0007_tombstones.sql','config/default.toml','scripts/install.ps1'];
+const TOOLS={Read:FILES,Edit:FILES,Grep:['"checkpoint"','"tombstone"','"writer lock"','"fn redact"'],Bash:['cargo test -p importer','cargo build --release','npm run test','cargo clippy','./t3ui.cmd import --dry-run'],Glob:['crates/**/*.rs','migrations/*.sql'],Write:['docs/operations.md','crates/store/src/tombstone.rs']};
+const TNAMES=['Read','Read','Read','Edit','Edit','Bash','Bash','Grep','Grep','Glob','Write'];
+const TORDER=['Read','Edit','Bash','Grep','Glob','Write'];
+
+function rng(a){return()=>{a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
+const pick=(r,a)=>a[r()*a.length|0];
+const pad=n=>String(n).padStart(2,'0');
+const fmtT=t=>{t=Math.floor(t+.001);return pad(t/60|0)+':'+pad(t%60)};
+const fmtN=n=>n>=1e6?(n/1e6).toFixed(2)+'M':n>=1e4?(n/1e3).toFixed(0)+'k':n>=1e3?(n/1e3).toFixed(1)+'k':String(Math.round(n));
+const esc=s=>s.replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const short=m=>MODELS[m].replace('claude-','');
+
+function tool(r,t,m,sub){const name=pick(r,TNAMES);return{t,k:'tool',name,text:pick(r,TOOLS[name]),ok:r()>.07,m,sub}}
+function genDay(i){
+  const r=rng(4242+i*131),date=new Date(2026,10,6-(29-i)),today=i===29;
+  const we=date.getDay()%6===0,lim=today?NOW:DAY1-6;
+  const n=we?(r()<.5?0:1+(r()*2|0)):4+(r()*4|0);
+  const pool=TITLES.slice(),threads=[];
+  for(let k=0;k<n;k++){
+    const [title,project]=pool.splice(r()*pool.length|0,1)[0];
+    const x=r(),m=x<.4?0:x<.62?1:x<.9?2:3;
+    let t=DAY0+25+r()*(lim-DAY0-140);
+    const th={title,project,m,s:t,runs:[],kids:[],ev:[],tok:0};
+    const nr=2+(r()*4|0);
+    for(let j=0;j<nr&&t<lim-8;j++){
+      const s=t,e=Math.min(s+9+r()*48,lim-1),run={s,e,rate:MF[m]*(9000+r()*14000)};
+      th.runs.push(run);th.tok+=(e-s)*run.rate;
+      th.ev.push({t:s,k:'prompt',text:pick(r,PROMPTS),m});
+      const nt=3+(r()*12|0);
+      for(let q=0;q<nt;q++)th.ev.push(tool(r,s+(q+.3+r()*.5)/(nt+.2)*(e-s),m,false));
+      if(e-s>6&&r()<.34){const nk=1+(r()*2|0);for(let q=0;q<nk;q++){
+        const cs=s+(e-s)*(.1+r()*.35),ce=Math.min(e-.5,cs+2+r()*(e-s)*.5),km=r()<.6?3:2,kt=pick(r,SUBS);
+        const kid={title:kt,m:km,s:cs,e:ce,rate:MF[km]*(5000+r()*8000)};th.kids.push(kid);th.tok+=(ce-cs)*kid.rate;
+        th.ev.push({t:cs,k:'spawn',text:kt,m:km});
+        const kn=1+(r()*4|0);for(let z=0;z<kn;z++)th.ev.push(tool(r,cs+(z+.5)/kn*(ce-cs)*.95,km,true));
+        th.ev.push({t:ce,k:'return',text:kt,m:km});
+      }}
+      th.ev.push({t:e,k:'answer',text:pick(r,ANSWERS),m});
+      t=e+3+r()*30;
+    }
+    th.e=th.runs.at(-1).e;th.ev.sort((a,b)=>a.t-b.t);threads.push(th);
+  }
+  threads.sort((a,b)=>a.s-b.s);
+  return{i,date,today,we,threads,end:today?NOW:DAY1,prompts:threads.reduce((s,t)=>s+t.ev.filter(e=>e.k==='prompt').length,0),tok:threads.reduce((s,t)=>s+t.tok,0)};
+}
+const DAYS=Array.from({length:30},(_,i)=>genDay(i));
+
+/* state */
+let day=DAYS[29],T=DAY0,sel=0,tab='trace',playing=false,speed=1,query='';
+const active=[true,true,true,true];
+let W=900,H=300,bins,cum,trace,tmax,raf=0,queued=false,lastNow=-2,lastUnder='';
+const L=22,R=22,TR0=30,TRH=62,LANE0=TR0+TRH+26;
+const X=t=>L+(t-DAY0)/(DAY1-DAY0)*(W-L-R);
+const inv=x=>DAY0+(x-L)/(W-L-R)*(DAY1-DAY0);
+const vis=th=>!query||(th.title+' '+th.project).toLowerCase().includes(query);
+const noise=(b,s)=>{const v=Math.sin(b*12.9898+s*78.233)*43758.5453;return .55+.9*(v-Math.floor(v))};
+
+function computeBins(){
+  bins=MODELS.map(()=>new Float32Array(NB));
+  day.threads.forEach((th,ti)=>{if(!vis(th))return;
+    [...th.runs.map(r=>({...r,m:th.m})),...th.kids].forEach((c,ci)=>{if(!active[c.m])return;
+      for(let b=Math.floor((c.s-DAY0)/BIN);b<=Math.floor((c.e-DAY0)/BIN)&&b<NB;b++){
+        const o=Math.min(c.e,DAY0+(b+1)*BIN)-Math.max(c.s,DAY0+b*BIN);
+        if(o>0)bins[c.m][b]+=o*c.rate*noise(b,ti*7+ci);
+      }});
+  });
+  cum=bins.map(a=>{const c=new Float64Array(NB+1);for(let b=0;b<NB;b++)c[b+1]=c[b]+a[b];return c});
+  const tot=new Float32Array(NB);for(let b=0;b<NB;b++)tot[b]=bins[0][b]+bins[1][b]+bins[2][b]+bins[3][b];
+  trace=new Float32Array(NB);for(let b=0;b<NB;b++)trace[b]=((tot[b-1]||0)+2*tot[b]+(tot[b+1]||0))/4;
+  tmax=Math.max(1,...trace);
+}
+const tokAt=(m,t)=>{const p=Math.min(NB,Math.max(0,(t-DAY0)/BIN)),b=Math.min(NB-1,Math.floor(p));return cum[m][b]+bins[m][b]*(p-b)};
+const traceY=t=>{const p=Math.min(NB-1,Math.max(0,(t-DAY0)/BIN-.5)),b=Math.floor(p),v=trace[b]+((trace[b+1]??trace[b])-trace[b])*(p-b);return TR0+TRH-v/tmax*(TRH-4)};
+
+/* tape */
+function buildTape(){
+  W=Math.max(700,$('#wrap').clientWidth);computeBins();
+  let y=LANE0;
+  day.threads.forEach(th=>{th.y=y;const rows=[];
+    th.kids.forEach(k=>{const x0=X(k.s),x1=X(k.e)+k.title.length*5.7+16;let r=rows.findIndex(e=>e<x0-6);if(r<0){r=rows.length;rows.push(0)}rows[r]=x1;k.row=r});
+    th.h=46+rows.length*15+6;y+=th.h});
+  H=Math.max(y+8,LANE0+150);
+  let s=`<defs><pattern id="hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><line x1="0" y1="0" x2="0" y2="6" stroke="rgba(28,30,36,.2)"/></pattern></defs>`;
+  for(let m=DAY0;m<=DAY1;m+=15){const x=X(m).toFixed(1),h=m%60===0;
+    s+=`<line x1="${x}" x2="${x}" y1="${h?4:22}" y2="${H}" class="${h?'gh':'gq'}"/>`;
+    if(h&&m<DAY1)s+=`<text x="${+x+4}" y="13" class="hr">${pad(m/60)}</text>`}
+  for(let k=0;k<=3;k++)s+=`<line x1="${L}" x2="${W-R}" y1="${TR0+TRH*k/3}" y2="${TR0+TRH*k/3}" class="${k===3?'gh':'gq'}"/>`;
+  s+=`<text x="${L}" y="${TR0+9}" class="hr">tokens / min, peak ${fmtN(tmax/BIN)}</text>`;
+  let d='';for(let b=0;b<NB;b++){const t=DAY0+(b+.5)*BIN;if(t>day.end)break;d+=(d?'L':'M')+X(t).toFixed(1)+' '+(TR0+TRH-trace[b]/tmax*(TRH-4)).toFixed(1)}
+  if(d)s+=`<path d="${d}L${X(day.end)} ${TR0+TRH}L${L} ${TR0+TRH}Z" fill="rgba(28,30,36,.06)"/><path d="${d}" fill="none" stroke="var(--ink)" stroke-width="1.4" stroke-linejoin="round"/>`;
+  s+=`<rect id="band" x="${L-8}" width="${W-L-R+16}" rx="2"/>`;
+  day.threads.forEach((th,i)=>{
+    const y0=th.y,by=y0+19,lx=Math.min(X(th.s),W-R-350);
+    s+=`<g class="lane${vis(th)?'':' off'}" data-th="${i}"><rect class="hit" x="${L-8}" y="${y0-3}" width="${W-L-R+16}" height="${th.h}"/>`;
+    s+=`<text x="${lx}" y="${y0+11}" class="tl">${esc(th.title)}<tspan class="tm" dx="8">${th.project} · ${short(th.m)}</tspan></text>`;
+    s+=`<line x1="${X(th.s)}" x2="${X(th.e)}" y1="${by+4.5}" y2="${by+4.5}" stroke="var(--ink)" stroke-opacity=".3" stroke-dasharray="1 3"/>`;
+    th.runs.forEach(r=>{s+=`<rect class="bar${active[th.m]?'':' off'}" x="${X(r.s).toFixed(1)}" y="${by}" width="${Math.max(3,X(r.e)-X(r.s)).toFixed(1)}" height="9" rx="1.5" fill="var(--m${th.m})"/>`});
+    th.ev.forEach(e=>{if(e.k!=='tool'||e.sub)return;const x=X(e.t).toFixed(1);
+      s+=e.ok?`<line x1="${x}" x2="${x}" y1="${by+11}" y2="${by+15}" stroke="var(--ink)" stroke-opacity=".55"/>`
+             :`<path d="M${x-3} ${by+11}l6 6m0-6l-6 6" stroke="var(--pen)" stroke-width="1.6" fill="none"/>`});
+    th.kids.forEach(k=>{const cy=y0+43+k.row*15,x0=X(k.s),x1=Math.max(x0+3,X(k.e)),off=active[k.m]?'':' off';
+      s+=`<g class="bar${off}"><path d="M${x0.toFixed(1)} ${by+9}v${cy-by-12}q0 3 3 3" fill="none" stroke="var(--m${k.m})" stroke-width="1.2"/><rect x="${(x0+3).toFixed(1)}" y="${cy-2.5}" width="${Math.max(3,x1-x0-3).toFixed(1)}" height="5" rx="1" fill="var(--m${k.m})"/>`;
+      if(x1+k.title.length*5.7+16<W-R)s+=`<text x="${(x1+5).toFixed(1)}" y="${cy+3.5}" class="kl">${esc(k.title)}</text>`;
+      s+=`</g>`});
+    s+=`</g>`});
+  if(!day.threads.length)s+=`<text x="${W/2}" y="${LANE0+60}" text-anchor="middle" class="tm">No threads recorded on this day.</text>`;
+  if(day.today)s+=`<rect x="${X(NOW)}" y="22" width="${X(DAY1)-X(NOW)}" height="${H-22}" fill="url(#hatch)" pointer-events="none"/><text x="${X(NOW)+8}" y="${TR0+9}" class="hr">not yet happened</text>`;
+  s+=`<rect id="veil" y="20" height="${H-20}"/>`;
+  s+=`<circle id="nib" r="4"/><g id="phg"><line y1="18" y2="${H}" stroke="var(--pen)" stroke-width="1.5"/><rect x="-23" y="0" width="46" height="18" rx="2" fill="var(--pen)"/><text id="pht" y="13" text-anchor="middle" style="fill:#fff;font:700 11.5px var(--mono)">07:00</text>${day.today?'<circle class="pulse" cy="9" r="4" id="live" style="display:none"/>':''}</g>`;
+  const svg=$('#tape');svg.setAttribute('width',W);svg.setAttribute('height',H);svg.setAttribute('viewBox',`0 0 ${W} ${H}`);svg.innerHTML=s;
+  placeBand();lastUnder='';update();
+}
+function placeBand(){const b=$('#band'),th=day.threads[sel];if(!b)return;if(!th){b.style.display='none';return}b.style.display='';b.style.y=(th.y-4)+'px';b.style.height=(th.h)+'px'}
+
+/* per-frame update */
+function update(){
+  const x=X(T);
+  const veil=$('#veil');veil.setAttribute('x',x);veil.setAttribute('width',Math.max(0,X(day.end)-x));
+  $('#phg').setAttribute('transform',`translate(${x.toFixed(1)},0)`);$('#pht').textContent=fmtT(T);
+  const nib=$('#nib');nib.setAttribute('cx',x);nib.setAttribute('cy',traceY(T));
+  $('#clock').textContent=fmtT(T);$('#penT').textContent=fmtT(T);
+  let P=0,A=0,C=0,F=0,S=0;const tc={};
+  const under=[];
+  day.threads.forEach((th,i)=>{if(!vis(th))return;
+    let last=null;
+    for(const e of th.ev){if(e.t>T)break;last=e;if(!active[e.m])continue;
+      if(e.k==='prompt')P++;else if(e.k==='answer')A++;else if(e.k==='spawn')S++;else if(e.k==='tool'){C++;if(!e.ok)F++;const o=tc[e.name]??=[0,0];o[0]++;if(!e.ok)o[1]++}}
+    if(last&&th.runs.some(r=>T>=r.s&&T<r.e))under.push([i,th,last]);
+  });
+  $('#cP').textContent=P;$('#cA').textContent=A;$('#cT').textContent=C;$('#cS').textContent=S;
+  const cf=$('#cF');cf.textContent=F+' failed';cf.className=F?'bad':'';
+  const tk=MODELS.map((_,m)=>active[m]?tokAt(m,T):0),sum=tk[0]+tk[1]+tk[2]+tk[3];
+  $('#cK').textContent=fmtN(sum);
+  const mx=Math.max(1,...MODELS.map((_,m)=>cum[m][NB]));
+  document.querySelectorAll('#mix .br').forEach((el,m)=>{el.querySelector('.fill').style.setProperty('--w',(tk[m]/mx).toFixed(4));el.querySelector('.v').textContent=active[m]?fmtN(tk[m]):'muted'});
+  const tmx=Math.max(1,...Object.values(dayTools));
+  document.querySelectorAll('#tools .br').forEach(el=>{const o=tc[el.dataset.n]||[0,0];el.querySelector('.fill').style.setProperty('--w',(o[0]/tmx).toFixed(4));el.querySelector('.v').innerHTML=o[0]+(o[1]?` <span class="bad">· ${o[1]} failed</span>`:'')});
+  const key=under.map(u=>u[0]+':'+u[1].ev.indexOf(u[2])).join('|');
+  if(key!==lastUnder){lastUnder=key;
+    $('#under').innerHTML=under.length?under.map(([i,th,e])=>`<button class="act" data-th="${i}" style="width:100%;text-align:left"><i class="dot" style="--c:var(--m${th.m})"></i><b>${esc(th.title)}</b><span>${e.k==='tool'?e.name+' '+esc(e.text):e.k==='prompt'?'reading the prompt':e.k==='spawn'?'spawned: '+esc(e.text):e.k==='return'?'sub-agent returned':'answering'}</span></button>`).join('')
+      :`<p class="idle">${T>=day.end-.01&&day.today?'Caught up with now. Nothing is running.':'Nothing is running at this moment.'}</p>`}
+  const live=$('#live');if(live)live.style.display=T>=day.end-.01?'':'none';
+  if(tab==='trace'){const rows=$('#lower').querySelectorAll('.row');let now=-1;
+    rows.forEach((r,i)=>{const f=+r.dataset.t>T;r.classList.toggle('fut',f);if(!f)now=i});
+    if(now!==lastNow){rows[lastNow]?.classList.remove('now');rows[now]?.classList.add('now');lastNow=now;
+      if(now>=0){const box=$('#lower');box.scrollTop=Math.max(0,rows[now].offsetTop-box.clientHeight*.55)}}}
+}
+function setT(t){T=Math.min(day.end,Math.max(DAY0,t));if(!queued){queued=true;requestAnimationFrame(()=>{queued=false;update()})}}
+function tween(to,ms){cancelAnimationFrame(raf);setPlaying(false);
+  if(matchMedia('(prefers-reduced-motion:reduce)').matches||ms<=0){setT(to);return}
+  const from=T,t0=performance.now();
+  (function step(n){const p=Math.min(1,(n-t0)/ms),e=p<.5?4*p*p*p:1-Math.pow(-2*p+2,3)/2;setT(from+(to-from)*e);if(p<1)raf=requestAnimationFrame(step)})(t0)}
+function setPlaying(v){playing=v;$('#playtxt').textContent=v?'Pause':'Play';$('#playico').innerHTML=v?'<path d="M1 0h3v10H1zM6 0h3v10H6z"/>':'<path d="M1 0l9 5-9 5z"/>';
+  if(v){cancelAnimationFrame(raf);if(T>=day.end-.5)T=Math.max(DAY0,(day.threads[0]?.s??DAY0)-6);let p=performance.now();
+    (function step(n){if(!playing)return;setT(T+(n-p)/1000*14*speed);p=n;if(T>=day.end){setPlaying(false);return}raf=requestAnimationFrame(step)})(p)}}
+
+/* lower panel */
+function renderLower(){
+  const th=day.threads[sel],box=$('#lower');lastNow=-2;
+  document.querySelectorAll('.tab').forEach(b=>b.setAttribute('aria-selected',b.dataset.tab===tab));
+  $('#seldot').style.cssText=th?`--c:var(--m${th.m})`:'display:none';
+  $('#selt').textContent=th?th.title:'';
+  $('#selm').textContent=th?`${fmtT(th.s)}–${fmtT(th.e)} · ${fmtN(th.tok)} tokens`:'';
+  if(!th){box.innerHTML='<p class="empty">Nothing was recorded on this day. Pick another day in the strip above.</p>';return}
+  if(tab==='threads'){
+    box.innerHTML=`<table><thead><tr><th>Thread</th><th>Project</th><th>Model</th><th>Start</th><th class="r">Prompts</th><th class="r">Tools</th><th class="r">Sub-agents</th><th class="r">Tokens</th></tr></thead><tbody>${day.threads.map((t,i)=>`<tr data-th="${i}" class="${i===sel?'on':''}"><td><b>${esc(t.title)}</b></td><td class="mono">${t.project}</td><td class="mono"><i class="dot" style="--c:var(--m${t.m})"></i> ${short(t.m)}</td><td class="mono">${fmtT(t.s)}</td><td class="r num">${t.runs.length}</td><td class="r num">${t.ev.filter(e=>e.k==='tool').length}</td><td class="r num">${t.kids.length}</td><td class="r num">${fmtN(t.tok)}</td></tr>`).join('')}</tbody></table>`;
+    return}
+  box.innerHTML=th.ev.map((e,i)=>{
+    const k=e.k==='prompt'?'<span class="you">you</span>':e.k==='answer'?`<i class="dot" style="--c:var(--m${e.m})"></i> ${short(e.m)}`:e.k==='spawn'?'⑂ sub-agent':e.k==='return'?'↩ returned':e.name;
+    const meta=e.k==='tool'?(e.ok?'ok':'<span class="bad">failed</span>'):e.k==='spawn'?short(e.m):'';
+    return `<button class="row ${e.k}${e.sub?' sub':''}" data-t="${e.t}" style="--i:${i}"><span class="t num">${fmtT(e.t)}</span><span class="k">${k}</span><span class="x">${esc(e.text)}</span><span class="m">${meta}</span></button>`}).join('');
+  update();
+}
+function select(i,jump){sel=i;placeBand();renderLower();if(jump){const th=day.threads[i];if(T<th.s||T>th.e)tween(th.s,350)}}
+
+/* day + side panels */
+let dayTools={};
+function setDay(i,first){
+  day=DAYS[i];cancelAnimationFrame(raf);setPlaying(false);
+  dayTools={};day.threads.forEach(t=>t.ev.forEach(e=>{if(e.k==='tool')dayTools[e.name]=(dayTools[e.name]||0)+1}));
+  sel=day.threads.reduce((b,t,k)=>t.tok>(day.threads[b]?.tok??-1)?k:b,0);
+  const wd=day.date.toLocaleDateString('en-GB',{weekday:'long'}),dm=day.date.toLocaleDateString('en-GB',{day:'numeric',month:'long'});
+  $('#title').innerHTML=`<span><b>${wd}</b></span><span><b style="animation-delay:.06s">${dm}</b></span>`;
+  $('#sum').textContent=day.threads.length?`${day.threads.length} threads · ${day.prompts} prompts · ${fmtN(day.tok)} tokens${day.today?' · so far':''}`:'No recorded activity';
+  document.querySelectorAll('.day').forEach((b,k)=>b.setAttribute('aria-pressed',k===i));
+  $('#tools').innerHTML=TORDER.map(n=>`<div class="br" data-n="${n}"><span class="n">${n}</span><span class="v num">0</span><span class="track"><i class="fill"></i></span></div>`).join('');
+  T=DAY0;buildTape();renderLower();tween(day.end,first?1900:1100);
+}
+const pmax=Math.max(...DAYS.map(d=>d.prompts));
+$('#strip').innerHTML=DAYS.map((d,i)=>`<button class="day${d.we?' we':''}" style="--h:${(d.prompts/pmax).toFixed(3)};--i:${i}" aria-pressed="false" data-d="${i}" title="${d.date.toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short'})} · ${d.prompts} prompts"><i></i><em>${d.date.getDay()===1||i===29?d.date.getDate():''}</em></button>`).join('');
+$('#mix').innerHTML=MODELS.map((m,i)=>`<button class="br" aria-pressed="true" data-m="${i}" style="--c:var(--m${i})"><span class="n"><i class="dot"></i>${m}</span><span class="v num">0</span><span class="track"><i class="fill"></i></span></button>`).join('');
+
+/* events */
+$('#strip').onclick=e=>{const b=e.target.closest('.day');if(b)setDay(+b.dataset.d)};
+$('#mix').onclick=e=>{const b=e.target.closest('.br');if(!b)return;const m=+b.dataset.m;active[m]=!active[m];b.setAttribute('aria-pressed',active[m]);buildTape()};
+$('#play').onclick=()=>setPlaying(!playing);
+$('#speed').onclick=e=>{speed=speed===1?4:speed===4?16:1;e.currentTarget.textContent=speed+'×'};
+$('#q').oninput=e=>{query=e.target.value.trim().toLowerCase();buildTape()};
+document.querySelector('.tabs').onclick=e=>{const b=e.target.closest('.tab');if(b){tab=b.dataset.tab;renderLower()}};
+$('#lower').onclick=e=>{const r=e.target.closest('.row');if(r)return tween(+r.dataset.t,280);const tr=e.target.closest('tr[data-th]');if(tr){tab='trace';select(+tr.dataset.th,true)}};
+$('#under').onclick=e=>{const b=e.target.closest('[data-th]');if(b){tab='trace';select(+b.dataset.th)}};
+{const svg=$('#tape');let drag=null;
+  const at=e=>inv(e.clientX-svg.getBoundingClientRect().left);
+  svg.onpointerdown=e=>{drag={x:e.clientX,lane:e.target.closest('.lane'),moved:false};svg.setPointerCapture(e.pointerId);cancelAnimationFrame(raf);setPlaying(false);setT(at(e))};
+  svg.onpointermove=e=>{if(!drag)return;if(Math.abs(e.clientX-drag.x)>3)drag.moved=true;setT(at(e))};
+  svg.onpointerup=svg.onpointercancel=()=>{if(drag&&!drag.moved&&drag.lane){tab='trace';select(+drag.lane.dataset.th)}drag=null};
+}
+addEventListener('keydown',e=>{
+  const typing=e.target.tagName==='INPUT';
+  if(e.key==='/'&&!typing){e.preventDefault();$('#q').focus()}
+  else if(e.key==='Escape'&&typing){e.target.value='';query='';buildTape();e.target.blur()}
+  else if(typing)return;
+  else if(e.key===' '&&e.target.tagName!=='BUTTON'){e.preventDefault();setPlaying(!playing)}
+  else if(e.key==='ArrowLeft'||e.key==='ArrowRight'){e.preventDefault();cancelAnimationFrame(raf);setPlaying(false);setT(T+(e.key==='ArrowLeft'?-1:1)*(e.shiftKey?30:5))}
+});
+let rw=0;new ResizeObserver(()=>{const w=$('#wrap').clientWidth;if(w!==rw){if(rw)buildTape();rw=w}}).observe($('#wrap'));
+setDay(29,true);
+</script>
+</body>
+</html>

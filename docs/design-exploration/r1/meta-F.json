@@ -1,0 +1,29 @@
+{
+  "id": "R1-F",
+  "name": "Chroma Bento",
+  "by": "grok, grok-4.7",
+  "pitch": "A live poster treemap sized by each model's share.",
+  "tradeoff": "Tile area is a powered share so the smallest models stay readable.",
+  "fonts": {
+    "display": "Bricolage Grotesque",
+    "ui": "Schibsted Grotesk",
+    "data": "Spline Sans Mono"
+  },
+  "fontWhy": "Bricolage shouts the poster, Schibsted labels it, and Spline locks the digits.",
+  "palette": ["#090909", "#121212", "#F4F0E6", "#FFE14A"],
+  "modelColors": {
+    "gpt-6.1-sol": "#FFE14A",
+    "claude-opus-5-5": "#FF5A2E",
+    "gpt-6-luna": "#A992FF",
+    "gpt-6-astra": "#12DCC0",
+    "claude-fable-5-1": "#FF4B93",
+    "claude-sonnet-5-5": "#D2F04A",
+    "gpt-6-sol": "#FF9A1F",
+    "claude-haiku-5-5": "#2AD48A",
+    "grok-4.7": "#8FB6FF",
+    "muse-wonder-1.0": "#E8A8FF"
+  },
+  "logoIdea": "A heavy one-stroke R whose leg ends in a sharp cut, the run stopping mid-stride.",
+  "sliderIdea": "A chunky paper capsule whose day chips snap under two big thumbs.",
+  "signatureMotion": "Tiles spring and reflow with overshoot while numerals split-flap."
+}

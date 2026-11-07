@@ -1,0 +1,470 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Runtrace · Tape and Reader (R2 / Fable-1)</title>
+<script>
+  /* Set the theme before first paint: ?theme=light|dark wins, otherwise follow the OS. */
+  (() => { const f = new URLSearchParams(location.search).get('theme'); if (f ? f === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches) document.documentElement.dataset.theme = 'dark'; })();
+</script>
+<style>
+  :root {
+    color-scheme: light;
+    --plane: #f4f3ee; --surface: #fcfcfb; --sunk: #efeee8;
+    --ink: #0b0b0b; --ink-2: #52514e; --ink-3: #6f6d67;
+    --line: #e1e0d9; --axis: #c3c2b7; --wash: rgba(11,11,11,.05);
+    --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; --s5: #e87ba4;
+    --good: #0ca30c;
+    --hatch: repeating-linear-gradient(135deg, var(--axis) 0 1px, transparent 1px 5px);
+    --serif: 'Iowan Old Style', 'Palatino Linotype', Palatino, 'Book Antiqua', Georgia, serif;
+    --sans: system-ui, -apple-system, 'Segoe UI', sans-serif;
+    --mono: ui-monospace, 'Cascadia Code', 'SF Mono', Consolas, monospace;
+    --ease: cubic-bezier(.22, 1, .36, 1);
+  }
+  :root[data-theme='dark'] {
+    color-scheme: dark;
+    --plane: #0d0d0d; --surface: #1a1a19; --sunk: #232321;
+    --ink: #f0efec; --ink-2: #c3c2b7; --ink-3: #9a988f;
+    --line: #2c2c2a; --axis: #45453f; --wash: rgba(255,255,255,.06);
+    --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181;
+  }
+  * { box-sizing: border-box; }
+  html { background: var(--plane); }
+  body { margin: 0; background: var(--plane); color: var(--ink); font: 14px/1.5 var(--sans); -webkit-font-smoothing: antialiased; }
+  button, input { font: inherit; color: inherit; }
+  button { cursor: pointer; background: none; border: 0; padding: 0; }
+  :focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; border-radius: 4px; }
+  .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  .wrap { max-width: 1360px; margin: 0 auto; padding: 0 clamp(16px, 3vw, 40px) 40px; }
+
+  /* top bar */
+  .top { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 16px 0; border-bottom: 1px solid var(--line); }
+  .brand { display: flex; align-items: center; gap: 9px; font: 600 15px var(--mono); letter-spacing: -.01em; margin-right: auto; }
+  .brand svg { display: block; }
+  .brand path { stroke-dasharray: 1; stroke-dashoffset: 1; animation: draw 1.4s var(--ease) .1s forwards; }
+  .live { white-space: nowrap; display: flex; align-items: center; gap: 7px; font: 12px var(--mono); color: var(--ink-3); }
+  .live i { width: 7px; height: 7px; border-radius: 50%; background: var(--good); position: relative; }
+  .live i::after { content: ''; position: absolute; inset: -4px; border-radius: 50%; border: 1px solid var(--good); animation: ping 2.2s ease-out infinite; }
+  .search { display: flex; align-items: center; gap: 8px; border: 1px solid var(--line); background: var(--surface); border-radius: 8px; padding: 6px 10px; width: min(260px, 100%); transition: border-color .15s; }
+  .search:focus-within { border-color: var(--ink); }
+  .search input { border: 0; background: none; outline: 0; flex: 1; min-width: 0; }
+  kbd { font: 11px var(--mono); border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; color: var(--ink-3); }
+  .seg { position: relative; display: inline-flex; background: var(--sunk); border-radius: 8px; padding: 3px; }
+  .seg button { position: relative; z-index: 1; padding: 4px 12px; border-radius: 6px; font: 12px var(--mono); color: var(--ink-3); transition: color .2s; }
+  .seg button[aria-pressed='true'] { color: var(--ink); }
+  .seg .thumb { position: absolute; top: 3px; bottom: 3px; left: 0; border-radius: 6px; background: var(--surface); box-shadow: 0 0 0 1px var(--line); transition: transform .35s var(--ease), width .35s var(--ease); }
+  .icon-btn { width: 32px; height: 32px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); display: grid; place-items: center; }
+  .icon-btn:hover { border-color: var(--ink-3); }
+
+  /* lede */
+  .lede { font: 400 clamp(1.5rem, 1rem + 1.9vw, 2.5rem)/1.22 var(--serif); letter-spacing: -.015em; margin: 34px 0 22px; max-width: 26em; text-wrap: balance; animation: rise .7s var(--ease) both; }
+  .lede b { font-weight: 600; }
+  .lede .tag { white-space: nowrap; }
+  .lede .tag i { display: inline-block; width: .5em; height: .5em; border-radius: 2px; margin-right: .22em; vertical-align: .12em; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); border-block: 1px solid var(--line); margin-bottom: 26px; }
+  .stat { padding: 14px 18px 14px 0; animation: rise .6s var(--ease) both; animation-delay: calc(var(--i) * 60ms + .1s); }
+  .stat + .stat { padding-left: 18px; border-left: 1px solid var(--line); }
+  .stat small, .eyebrow { display: block; font: 11px var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); }
+  .stat strong { display: block; font: 600 26px/1.25 var(--sans); letter-spacing: -.02em; }
+  .stat .none { display: inline-block; margin-top: 6px; padding: 3px 9px; font: 12px var(--mono); color: var(--ink-2); background: var(--hatch); border: 1px solid var(--line); border-radius: 5px; }
+
+  /* tape */
+  .panel { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; }
+  .panel-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+  .panel-head h2 { font: 600 13px var(--sans); margin: 0 auto 0 0; }
+  .panel-head h2 span { font-weight: 400; color: var(--ink-3); margin-left: 6px; }
+  .chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px 3px 8px; border: 1px solid var(--line); border-radius: 99px; font: 12px var(--mono); transition: opacity .2s, background .2s; }
+  .chip i { width: 8px; height: 8px; border-radius: 2px; background: var(--c); transition: transform .25s var(--ease); }
+  .chip:hover { background: var(--wash); }
+  .chip[aria-pressed='false'] { opacity: .45; text-decoration: line-through; }
+  .chip[aria-pressed='false'] i { transform: scale(.5); }
+  .tape { position: relative; padding: 8px 0 4px; animation: rise .7s var(--ease) .25s both; }
+  .tape svg { display: block; width: 100%; cursor: crosshair; }
+  .tape text { font: 11px var(--mono); fill: var(--ink-3); }
+  .tape .lane-name { fill: var(--ink-2); }
+  .tape .grid { stroke: var(--line); }
+  .tape .base { stroke: var(--axis); }
+  .tape .trace { fill: none; stroke: var(--ink); stroke-width: 1.75; stroke-linejoin: round; stroke-linecap: round; }
+  .tape .area { fill: var(--ink); opacity: .07; }
+  .tape .bar { stroke: var(--surface); stroke-width: 1.5; cursor: pointer; transition: opacity .2s; }
+  .tape.has-sel .bar { opacity: .7; }
+  .tape .bar:hover, .tape .bar.sel { opacity: 1; }
+  .tape .selring { fill: none; stroke: var(--ink); stroke-width: 2; pointer-events: none; transition: x .4s var(--ease), y .4s var(--ease), width .4s var(--ease); }
+  .tape .pen { stroke: var(--ink); stroke-width: 1; }
+  .tape .now { fill: var(--ink); }
+  .tape .now-ring { fill: none; stroke: var(--ink); animation: pingr 2.2s ease-out infinite; transform-box: fill-box; transform-origin: center; }
+  .tape .cross { stroke: var(--ink-3); stroke-dasharray: 2 3; pointer-events: none; }
+  .tip { position: absolute; top: 10px; pointer-events: none; background: var(--ink); color: var(--surface); border-radius: 8px; padding: 8px 10px; font-size: 12px; width: 220px; opacity: 0; transform: translateY(4px); transition: opacity .15s, transform .15s; z-index: 2; }
+  .tip.on { opacity: 1; transform: none; }
+  .tip b { display: block; font: 600 12px var(--mono); }
+  .tip span { display: block; opacity: .75; font-family: var(--mono); font-size: 11px; }
+  .tip p { margin: 5px 0 0; display: flex; gap: 6px; align-items: baseline; }
+  .tip p i { flex: none; width: 7px; height: 7px; border-radius: 2px; }
+
+  /* list + reader */
+  .cols { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: 16px; margin-top: 16px; }
+  .cols > .panel { display: flex; flex-direction: column; height: 600px; min-width: 0; }
+  .scroll { overflow: auto; flex: 1; scrollbar-width: thin; }
+  .row { display: grid; grid-template-columns: 4px minmax(0, 1fr) 76px 52px; gap: 12px; align-items: center; width: 100%; text-align: left; padding: 9px 16px 9px 12px; border-bottom: 1px solid var(--line); position: relative; animation: rise .45s var(--ease) both; animation-delay: calc(min(var(--i), 14) * 22ms); transition: background .15s; }
+  .row:hover { background: var(--wash); }
+  .row[aria-current='true'] { background: var(--sunk); }
+  .row::before { content: ''; align-self: stretch; min-height: 30px; border-radius: 2px; background: var(--c); transition: transform .25s var(--ease); }
+  .row[aria-current='true']::before { transform: scaleX(2); transform-origin: left; }
+  .row .main { min-width: 0; }
+  .row .t, .row .s { display: block; }
+  .row .t { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 500; }
+  .row .s { font: 11px var(--mono); color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .row .tok { font: 12px var(--mono); text-align: right; }
+  .row .tok u { display: block; height: 3px; margin-top: 4px; border-radius: 2px; background: var(--ink-2); margin-left: auto; transform-origin: right; animation: growx .6s var(--ease) both; }
+  .row .ago { font: 11px var(--mono); color: var(--ink-3); text-align: right; }
+  .empty { padding: 48px 20px; text-align: center; color: var(--ink-3); }
+  .unk { background: var(--hatch); border-radius: 3px; padding: 0 4px; }
+
+  .reader-head { padding: 16px 20px 14px; border-bottom: 1px solid var(--line); }
+  .reader-head h3 { font: 400 22px/1.25 var(--serif); margin: 4px 0 8px; letter-spacing: -.01em; }
+  .meta { display: flex; flex-wrap: wrap; gap: 4px 16px; font: 12px var(--mono); color: var(--ink-2); }
+  .meta i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 6px; }
+  .strip { display: flex; align-items: flex-end; gap: 2px; height: 34px; margin-top: 12px; }
+  .strip button { flex: 1; max-width: 14px; min-width: 3px; height: 100%; display: flex; align-items: flex-end; }
+  .strip button u { display: block; width: 100%; border-radius: 2px 2px 0 0; background: var(--c); opacity: .55; transform-origin: bottom; animation: growy .5s var(--ease) both; animation-delay: calc(var(--i) * 14ms); transition: opacity .15s; }
+  .strip button:hover u, .strip button.on u { opacity: 1; }
+  .turn { display: grid; grid-template-columns: 46px 14px minmax(0, 1fr); gap: 0 10px; padding: 0 20px; animation: rise .5s var(--ease) both; animation-delay: calc(min(var(--i), 10) * 50ms); }
+  .turn time { font: 11px var(--mono); color: var(--ink-3); padding-top: 16px; text-align: right; }
+  .turn .rail { position: relative; }
+  .turn .rail::before { content: ''; position: absolute; left: 6px; top: 0; bottom: 0; width: 1px; background: var(--line); }
+  .turn .rail::after { content: ''; position: absolute; left: 3px; top: 20px; width: 7px; height: 7px; border-radius: 50%; background: var(--surface); border: 1.5px solid var(--ink); }
+  .turn .body { padding: 13px 0 15px; border-bottom: 1px solid var(--line); }
+  .turn.flash .body { animation: flash 1.1s ease-out; }
+  .turn .you { margin: 0; font: 15.5px/1.45 var(--serif); }
+  .turn .ai { margin: 6px 0 8px; color: var(--ink-2); padding-left: 12px; border-left: 2px solid var(--line); }
+  .redact { background: var(--ink); color: transparent; border-radius: 3px; user-select: none; font-family: var(--mono); font-size: 12px; }
+  .tools { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; font: 11px var(--mono); color: var(--ink-3); }
+  .tools b { font-weight: 400; color: var(--ink-2); background: var(--sunk); border-radius: 4px; padding: 1px 6px; }
+  .tools .sub { color: var(--ink-2); border: 1px dashed var(--axis); border-radius: 4px; padding: 0 6px; }
+  .tools .n { margin-left: auto; }
+  .more { margin: 14px 20px 18px 90px; padding: 6px 12px; border: 1px solid var(--line); border-radius: 8px; font: 12px var(--mono); }
+  .more:hover { border-color: var(--ink); }
+
+  /* breakdowns */
+  .duo { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; margin-top: 16px; }
+  .hbar { display: grid; grid-template-columns: 150px minmax(0, 1fr) 64px; gap: 12px; align-items: center; padding: 7px 16px; font: 12px var(--mono); }
+  .hbar:first-of-type { padding-top: 14px; } .hbar:last-of-type { padding-bottom: 14px; }
+  .hbar .track { height: 10px; }
+  .hbar .fill { height: 100%; border-radius: 0 4px 4px 0; background: var(--ink-2); transform-origin: left; animation: growx .7s var(--ease) both; animation-delay: calc(var(--i) * 50ms); }
+  .hbar .fill.unk { background: var(--hatch); border: 1px solid var(--axis); border-left: 0; padding: 0; }
+  .hbar .v { text-align: right; color: var(--ink-2); }
+  .hbar .k { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  footer { display: flex; flex-wrap: wrap; gap: 6px 24px; margin-top: 22px; font: 11px var(--mono); color: var(--ink-3); }
+
+  @keyframes rise { from { opacity: 0; transform: translateY(10px); } }
+  @keyframes growx { from { transform: scaleX(0); } }
+  @keyframes growy { from { transform: scaleY(0); } }
+  @keyframes draw { to { stroke-dashoffset: 0; } }
+  @keyframes ping { 0% { transform: scale(.6); opacity: .9; } 100% { transform: scale(1.8); opacity: 0; } }
+  @keyframes pingr { 0% { transform: scale(1); opacity: .8; } 100% { transform: scale(3.2); opacity: 0; } }
+  @keyframes flash { from { background: var(--wash); } }
+  @media (max-width: 900px) { .cols { grid-template-columns: 1fr; } .cols > .panel { height: auto; max-height: 560px; } }
+  @media (max-width: 560px) { .live { font-size: 0; gap: 0; } .search { order: 5; width: 100%; } .row { grid-template-columns: 4px minmax(0, 1fr) 60px; } .row .ago { display: none; } .hbar { grid-template-columns: 96px minmax(0, 1fr) 52px; } .more { margin-left: 20px; } }
+  @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; animation-delay: 0s !important; transition-duration: .01ms !important; animation-iteration-count: 1 !important; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div class="brand">
+      <svg width="34" height="20" viewBox="0 0 34 20" aria-hidden="true"><path pathLength="1" d="M1 13h6l3-9 4 14 3.5-10 2.5 5h13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      runtrace
+    </div>
+    <span class="live" title="Loopback only. Nothing leaves this machine."><i></i>capturing · latest record 2m ago</span>
+    <label class="search"><input id="q" type="search" placeholder="Filter threads…" aria-label="Filter threads by title"><kbd>/</kbd></label>
+    <div class="seg" id="range" role="group" aria-label="Time range">
+      <span class="thumb"></span>
+      <button data-v="24h" aria-pressed="false">24h</button><button data-v="7d" aria-pressed="true">7d</button><button data-v="30d" aria-pressed="false">30d</button>
+    </div>
+    <button class="icon-btn" id="theme" aria-label="Toggle light and dark theme" title="Toggle theme">
+      <svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.25" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M8 1.75a6.25 6.25 0 0 1 0 12.5z" fill="currentColor"/></svg>
+    </button>
+  </header>
+
+  <h1 class="lede" id="lede" aria-live="polite"></h1>
+  <section class="stats" id="stats" aria-label="Totals for the selected range"></section>
+
+  <section class="panel" aria-labelledby="tape-h">
+    <div class="panel-head">
+      <h2 id="tape-h">The tape <span id="tape-sub"></span></h2>
+      <div id="chips" role="group" aria-label="Projects" style="display:flex;gap:6px;flex-wrap:wrap"></div>
+    </div>
+    <div class="tape" id="tape"><div class="tip" id="tip"></div></div>
+  </section>
+
+  <div class="cols">
+    <section class="panel" aria-labelledby="list-h">
+      <div class="panel-head">
+        <h2 id="list-h">Threads <span id="list-n"></span></h2>
+        <div class="seg" id="sort" role="group" aria-label="Sort threads">
+          <span class="thumb"></span>
+          <button data-v="recent" aria-pressed="true">recent</button><button data-v="tokens" aria-pressed="false">tokens</button><button data-v="turns" aria-pressed="false">turns</button>
+        </div>
+      </div>
+      <div class="scroll" id="list"></div>
+    </section>
+    <section class="panel" aria-labelledby="reader-h" id="reader"></section>
+  </div>
+
+  <div class="duo">
+    <section class="panel"><div class="panel-head"><h2>Tool calls <span>by tool</span></h2></div><div id="tools"></div></section>
+    <section class="panel"><div class="panel-head"><h2>Tokens <span>by model</span></h2></div><div id="models"></div></section>
+  </div>
+
+  <footer>
+    <span>Mockup · every number here is synthetic</span>
+    <span><span class="unk">hatched</span> = the source never captured it</span>
+    <span><kbd>/</kbd> filter · <kbd>j</kbd> <kbd>k</kbd> next / previous thread</span>
+  </footer>
+</div>
+
+<script>
+(() => {
+  const $ = (s) => document.querySelector(s);
+  const NOW = +new Date('2026-11-06T14:20:00'), H = 36e5, D = 24 * H;
+  const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const rng = (seed) => () => (seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0) / 4294967296;
+  const pick = (r, a) => a[Math.floor(r() * a.length)];
+  const wpick = (r, a) => { let x = r(); for (const [v, w] of a) { if ((x -= w) < 0) return v; } return a[0][0]; };
+  const fmtK = (n) => n >= 1e6 ? (n / 1e6).toFixed(n >= 1e7 ? 1 : 2) + 'M' : n >= 1e3 ? Math.round(n / 1e3) + 'k' : String(Math.round(n));
+  const DAY = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'], MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const p2 = (n) => String(n).padStart(2, '0');
+  const hm = (t) => { const d = new Date(t); return p2(d.getHours()) + ':' + p2(d.getMinutes()); };
+  const dayLabel = (t) => { const d = new Date(t); return `${DAY[d.getDay()]} ${d.getDate()} ${MON[d.getMonth()]}`; };
+  const ago = (t) => { const m = (NOW - t) / 6e4; return m < 60 ? Math.round(m) + 'm' : m < 1440 ? Math.round(m / 60) + 'h' : Math.round(m / 1440) + 'd'; };
+  const dur = (ms) => { const m = Math.round(ms / 6e4); return m < 60 ? m + ' min' : Math.floor(m / 60) + 'h ' + p2(m % 60) + 'm'; };
+  const esc = (s) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+  /* ---------- synthetic history ---------- */
+  const PROJECTS = [
+    { id: 'runtrace', c: 'var(--s1)', titles: ['Skip unchanged threads in the importer', 'Hatched fills for uncaptured values', 'Parquet archive round-trip test', 'Second DuckDB connection for readers', 'Redaction entropy threshold', 'Agent tree layout for deep spawns', 'MCP tool pagination', 'Purge ledger survives restore'] },
+    { id: 't3code', c: 'var(--s2)', titles: ['Worktree handoff loses the base branch', 'Queue drains twice after reconnect', 'Preview pane keyboard focus', 'Thread search ranks titles too low', 'Device panel reconnect loop', 'Scheduled task timezone drift'] },
+    { id: 'lapse-api', c: 'var(--s3)', titles: ['Rate limiter counts retries', 'Cursor pagination for /frames', 'Webhook signature verification', 'Flaky upload integration test', 'Move jobs to a dead-letter queue'] },
+    { id: 'dotfiles', c: 'var(--s4)', titles: ['PowerShell profile startup time', 'Git aliases for stacked branches', 'Terminal font fallback on Windows', 'Sync editor settings across machines'] },
+    { id: 'notes-site', c: 'var(--s5)', titles: ['RSS feed drops code blocks', 'Dark theme for footnotes', 'Build time doubles with images', 'Draft posts leak into the sitemap'] },
+  ];
+  const PMAP = Object.fromEntries(PROJECTS.map((p) => [p.id, p]));
+  const TOOLS = ['Read', 'Edit', 'Bash', 'Grep', 'Write', 'Agent'];
+  const threads = [];
+  {
+    const r = rng(20261106); let id = 1;
+    for (let d = 29; d >= 0; d--) {
+      const day0 = new Date(NOW - d * D).setHours(0, 0, 0, 0), wd = new Date(day0).getDay();
+      const n = (wd === 0 || wd === 6 ? 1 : 3) + Math.floor(r() * 4);
+      for (let i = 0; i < n; i++) {
+        const hour = wpick(r, [[9, .13], [10, .14], [11, .1], [14, .1], [15, .12], [16, .1], [17, .05], [21, .12], [22, .1], [23, .04]]);
+        const start = day0 + hour * H + Math.floor(r() * 60) * 6e4;
+        const turns = 2 + Math.floor(r() * r() * 30), len = (6 + turns * (2 + r() * 4)) * 6e4;
+        if (start + len > NOW) continue;
+        const p = PMAP[wpick(r, [['runtrace', .4], ['t3code', .24], ['lapse-api', .16], ['dotfiles', .1], ['notes-site', .1]])];
+        const tools = {}; let calls = 0;
+        for (const [t, w] of [['Read', 2.2], ['Edit', 1.3], ['Bash', 1.1], ['Grep', .9], ['Write', .3], ['Agent', .12]]) { const c = Math.round(turns * w * (.4 + r())); if (c) { tools[t] = c; calls += c; } }
+        threads.push({ id: id++, project: p.id, title: pick(r, p.titles), start, end: start + len, turns, calls, tools,
+          tokens: Math.round(turns * (9e3 + r() * 34e3)),
+          model: wpick(r, [['claude-fable-5-1', .46], ['claude-opus-5-5', .24], ['claude-sonnet-5-5', .2], [null, .1]]) });
+      }
+    }
+  }
+  const YOU = ['The importer re-reads every thread on each poll. Make unchanged ones skip the body fetch.', 'Why does collect hold the writer lock while the dashboard is querying?', 'Tests pass here but the Windows linker step fails in CI. Look at the log.', 'Rename the config key and keep the old one working for one release.', 'Use the token from my env file: <span class="redact" title="Redacted before storage">sk-0000000000000000</span>', 'That is slower than before. Profile it and show me where the time goes.', 'Write the migration and a round-trip test for it.', 'Looks right. Now do the same for the archive path.', 'Split this into two commits and draft the messages. Do not push.', 'Explain what this function does before you change it.'];
+  const AI = ['Cached the source revision per thread, so unchanged rows return before any body read.', 'The reader was sharing the writer connection. Opened a second read-only connection for queries.', 'Traced the regression to an unindexed join on thread_id. Added the index and re-ran the benchmark.', 'Three files changed. Ran the suite: 212 passed, 0 failed.', 'The failure is a missing import library, not the code. Pinned the toolchain in the workflow.', 'Kept the old key as an alias and log a deprecation note when it is used.', 'Wrote the migration, restored into an empty database and compared every field.', 'Two commits are prepared locally. Nothing was pushed.'];
+  const turnsOf = (th) => {
+    if (th._t) return th._t;
+    const r = rng(th.id * 977 + 3), a = Math.floor(r() * 10), b = Math.floor(r() * 8), w = Array.from({ length: th.turns }, () => .3 + r()), sum = w.reduce((a, b) => a + b);
+    return th._t = w.map((x, i) => {
+      const tools = TOOLS.slice(0, 5).filter(() => r() < .45).map((t) => [t, 1 + Math.floor(r() * 5)]);
+      return { at: th.start + (i / th.turns) * (th.end - th.start), you: YOU[(a + i * 3) % 10], ai: AI[(b + i * 3) % 8], tools, sub: th.tools.Agent && r() < .12 ? 1 + Math.floor(r() * 3) : 0, tokens: Math.round(th.tokens * x / sum), secs: 8 + Math.floor(r() * 140) };
+    });
+  };
+
+  /* ---------- state ---------- */
+  const S = { range: '7d', off: new Set(), q: '', sort: 'recent', sel: null, all: false };
+  const SPAN = { '24h': D, '7d': 7 * D, '30d': 30 * D }, WORD = { '24h': 'the last 24 hours', '7d': 'the last 7 days', '30d': 'the last 30 days' };
+  let view = [];
+  const compute = () => {
+    const t0 = NOW - SPAN[S.range], q = S.q.trim().toLowerCase();
+    view = threads.filter((t) => t.start >= t0 && !S.off.has(t.project) && (!q || t.title.toLowerCase().includes(q) || t.project.includes(q)));
+    view.sort(S.sort === 'recent' ? (a, b) => b.start - a.start : (a, b) => b[S.sort] - a[S.sort]);
+    if (!view.some((t) => t.id === S.sel)) { S.sel = view[0]?.id ?? null; S.all = false; }
+  };
+
+  /* ---------- small animation helpers ---------- */
+  const tween = (el, to, fmt) => {
+    const from = el._v ?? 0; el._v = to;
+    if (reduce) { el.textContent = fmt(to); return; }
+    const t0 = performance.now();
+    const step = (now) => { const k = Math.min(1, (now - t0) / 800), e = 1 - Math.pow(1 - k, 4); el.textContent = fmt(from + (to - from) * e); if (k < 1 && el._v === to) requestAnimationFrame(step); };
+    requestAnimationFrame(step);
+  };
+  const seg = (root, onChange) => {
+    const thumb = root.querySelector('.thumb');
+    const place = () => { const b = root.querySelector('[aria-pressed=true]'); thumb.style.width = b.offsetWidth + 'px'; thumb.style.transform = `translateX(${b.offsetLeft}px)`; };
+    root.addEventListener('click', (e) => { const b = e.target.closest('button'); if (!b) return; root.querySelectorAll('button').forEach((x) => x.setAttribute('aria-pressed', x === b)); place(); onChange(b.dataset.v); });
+    place(); addEventListener('resize', place);
+  };
+
+  /* ---------- lede + stats ---------- */
+  $('#stats').innerHTML = ['Threads', 'Turns', 'Tokens', 'Tool calls'].map((l, i) => `<div class="stat" style="--i:${i}"><small>${l}</small><strong id="st${i}">0</strong></div>`).join('') +
+    `<div class="stat" style="--i:4"><small>Cost</small><span class="none">not captured</span></div>`;
+  const renderLede = () => {
+    const sum = (k) => view.reduce((a, t) => a + t[k], 0);
+    tween($('#st0'), view.length, (v) => String(Math.round(v)));
+    tween($('#st1'), sum('turns'), (v) => Math.round(v).toLocaleString('en'));
+    tween($('#st2'), sum('tokens'), fmtK);
+    tween($('#st3'), sum('calls'), (v) => Math.round(v).toLocaleString('en'));
+    if (!view.length) { $('#lede').innerHTML = `Nothing was captured in ${WORD[S.range]} that matches.`; return; }
+    const by = {}, part = [0, 0, 0, 0];
+    view.forEach((t) => { by[t.project] = (by[t.project] || 0) + t.tokens; part[Math.floor(new Date(t.start).getHours() / 6)] += 1; });
+    const top = Object.keys(by).sort((a, b) => by[b] - by[a])[0], when = ['at night', 'in the morning', 'in the afternoon', 'in the evening'][part.indexOf(Math.max(...part))];
+    $('#lede').innerHTML = `In ${WORD[S.range]} you ran <b>${view.length} threads</b> across <b>${Object.keys(by).length} project${Object.keys(by).length > 1 ? 's' : ''}</b>, mostly in <span class="tag"><i style="background:${PMAP[top].c}"></i><b>${top}</b></span> and mostly ${when}.`;
+  };
+
+  /* ---------- the tape ---------- */
+  const tape = $('#tape'), tip = $('#tip');
+  let G = null;
+  $('#chips').innerHTML = PROJECTS.map((p) => `<button class="chip" data-p="${p.id}" aria-pressed="true" style="--c:${p.c}"><i></i>${p.id}</button>`).join('');
+  $('#chips').addEventListener('click', (e) => { const b = e.target.closest('.chip'); if (!b) return; const p = b.dataset.p; S.off.has(p) ? S.off.delete(p) : S.off.add(p); b.setAttribute('aria-pressed', !S.off.has(p)); render(false); });
+
+  const renderTape = (animate) => {
+    const W = tape.clientWidth, GL = W < 600 ? 14 : 104, PR = 18, T0 = 14, TH = 78, L0 = T0 + TH + 20, LH = 26, n = PROJECTS.length, HT = L0 + n * LH + 28;
+    const t0 = NOW - SPAN[S.range], x = (t) => GL + ((t - t0) / (NOW - t0)) * (W - GL - PR);
+    const nb = { '24h': 48, '7d': 84, '30d': 120 }[S.range], bw = (NOW - t0) / nb, buckets = new Array(nb).fill(0);
+    view.forEach((th) => turnsOf(th).forEach((u) => { const i = Math.floor((u.at - t0) / bw); if (i >= 0 && i < nb) buckets[i] += u.tokens; }));
+    const max = Math.max(1, ...buckets), y = (v) => T0 + TH - (v / max) * TH;
+    const pts = buckets.map((v, i) => `${x(t0 + (i + .5) * bw).toFixed(1)},${y(v).toFixed(1)}`);
+    const line = `M${GL},${T0 + TH} L${pts.join(' L')} L${x(NOW)},${y(buckets[nb - 1])}`;
+    let ticks = '';
+    const tick = (t, label) => { if (t <= t0 || t > NOW) return; ticks += `<line class="grid" x1="${x(t)}" x2="${x(t)}" y1="${T0}" y2="${L0 + n * LH}"/>` + (x(t) < x(NOW) - 64 ? `<text x="${x(t)}" y="${HT - 8}" text-anchor="middle">${label}</text>` : ''); };
+    if (S.range === '24h') { for (let t = new Date(t0).setMinutes(0, 0, 0); t <= NOW; t += 3 * H) tick(t, p2(new Date(t).getHours()) + ':00'); }
+    else { const stepD = S.range === '7d' ? 1 : W < 700 ? 10 : 5; let i = 0; for (let t = new Date(t0).setHours(24, 0, 0, 0); t <= NOW; t += D, i++) if (i % stepD === 0) tick(t, S.range === '7d' ? `${DAY[new Date(t).getDay()]} ${new Date(t).getDate()}` : `${new Date(t).getDate()} ${MON[new Date(t).getMonth()]}`); }
+    const lanes = PROJECTS.map((p, i) => `<line class="grid" x1="${GL}" x2="${W - PR}" y1="${L0 + i * LH}" y2="${L0 + i * LH}"/>` +
+      (GL > 20 ? `<rect x="8" y="${L0 + i * LH + 9}" width="8" height="8" rx="2" fill="${p.c}" opacity="${S.off.has(p.id) ? .3 : 1}"/><text class="lane-name" x="22" y="${L0 + i * LH + 17}" opacity="${S.off.has(p.id) ? .4 : 1}">${p.id}</text>` : '')).join('');
+    const bars = view.map((t) => { const i = PROJECTS.findIndex((p) => p.id === t.project), bx = x(t.start), w = Math.max(5, x(t.end) - bx); return `<rect class="bar" data-id="${t.id}" x="${bx.toFixed(1)}" y="${L0 + i * LH + 5}" width="${w.toFixed(1)}" height="${LH - 10}" rx="3" fill="${PMAP[t.project].c}"/>`; }).join('');
+    const unit = { '24h': '30 min', '7d': '2 h', '30d': '6 h' }[S.range];
+    tape.querySelector('svg')?.remove();
+    tape.insertAdjacentHTML('afterbegin', `<svg viewBox="0 0 ${W} ${HT}" height="${HT}" role="img" aria-label="Token volume and threads per project over ${WORD[S.range]}. The thread list below holds the same data.">
+      <defs><clipPath id="sweep"><rect x="0" y="0" width="${W}" height="${HT}"/></clipPath></defs>
+      ${ticks}${lanes}
+      <line class="base" x1="${GL}" x2="${W - PR}" y1="${T0 + TH}" y2="${T0 + TH}"/><line class="base" x1="${GL}" x2="${W - PR}" y1="${L0 + n * LH}" y2="${L0 + n * LH}"/>
+      <text x="${GL + 4}" y="${T0 + 4}">peak ${fmtK(max)} tokens / ${unit}</text>
+      <g clip-path="url(#sweep)"><path class="area" d="${line} L${x(NOW)},${T0 + TH} Z"/><path class="trace" d="${line}"/>${bars}<rect class="selring" rx="5" height="${LH - 4}" width="0"/></g>
+      <line class="pen" y1="${T0 - 6}" y2="${L0 + n * LH}" x1="${x(NOW)}" x2="${x(NOW)}"/>
+      <circle class="now-ring" cx="${x(NOW)}" cy="${y(buckets[nb - 1])}" r="3"/><circle class="now" cx="${x(NOW)}" cy="${y(buckets[nb - 1])}" r="3"/>
+      <text x="${x(NOW)}" y="${HT - 8}" text-anchor="end" style="fill:var(--ink)">now</text>
+      <line class="cross" y1="${T0}" y2="${L0 + n * LH}" visibility="hidden"/>
+    </svg>`);
+    G = { W, GL, PR, t0, bw, buckets, L0, LH };
+    $('#tape-sub').textContent = `tokens above, threads per project below`;
+    markSel();
+    if (animate && !reduce) {
+      const clip = tape.querySelector('#sweep rect'), pen = tape.querySelector('.pen'), dots = tape.querySelectorAll('.now, .now-ring'), start = performance.now();
+      dots.forEach((d) => d.style.visibility = 'hidden');
+      const step = (now) => {
+        const k = Math.min(1, (now - start) / 1300), e = 1 - Math.pow(1 - k, 3), px = GL + e * (W - GL - PR);
+        if (!clip.isConnected) return;
+        clip.setAttribute('width', px); pen.setAttribute('x1', px); pen.setAttribute('x2', px);
+        if (k < 1) requestAnimationFrame(step); else dots.forEach((d) => d.style.visibility = '');
+      };
+      step(start); requestAnimationFrame(step);
+    }
+  };
+  const markSel = () => {
+    const ring = tape.querySelector('.selring'); if (!ring) return;
+    tape.classList.toggle('has-sel', S.sel != null);
+    tape.querySelectorAll('.bar').forEach((b) => { const on = +b.dataset.id === S.sel; b.classList.toggle('sel', on); if (on) { ring.setAttribute('x', b.x.baseVal.value - 3); ring.setAttribute('y', b.y.baseVal.value - 3); ring.setAttribute('width', b.width.baseVal.value + 6); } });
+    ring.style.display = S.sel == null ? 'none' : '';
+  };
+  tape.addEventListener('pointermove', (e) => {
+    if (!G) return; const box = tape.getBoundingClientRect(), mx = e.clientX - box.left, cross = tape.querySelector('.cross');
+    if (mx < G.GL || mx > G.W - G.PR) { tip.classList.remove('on'); cross.setAttribute('visibility', 'hidden'); return; }
+    const t = G.t0 + ((mx - G.GL) / (G.W - G.GL - G.PR)) * (NOW - G.t0), i = Math.min(G.buckets.length - 1, Math.floor((t - G.t0) / G.bw));
+    const slack = (NOW - G.t0) / (G.W - G.GL - G.PR) * 3, live = view.filter((th) => th.start - slack <= t && th.end + slack >= t).slice(0, 3);
+    cross.setAttribute('x1', mx); cross.setAttribute('x2', mx); cross.setAttribute('visibility', 'visible');
+    tip.innerHTML = `<b>${dayLabel(t)} · ${hm(t)}</b><span>${fmtK(G.buckets[i])} tokens in this slice</span>` + live.map((th) => `<p><i style="background:${PMAP[th.project].c}"></i>${esc(th.title)}</p>`).join('');
+    tip.style.left = Math.max(8, mx + 232 > G.W ? mx - 232 : mx + 12) + 'px'; tip.classList.add('on');
+  });
+  tape.addEventListener('pointerleave', () => { tip.classList.remove('on'); tape.querySelector('.cross')?.setAttribute('visibility', 'hidden'); });
+  tape.addEventListener('click', (e) => { const b = e.target.closest('.bar'); if (b) select(+b.dataset.id, true); });
+
+  /* ---------- thread list ---------- */
+  const list = $('#list');
+  const modelTag = (m) => m ? m.replace('claude-', '') : '<span class="unk">model not captured</span>';
+  const renderList = () => {
+    $('#list-n').textContent = view.length;
+    const max = Math.max(1, ...view.map((t) => t.tokens));
+    list.innerHTML = view.length ? view.map((t, i) => `<button class="row" data-id="${t.id}" aria-current="${t.id === S.sel}" style="--c:${PMAP[t.project].c};--i:${i}">
+      <span class="main"><span class="t">${esc(t.title)}</span><span class="s">${t.project} · ${modelTag(t.model)} · ${t.turns} turns</span></span>
+      <span class="tok">${fmtK(t.tokens)}<u style="width:${Math.max(4, (t.tokens / max) * 100)}%"></u></span><span class="ago">${ago(t.start)} ago</span></button>`).join('')
+      : `<div class="empty">No threads match. <button id="clear" style="text-decoration:underline">Clear the filter</button></div>`;
+  };
+  list.addEventListener('click', (e) => {
+    if (e.target.id === 'clear') { S.q = $('#q').value = ''; S.off.clear(); document.querySelectorAll('.chip').forEach((c) => c.setAttribute('aria-pressed', true)); return render(false); }
+    const r = e.target.closest('.row'); if (r) select(+r.dataset.id, false);
+  });
+  const select = (id, scroll) => {
+    if (id === S.sel) return; S.sel = id; S.all = false;
+    list.querySelectorAll('.row').forEach((r) => { const on = +r.dataset.id === id; r.setAttribute('aria-current', on); if (on && scroll) list.scrollTo({ top: r.offsetTop - list.clientHeight / 2 + r.offsetHeight / 2, behavior: reduce ? 'auto' : 'smooth' }); });
+    markSel(); renderReader();
+  };
+
+  /* ---------- reader ---------- */
+  const reader = $('#reader');
+  const renderReader = (jump) => {
+    const th = view.find((t) => t.id === S.sel);
+    if (!th) { reader.innerHTML = `<div class="empty" style="margin:auto">Pick a thread on the tape to read it.</div>`; return; }
+    const ts = turnsOf(th), max = Math.max(...ts.map((u) => u.tokens)), c = PMAP[th.project].c, shown = S.all ? ts : ts.slice(0, 5);
+    reader.innerHTML = `<div class="reader-head">
+        <span class="eyebrow" id="reader-h">Reader · ${dayLabel(th.start)}, ${hm(th.start)} to ${hm(th.end)}</span>
+        <h3>${esc(th.title)}</h3>
+        <div class="meta"><span><i style="background:${c}"></i>${th.project}</span><span>${modelTag(th.model)}</span><span>${dur(th.end - th.start)}</span><span>${th.turns} turns</span><span>${fmtK(th.tokens)} tokens</span><span>${th.calls} tool calls</span></div>
+        <div class="strip" style="--c:${c}" aria-label="Tokens per turn. Select a bar to jump to that turn.">${ts.map((u, i) => `<button data-i="${i}" title="Turn ${i + 1} · ${fmtK(u.tokens)} tokens" aria-label="Go to turn ${i + 1}, ${fmtK(u.tokens)} tokens"><u style="height:${Math.max(8, (u.tokens / max) * 100)}%;--i:${i}"></u></button>`).join('')}</div>
+      </div>
+      <div class="scroll">${shown.map((u, i) => `<article class="turn" data-i="${i}" style="--i:${jump == null ? i : 0}"><time>${hm(u.at)}</time><span class="rail"></span><div class="body">
+          <p class="you">${u.you}</p><p class="ai">${u.ai}</p>
+          <div class="tools">${u.tools.map(([t, k]) => `<b>${t} ×${k}</b>`).join('')}${u.sub ? `<span class="sub">↳ ${u.sub} sub-agent${u.sub > 1 ? 's' : ''}</span>` : ''}<span class="n">${fmtK(u.tokens)} tok · ${u.secs}s</span></div>
+        </div></article>`).join('')}
+        ${ts.length > shown.length ? `<button class="more">Show the remaining ${ts.length - shown.length} turns</button>` : ''}</div>`;
+    if (jump != null) {
+      const el = reader.querySelector(`.turn[data-i="${jump}"]`), sc = reader.querySelector('.scroll');
+      sc.scrollTo({ top: el.offsetTop - sc.offsetTop - 8, behavior: reduce ? 'auto' : 'smooth' }); el.classList.add('flash');
+      reader.querySelector(`.strip [data-i="${jump}"]`).classList.add('on');
+    }
+  };
+  reader.addEventListener('click', (e) => {
+    if (e.target.closest('.more')) { S.all = true; return renderReader(5); }
+    const b = e.target.closest('.strip button'); if (b) { S.all = true; renderReader(+b.dataset.i); }
+  });
+
+  /* ---------- breakdowns ---------- */
+  const hbars = (el, rows, fmt) => { const max = Math.max(1, ...rows.map((r) => r[1])); el.innerHTML = rows.length ? rows.map(([k, v], i) => `<div class="hbar"><span class="k">${k ?? '<span class="unk">not captured</span>'}</span><div class="track"><div class="fill${k ? '' : ' unk'}" style="width:${Math.max(1, (v / max) * 100)}%;--i:${i}"></div></div><span class="v">${fmt(v)}</span></div>`).join('') : `<div class="empty">Nothing in this window.</div>`; };
+  const renderSide = () => {
+    const tools = {}, models = new Map();
+    view.forEach((t) => { for (const k in t.tools) tools[k] = (tools[k] || 0) + t.tools[k]; models.set(t.model, (models.get(t.model) || 0) + t.tokens); });
+    hbars($('#tools'), Object.entries(tools).sort((a, b) => b[1] - a[1]), (v) => v.toLocaleString('en'));
+    hbars($('#models'), [...models].sort((a, b) => (a[0] === null) - (b[0] === null) || b[1] - a[1]), fmtK);
+  };
+
+  /* ---------- wiring ---------- */
+  const render = (sweep) => { compute(); renderLede(); renderTape(sweep); renderList(); renderReader(); renderSide(); };
+  seg($('#range'), (v) => { S.range = v; render(true); });
+  seg($('#sort'), (v) => { S.sort = v; compute(); renderList(); });
+  $('#q').addEventListener('input', (e) => { S.q = e.target.value; render(false); });
+  $('#theme').addEventListener('click', () => { const r = document.documentElement; r.dataset.theme = r.dataset.theme === 'dark' ? 'light' : 'dark'; });
+  addEventListener('keydown', (e) => {
+    const typing = e.target.tagName === 'INPUT';
+    if (e.key === 'Escape' && typing) { e.target.value = S.q = ''; e.target.blur(); return render(false); }
+    if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
+    if (e.key === '/') { e.preventDefault(); $('#q').focus(); }
+    if (e.key === 'j' || e.key === 'k') { const i = view.findIndex((t) => t.id === S.sel), nx = view[i + (e.key === 'j' ? 1 : -1)]; if (nx) select(nx.id, true); }
+  });
+  let rz; addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => renderTape(false), 120); });
+  render(true);
+})();
+</script>
+</body>
+</html>

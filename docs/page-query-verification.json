@@ -1,0 +1,11 @@
+{
+  "identical_response_digests": 6,
+  "routes": [
+    "projects",
+    "threads?limit=100",
+    "tool-calls?limit=100",
+    "tool-calls?limit=500&offset=1500",
+    "model-turns?limit=500",
+    "search?q=test&limit=25"
+  ]
+}
