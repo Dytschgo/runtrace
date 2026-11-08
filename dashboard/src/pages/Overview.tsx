@@ -16,6 +16,8 @@ import { useSettings } from '../lib/settings';
 import { useWindowDraft, withDraft, zoomRange } from '../lib/timeWindow';
 import { buildForest } from '../lib/tree';
 import { useUrl } from '../lib/url';
+import { dataOf, fromQueries, fromQuery, type Load } from '../lib/load';
+import type { HourRow } from '../lib/types';
 import { ChangeArrow, GapCell, GroupLine, signedPct, TokenTypes } from './overview/parts';
 import { DelegationPanel, KeyTotals, RecentThreadsPanel, ToolsPanel, type ThreadActivity } from './overview/panels';
 import { GROUPS, isGroup, isMetric, isRes, periodBefore, RES_OPTIONS, RES_WORDS } from './overview/trace';
@@ -40,8 +42,10 @@ export default function Overview() {
   const slots = useModelSlots();
   // Every turn in scope, unfiltered by time, so the headline, list and chart agree and follow the slider without a request per day moved.
   // Older history waits until the panels on screen have their data, unless the window reaches back past the recent turns.
+  // A one-way latch: held, then released for good once the window needs older history, the panels on screen have their
+  // data, or the recent read failed. It never closes again.
   const [historyGo, setHistoryGo] = useState(false);
-  const { all: wholeTurns, recent: recentTurns, rows: turnRows, coversFrom } = useLiveTurns(f, true, !historyGo);
+  const { all: wholeTurns, recent: recentTurns, rows: turnRows, coversFrom, coverage: turnCoverage } = useLiveTurns(f, true, !historyGo);
   // Heavy reads slow each other down on the service, so what the chart needs goes first and the rest follows.
   const chartReady = !!(recentTurns.data || wholeTurns.data) || recentTurns.isError;
   const models = useModels(f, chartReady);
@@ -78,14 +82,16 @@ export default function Overview() {
   const pickedPrevious = useOverviews(previousScopes);
   const pickedHourly = useHourlyMany(scopes);
   const pickedTools = useToolAggregatesMany(scopes);
-  const sumCounts = (list: { data?: Record<string, number> }[]) => {
+  const sumCounts = (list: Record<string, number>[]) => {
     const out: Record<string, number> = {};
-    for (const q of list) for (const [k, v] of Object.entries(q.data ?? {})) out[k] = (out[k] ?? 0) + v;
+    for (const counts of list) for (const [k, v] of Object.entries(counts)) out[k] = (out[k] ?? 0) + v;
     return out;
   };
 
-  const c = picks.size ? sumCounts(pickedCounts) : overview.data ?? {};
-  const prev = picks.size ? (previousScopes.length && pickedPrevious.every((q) => q.data) ? sumCounts(pickedPrevious) : undefined) : previous.data;
+  // Picked rows count only once every picked row has loaded; one failure is said as such, never summed as 0.
+  const countsLoad: Load<Record<string, number>> = picks.size ? fromQueries(pickedCounts, sumCounts) : fromQuery(overview);
+  const c = dataOf(countsLoad) ?? {};
+  const prev = picks.size ? (previousScopes.length ? dataOf(fromQueries(pickedPrevious, sumCounts)) : undefined) : previous.data;
   // A comparison needs capture to cover the whole previous window; otherwise it would only measure when capture started.
   const captureStart = firstEver.data?.[0]?.hour;
   const comparable = !!prevWindow && !!prev && !!captureStart && Date.parse(captureStart) <= Date.parse(prevWindow.since);
@@ -111,7 +117,12 @@ export default function Overview() {
   const firstTurn = useMemo(() => scoped.reduce((m, t) => Math.min(m, turnMs(t)), Infinity), [scoped]);
   // The recent turns are enough for a recent window. Anything earlier waits for the whole history, which is on its way in the background.
   const covered = !!wholeTurns.data || (!!live.since && Date.parse(live.since) >= coversFrom);
-  const allTurns = wholeTurns.data || !covered ? wholeTurns : recentTurns;
+  // With the recent read failed, the whole history is the only way left to cover the window.
+  const allTurns = wholeTurns.data || !covered || recentTurns.isError ? wholeTurns : recentTurns;
+  const turnsFailed = turnCoverage(live.since ? Date.parse(live.since) : -Infinity) === 'failed';
+  // The service's model totals answer only "all tokens": for the headline in any grouping, and for the list grouped by model.
+  const headlineFallback = metric === 'total';
+  const listFallback = metric === 'total' && by === 'model';
   const reach = live.until ? Date.parse(live.until) : Math.ceil(Date.now() / 60_000) * 60_000;
   // Capture normally runs every few minutes, so a long silence means nothing after it can be known yet.
   const lastCapture = Date.parse(readiness.data?.collector?.last_successful_sync_at ?? '');
@@ -219,26 +230,29 @@ export default function Overview() {
   const turnsLoading = allTurns.isPending;
   const fromTurns = !!allTurns.data?.complete && scoped.length > 0;
   const empty = fromTurns ? head.records === 0 : allTurns.isSuccess && !summary.total && windowed;
-  // Neither the turns nor the model totals arrived, so the headline is not known, which is not the same as nothing reported.
-  const loadFailed = allTurns.isError && !models.data && (models.isError || !chartReady);
-  const total = unknownWindow ? null : empty ? 0 : fromTurns || metric !== 'total' ? (turnsLoading ? null : head.total) : summary.total;
+  // The turns covering the window could not be read, and the model totals cannot stand in (another measure, or they failed too),
+  // so the headline is not known. Without this a partial sum of the recent days would read as the window's exact total.
+  const loadFailed = turnsFailed && (!headlineFallback || (!models.data && (models.isError || !chartReady)));
+  const total = unknownWindow || loadFailed ? null : empty ? 0 : fromTurns || metric !== 'total' ? (turnsLoading ? null : head.total) : summary.total;
   // A percentage needs both sides to be nearly whole, or it mostly measures what went unreported.
   const wellReported = (t: { reported: number; turns: number }) => metric === 'turns' || t.turns === 0 || t.reported / t.turns >= 0.9;
   const change = previousHead && isKnown(head.total) && isKnown(previousHead.total) && wellReported(head) && wellReported(previousHead) ? delta(head.total, previousHead.total) : null;
   const lines = useMemo<LineTotal[]>(() => {
-    if (fromTurns || (turnsLoading && (metric !== 'total' || by !== 'model'))) {
+    if (fromTurns || (turnsLoading && !listFallback)) {
       // Every model and provider stays listed, ranked by use, so one that was quiet in this window can still be chosen.
       const seen = new Set(listTrace.lines.map((l) => l.key));
       const known = f.model || by === 'project' ? [] : by === 'model' ? [...slots.keys()] : [...new Set([...slots.keys()].flatMap((m) => modelProvider(m) ?? []))];
       const idle = known.filter((k) => !seen.has(k)).flatMap((k) => { const info = idleGroup(by, k, slots); return info ? [{ key: k, value: 0, turns: 0, reported: 0, partial: false, info }] : []; });
       return [...listTrace.lines, ...idle];
     }
+    // Model totals are the wrong numbers for another measure or grouping, so with the turns failed the list shows the error instead.
+    if (turnsFailed && !listFallback) return [];
     // An older service has no turns to sum, but its model totals can still fill the list.
     return modelRows.filter((m) => (m.total_tokens ?? 0) > 0 || (m.observed_provider_turns ?? 0) > 0).map((m) => ({
       key: m.model ?? 'not-recorded', value: m.total_tokens ?? 0, turns: m.observed_provider_turns ?? 0, reported: m.turns_with_usage ?? m.observed_provider_turns ?? 0, partial: !!m.turns_with_usage,
       info: { key: m.model ?? 'not-recorded', label: m.model ?? 'Not recorded', color: m.model ? slots.get(m.model) ?? OTHER_COLOR : OTHER_COLOR, model: m.model ?? null, provider: null, dash: !m.model },
     })).sort((a, b) => b.value - a.value);
-  }, [fromTurns, turnsLoading, metric, by, f.model, listTrace.lines, modelRows, slots]);
+  }, [fromTurns, turnsLoading, turnsFailed, listFallback, metric, by, f.model, listTrace.lines, modelRows, slots]);
   // Some turns reported and some did not, so the sum is at least this much.
   const lowerBound = isKnown(total) && total > 0 && metric !== 'turns' && (fromTurns ? head.reported < head.turns : !!summary.turns && (summary.withUsage ?? 0) < summary.turns);
   // A model can report some fields but no complete total, and that is said plainly.
@@ -312,7 +326,8 @@ export default function Overview() {
   );
   const mainThreads = useMemo(() => inWindow.filter((t) => t.type !== 'child').length, [inWindow]);
 
-  const heat = useMemo(() => buildHeatmap(picks.size ? pickedHourly : hourly.data ?? [], timezone), [picks.size, pickedHourly, hourly.data, timezone]);
+  const hourlyLoad: Load<HourRow[]> = picks.size ? pickedHourly : fromQuery(hourly);
+  const heat = useMemo(() => buildHeatmap(dataOf(hourlyLoad) ?? [], timezone), [hourlyLoad, timezone]);
   // The tokens by type follow the rows chosen too.
   // The parts are taken from turns that reported a total, so they add up to the headline. Turns with parts but no total are counted and named, not mixed in.
   const { typeSummary, partsOnly } = useMemo(() => {
@@ -362,7 +377,7 @@ export default function Overview() {
               </span>
             </div>
             <Segmented label="Group by" value={by} options={GROUPS} onChange={(v) => { setFocus(null); set({ by: v === 'model' ? null : v, pick: null }); }} />
-            <Async<unknown> query={fromTurns ? allTurns : models} skeleton={<SkeletonRows rows={4} label="Loading groups" />} compact empty={<></>} isEmpty={() => !lines.length && !turnsLoading}>
+            <Async<unknown> query={fromTurns || (turnsFailed && !listFallback) ? allTurns : models} skeleton={<SkeletonRows rows={4} label="Loading groups" />} compact empty={<></>} isEmpty={() => !lines.length && !turnsLoading}>
               {() => (
                 <>
                   <ul className="model-lines" onKeyDown={roveTo} aria-label={`${GROUPS.find((g) => g.value === by)!.label}. Arrow keys move between rows.`} data-focus={focus ? 'true' : undefined} data-picking={picks.size ? 'true' : undefined}>
@@ -426,8 +441,8 @@ export default function Overview() {
         </section>
       )}
 
-      {!overview.isError && (
-        <KeyTotals counts={c} previous={prev} comparable={comparable} overview={overview} windowed={!!(f.since || f.until)} turnsSeen={turnRows.length > 0} unscopable={unscopable} unknown={unknownWindow} stale={!!draft || overview.isPlaceholderData} />
+      {(!overview.isError || picks.size > 0) && (
+        <KeyTotals counts={countsLoad} previous={prev} comparable={comparable} windowed={!!(f.since || f.until)} turnsSeen={turnRows.length > 0} unscopable={unscopable} unknown={unknownWindow} stale={!!draft || overview.isPlaceholderData} />
       )}
 
       {unknownWindow ? (
@@ -446,7 +461,7 @@ export default function Overview() {
               <Async<unknown> query={fromTurns ? allTurns : models} skeleton={<SkeletonRows rows={2} label="Loading token types" />} compact>{() => <TokenTypes s={typeSummary} partsOnly={partsOnly} />}</Async>
             </Panel>
             <Panel title="When you work">
-              <Async query={hourly} skeleton={<Skeleton height="10rem" label="Loading activity" />} isEmpty={(d) => !d.length} compact>{() => <ActivityHeatmap data={heat} />}</Async>
+              <Async query={hourlyLoad} skeleton={<Skeleton height="10rem" label="Loading activity" />} isEmpty={(d) => !d.length} compact>{() => <ActivityHeatmap data={heat} />}</Async>
             </Panel>
           </div>
 

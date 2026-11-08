@@ -219,7 +219,7 @@ impl Store {
             return Ok(false);
         }
         let captured = now();
-        self.conn.prepare_cached("INSERT INTO records (id,kind,instance_id,source_id,project_id,thread_id,run_id,occurred_at,source_updated_at,capture_quality,capture_source,source_version,captured_at,payload_hash,data,model,status,tool_name,tool_category,duration_ms,input_tokens,cached_input_tokens,output_tokens,reasoning_tokens,total_tokens,usage_status,redacted_characters,json_characters,facts_version,search_text,search_version,cache_write_tokens,exit_code,agent_provider,resolved_model,usage_scope,usage_source,has_subagents,elapsed_ms,preview_doc) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,lower(json_extract_string(?,'$.content_redacted')),?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data,payload_hash=excluded.payload_hash,source_updated_at=excluded.source_updated_at,captured_at=excluded.captured_at,capture_quality=excluded.capture_quality,source_version=excluded.source_version,project_id=excluded.project_id,thread_id=excluded.thread_id,run_id=excluded.run_id,occurred_at=excluded.occurred_at,model=excluded.model,status=excluded.status,tool_name=excluded.tool_name,tool_category=excluded.tool_category,duration_ms=excluded.duration_ms,input_tokens=excluded.input_tokens,cached_input_tokens=excluded.cached_input_tokens,output_tokens=excluded.output_tokens,reasoning_tokens=excluded.reasoning_tokens,total_tokens=excluded.total_tokens,usage_status=excluded.usage_status,redacted_characters=excluded.redacted_characters,json_characters=excluded.json_characters,facts_version=excluded.facts_version,search_text=excluded.search_text,search_version=excluded.search_version,cache_write_tokens=excluded.cache_write_tokens,exit_code=excluded.exit_code,agent_provider=excluded.agent_provider,resolved_model=excluded.resolved_model,usage_scope=excluded.usage_scope,usage_source=excluded.usage_source,has_subagents=excluded.has_subagents,elapsed_ms=excluded.elapsed_ms,preview_doc=excluded.preview_doc")?.execute(params![key,kind,instance,source,project,thread,run,date,updated,quality,self.capture_source.get(),version,captured,digest,payload,data.get("model").and_then(Value::as_str).or_else(||data.get("requested_model").and_then(Value::as_str)),data.get("status").and_then(Value::as_str),data.get("tool_name").and_then(Value::as_str),data.get("tool_category").and_then(Value::as_str),data.get("duration_ms").and_then(Value::as_i64),data.get("input_tokens").and_then(Value::as_i64),data.get("cached_input_tokens").and_then(Value::as_i64),data.get("output_tokens").and_then(Value::as_i64),data.get("reasoning_tokens").and_then(Value::as_i64),data.get("total_tokens").and_then(Value::as_i64),data.get("usage_status").and_then(Value::as_str),data.get("content_redacted").and_then(Value::as_str).map(|s|s.chars().count() as i64),payload.chars().count() as i64,3i32,payload,2i32,data.get("cache_write_tokens").and_then(Value::as_i64),data.get("exit_code").and_then(Value::as_i64),data.get("provider").and_then(Value::as_str).filter(|s|!s.is_empty()).or_else(||data.get("provider_thread_id").and_then(Value::as_str).and_then(provider_in_id)),data.get("resolved_model").and_then(Value::as_str).filter(|s|!s.is_empty()),data.get("usage_scope").and_then(Value::as_str),data.get("usage_source").and_then(Value::as_str),data.get("has_subagents").and_then(Value::as_bool),elapsed_ms(&data),preview_doc(&data)])?;
+        self.conn.prepare_cached("INSERT INTO records (id,kind,instance_id,source_id,project_id,thread_id,run_id,occurred_at,source_updated_at,capture_quality,capture_source,source_version,captured_at,payload_hash,data,model,status,tool_name,tool_category,duration_ms,input_tokens,cached_input_tokens,output_tokens,reasoning_tokens,total_tokens,usage_status,redacted_characters,json_characters,facts_version,search_text,search_version,cache_write_tokens,exit_code,agent_provider,resolved_model,usage_scope,usage_source,has_subagents,elapsed_ms,preview_doc) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,lower(json_extract_string(?,'$.content_redacted')),?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data,payload_hash=excluded.payload_hash,source_updated_at=excluded.source_updated_at,captured_at=excluded.captured_at,capture_quality=excluded.capture_quality,source_version=excluded.source_version,project_id=excluded.project_id,thread_id=excluded.thread_id,run_id=excluded.run_id,occurred_at=excluded.occurred_at,model=excluded.model,status=excluded.status,tool_name=excluded.tool_name,tool_category=excluded.tool_category,duration_ms=excluded.duration_ms,input_tokens=excluded.input_tokens,cached_input_tokens=excluded.cached_input_tokens,output_tokens=excluded.output_tokens,reasoning_tokens=excluded.reasoning_tokens,total_tokens=excluded.total_tokens,usage_status=excluded.usage_status,redacted_characters=excluded.redacted_characters,json_characters=excluded.json_characters,facts_version=excluded.facts_version,search_text=excluded.search_text,search_version=excluded.search_version,cache_write_tokens=excluded.cache_write_tokens,exit_code=excluded.exit_code,agent_provider=excluded.agent_provider,resolved_model=excluded.resolved_model,usage_scope=excluded.usage_scope,usage_source=excluded.usage_source,has_subagents=excluded.has_subagents,elapsed_ms=excluded.elapsed_ms,preview_doc=excluded.preview_doc")?.execute(params![key,kind,instance,source,project,thread,run,date,updated,quality,self.capture_source.get(),version,captured,digest,payload,data.get("model").and_then(Value::as_str).or_else(||data.get("requested_model").and_then(Value::as_str)),data.get("status").and_then(Value::as_str),data.get("tool_name").and_then(Value::as_str),data.get("tool_category").and_then(Value::as_str),data.get("duration_ms").and_then(Value::as_i64),data.get("input_tokens").and_then(Value::as_i64),data.get("cached_input_tokens").and_then(Value::as_i64),data.get("output_tokens").and_then(Value::as_i64),data.get("reasoning_tokens").and_then(Value::as_i64),data.get("total_tokens").and_then(Value::as_i64),data.get("usage_status").and_then(Value::as_str),data.get("content_redacted").and_then(Value::as_str).map(|s|s.chars().count() as i64),payload.chars().count() as i64,FACTS_CURRENT,payload,SEARCH_CURRENT,data.get("cache_write_tokens").and_then(Value::as_i64),data.get("exit_code").and_then(Value::as_i64),data.get("provider").and_then(Value::as_str).filter(|s|!s.is_empty()).or_else(||data.get("provider_thread_id").and_then(Value::as_str).and_then(provider_in_id)),data.get("resolved_model").and_then(Value::as_str).filter(|s|!s.is_empty()),data.get("usage_scope").and_then(Value::as_str),data.get("usage_source").and_then(Value::as_str),data.get("has_subagents").and_then(Value::as_bool),elapsed_ms(&data),preview_doc(&data)])?;
         self.conn
             .prepare_cached(
                 "INSERT INTO events VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING",
@@ -370,13 +370,39 @@ pub fn time_before(a: &str, b: &str) -> bool {
     parse_time(a).zip(parse_time(b)).is_some_and(|(a, b)| a < b)
 }
 
+/// How far each record's derived columns are filled, stored in `facts_version`. A record only moves forward, one step
+/// per pass, except that retention clears content and sends it back to the start:
+///
+/// ```text
+/// FACTS_NONE (0 or NULL) --hydrate_facts--> FACTS_BASE (1) --hydrate_more_facts--> FACTS_CURRENT (3)
+///                                           (2 = an older build's second step; it also moves to FACTS_CURRENT)
+/// any --retain_content--> FACTS_NONE
+/// ```
+/// `put` writes new records at FACTS_CURRENT directly. Opening the database runs every pass, so serving always reads
+/// FACTS_CURRENT rows. `search_version` is the same idea for the search cache, with one current stage.
+pub const FACTS_NONE: i32 = 0;
+pub const FACTS_BASE: i32 = 1;
+/// The second step of builds before the list view existed. Kept so their databases still move forward.
+pub const FACTS_OLD_SECOND: i32 = 2;
+pub const FACTS_CURRENT: i32 = 3;
+pub const SEARCH_CURRENT: i32 = 2;
+
+/// Writes the stage names above into a statement, so the SQL says which stage it means instead of a bare number.
+fn stages(sql: &str) -> String {
+    sql.replace("{FACTS_NONE}", &FACTS_NONE.to_string())
+        .replace("{FACTS_BASE}", &FACTS_BASE.to_string())
+        .replace("{FACTS_OLD_SECOND}", &FACTS_OLD_SECOND.to_string())
+        .replace("{FACTS_CURRENT}", &FACTS_CURRENT.to_string())
+        .replace("{SEARCH_CURRENT}", &SEARCH_CURRENT.to_string())
+}
+
 /// Populate metadata in small chunks. This never changes original captured JSON.
 pub fn hydrate_facts(conn: &Connection) -> Result<()> {
     loop {
         let ids: Vec<String> = conn
-            .prepare(
-                "SELECT id FROM records WHERE facts_version=0 OR facts_version IS NULL LIMIT 128",
-            )?
+            .prepare(&stages(
+                "SELECT id FROM records WHERE facts_version={FACTS_NONE} OR facts_version IS NULL LIMIT 128",
+            ))?
             .query_map([], |r| r.get(0))?
             .collect::<duckdb::Result<_>>()?;
         if ids.is_empty() {
@@ -386,8 +412,9 @@ pub fn hydrate_facts(conn: &Connection) -> Result<()> {
             .collect::<Vec<_>>()
             .join(",");
         let sql = format!(
-            "WITH extracted AS (SELECT id,json_extract_string(data,['$.model','$.requested_model','$.status','$.tool_name','$.tool_category','$.duration_ms','$.input_tokens','$.cached_input_tokens','$.output_tokens','$.reasoning_tokens','$.total_tokens','$.usage_status','$.content_redacted']) f,length(data::VARCHAR) json_len FROM records WHERE id IN ({placeholders})) UPDATE records r SET model=coalesce(e.f[1],e.f[2]),status=e.f[3],tool_name=e.f[4],tool_category=e.f[5],duration_ms=try_cast(e.f[6] AS BIGINT),input_tokens=try_cast(e.f[7] AS BIGINT),cached_input_tokens=try_cast(e.f[8] AS BIGINT),output_tokens=try_cast(e.f[9] AS BIGINT),reasoning_tokens=try_cast(e.f[10] AS BIGINT),total_tokens=CASE WHEN e.f[12]='complete' THEN try_cast(e.f[11] AS BIGINT) ELSE NULL END,usage_status=e.f[12],redacted_characters=length(e.f[13]),json_characters=e.json_len,facts_version=1 FROM extracted e WHERE r.id=e.id"
+            "WITH extracted AS (SELECT id,json_extract_string(data,['$.model','$.requested_model','$.status','$.tool_name','$.tool_category','$.duration_ms','$.input_tokens','$.cached_input_tokens','$.output_tokens','$.reasoning_tokens','$.total_tokens','$.usage_status','$.content_redacted']) f,length(data::VARCHAR) json_len FROM records WHERE id IN ({placeholders})) UPDATE records r SET model=coalesce(e.f[1],e.f[2]),status=e.f[3],tool_name=e.f[4],tool_category=e.f[5],duration_ms=try_cast(e.f[6] AS BIGINT),input_tokens=try_cast(e.f[7] AS BIGINT),cached_input_tokens=try_cast(e.f[8] AS BIGINT),output_tokens=try_cast(e.f[9] AS BIGINT),reasoning_tokens=try_cast(e.f[10] AS BIGINT),total_tokens=CASE WHEN e.f[12]='complete' THEN try_cast(e.f[11] AS BIGINT) ELSE NULL END,usage_status=e.f[12],redacted_characters=length(e.f[13]),json_characters=e.json_len,facts_version={FACTS_BASE} FROM extracted e WHERE r.id=e.id"
         );
+        let sql = stages(&sql);
         conn.execute(&sql, duckdb::params_from_iter(ids))?;
     }
     hydrate_more_facts(conn)
@@ -396,7 +423,9 @@ pub fn hydrate_facts(conn: &Connection) -> Result<()> {
 /// The later analytic columns and the list view (version 3), filled in one pass for rows written before they existed or restored from an older snapshot.
 pub fn hydrate_more_facts(conn: &Connection) -> Result<()> {
     let pending: i64 = conn.query_row(
-        "SELECT count(*) FROM records WHERE facts_version IN (1,2)",
+        &stages(
+            "SELECT count(*) FROM records WHERE facts_version IN ({FACTS_BASE},{FACTS_OLD_SECOND})",
+        ),
         [],
         |r| r.get(0),
     )?;
@@ -407,7 +436,8 @@ pub fn hydrate_more_facts(conn: &Connection) -> Result<()> {
     let end: i64 = conn.query_row("SELECT coalesce(max(rowid),-1)+1 FROM records", [], |r| {
         r.get(0)
     })?;
-    let sql = "UPDATE records SET  cache_write_tokens=try_cast(json_extract_string(data,'$.cache_write_tokens') AS BIGINT),  exit_code=try_cast(json_extract_string(data,'$.exit_code') AS BIGINT),  agent_provider=coalesce(nullif(json_extract_string(data,'$.provider'),''),nullif(regexp_extract(coalesce(json_extract_string(data,'$.provider_thread_id'),''),'(?:^|:)provider:([^:]+)',1),'')),  resolved_model=nullif(json_extract_string(data,'$.resolved_model'),''),  usage_scope=json_extract_string(data,'$.usage_scope'),  usage_source=json_extract_string(data,'$.usage_source'),  has_subagents=try_cast(json_extract_string(data,'$.has_subagents') AS BOOLEAN),  elapsed_ms=CASE WHEN duration_ms>=0 THEN duration_ms WHEN (epoch_ms(try_cast(json_extract_string(data,'$.completed_at') AS TIMESTAMPTZ))-epoch_ms(try_cast(json_extract_string(data,'$.started_at') AS TIMESTAMPTZ)))>=0 THEN (epoch_ms(try_cast(json_extract_string(data,'$.completed_at') AS TIMESTAMPTZ))-epoch_ms(try_cast(json_extract_string(data,'$.started_at') AS TIMESTAMPTZ))) END,  preview_doc=json_merge_patch(json_merge_patch(data,'{\"content_ciphertext\":null,\"repository_path_encrypted\":null,\"content_redacted\":null}'),json_object('content_redacted',left(json_extract_string(data,'$.content_redacted'),512),'content_truncated',length(json_extract_string(data,'$.content_redacted'))>512))::VARCHAR,  facts_version=3 WHERE facts_version IN (1,2)";
+    let sql = "UPDATE records SET  cache_write_tokens=try_cast(json_extract_string(data,'$.cache_write_tokens') AS BIGINT),  exit_code=try_cast(json_extract_string(data,'$.exit_code') AS BIGINT),  agent_provider=coalesce(nullif(json_extract_string(data,'$.provider'),''),nullif(regexp_extract(coalesce(json_extract_string(data,'$.provider_thread_id'),''),'(?:^|:)provider:([^:]+)',1),'')),  resolved_model=nullif(json_extract_string(data,'$.resolved_model'),''),  usage_scope=json_extract_string(data,'$.usage_scope'),  usage_source=json_extract_string(data,'$.usage_source'),  has_subagents=try_cast(json_extract_string(data,'$.has_subagents') AS BOOLEAN),  elapsed_ms=CASE WHEN duration_ms>=0 THEN duration_ms WHEN (epoch_ms(try_cast(json_extract_string(data,'$.completed_at') AS TIMESTAMPTZ))-epoch_ms(try_cast(json_extract_string(data,'$.started_at') AS TIMESTAMPTZ)))>=0 THEN (epoch_ms(try_cast(json_extract_string(data,'$.completed_at') AS TIMESTAMPTZ))-epoch_ms(try_cast(json_extract_string(data,'$.started_at') AS TIMESTAMPTZ))) END,  preview_doc=json_merge_patch(json_merge_patch(data,'{\"content_ciphertext\":null,\"repository_path_encrypted\":null,\"content_redacted\":null}'),json_object('content_redacted',left(json_extract_string(data,'$.content_redacted'),512),'content_truncated',length(json_extract_string(data,'$.content_redacted'))>512))::VARCHAR,  facts_version={FACTS_CURRENT} WHERE facts_version IN ({FACTS_BASE},{FACTS_OLD_SECOND})";
+    let sql = stages(sql);
     // The bounds are written into the statement: as parameters they are not used to narrow the scan, and every slice reads the whole table.
     tracing::info!(
         operation = "hydrate_more_facts",
@@ -520,13 +550,13 @@ pub fn verify_original_records(conn: &Connection, prior: &str) -> Result<i64> {
 pub fn hydrate_search(conn: &Connection) -> Result<()> {
     loop {
         let start: Option<i64> = conn.query_row(
-            "SELECT min(rowid) FROM records WHERE search_version IS DISTINCT FROM 2",
+            &stages("SELECT min(rowid) FROM records WHERE search_version IS DISTINCT FROM {SEARCH_CURRENT}"),
             [],
             |r| r.get(0),
         )?;
         let Some(start) = start else { break };
         conn.execute(
-            "UPDATE records SET search_text=lower(json_extract_string(data,'$.content_redacted')),search_version=2 WHERE rowid>=? AND rowid<? AND (search_version IS DISTINCT FROM 2)",
+            &stages("UPDATE records SET search_text=lower(json_extract_string(data,'$.content_redacted')),search_version={SEARCH_CURRENT} WHERE rowid>=? AND rowid<? AND (search_version IS DISTINCT FROM {SEARCH_CURRENT})"),
             params![start, start + 512])?;
     }
     Ok(())
@@ -537,6 +567,6 @@ pub fn retain_content(conn: &Connection, days: i64) -> Result<()> {
     // The cutoff is worked out here: date arithmetic on time-zone-aware values needs DuckDB's ICU extension, which is not built in.
     let now = pinned_now().unwrap_or_else(chrono::Utc::now);
     let cutoff = (now - chrono::Duration::days(days)).to_rfc3339();
-    conn.execute("UPDATE records SET data=json_merge_patch(data,'{\"content_redacted\":null,\"content_ciphertext\":null}'),search_text=NULL,search_version=2,facts_version=0 WHERE kind IN ('prompt','answer','tool','agent') AND try_cast(occurred_at AS TIMESTAMPTZ) < try_cast(? AS TIMESTAMPTZ)", [cutoff])?;
+    conn.execute(&stages("UPDATE records SET data=json_merge_patch(data,'{\"content_redacted\":null,\"content_ciphertext\":null}'),search_text=NULL,search_version={SEARCH_CURRENT},facts_version={FACTS_NONE} WHERE kind IN ('prompt','answer','tool','agent') AND try_cast(occurred_at AS TIMESTAMPTZ) < try_cast(? AS TIMESTAMPTZ)"), [cutoff])?;
     hydrate_facts(conn)
 }

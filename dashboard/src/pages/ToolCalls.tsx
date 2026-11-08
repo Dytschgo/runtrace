@@ -29,7 +29,7 @@ export default function ToolCalls() {
   const { params, set, hrefPatch, hrefPage } = useUrl();
   const { timezone } = useSettings();
   const f = useFilters();
-  const { query: scan, reading, progress, total: totalTools } = useToolAnalysis(f, params.get('scan') === 'all');
+  const { query: scan, reading, progress, total: totalTools, failed: scanFailed, retryFull } = useToolAnalysis(f, params.get('scan') === 'all');
   const tool = params.get('tool') ?? '';
   const status = params.get('status') ?? '';
   const category = params.get('category') ?? '';
@@ -95,7 +95,7 @@ export default function ToolCalls() {
       <PageHeader
         title="Tool Calls"
         lead="What ran and what failed."
-        action={scan.data && <ScanNote scanned={scan.data.scanned} complete={scan.data.complete} noun="calls" total={totalTools} reading={reading} progress={progress} onExpand={() => set({ scan: 'all' })} />}
+        action={scan.data && <ScanNote scanned={scan.data.scanned} complete={scan.data.complete} noun="calls" total={totalTools} reading={reading} progress={progress} failed={scanFailed} onRetry={retryFull} onExpand={() => set({ scan: 'all' })} />}
       />
 
       <Async query={scan} skeleton={<Skeleton height="6rem" label="Loading tool calls" />} isEmpty={(d) => !d.rows.length} empty={<Panel><NoRecords /></Panel>}>

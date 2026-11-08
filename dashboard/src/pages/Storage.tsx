@@ -6,6 +6,8 @@ import { useSettings } from '../lib/settings';
 
 const LABEL: Record<string, string> = { tool: 'Tool calls', answer: 'Answers', prompt: 'Prompts', run: 'Runs', model_turn: 'Provider turns', thread: 'Threads', agent: 'Sub-agents', project: 'Projects', instance: 'Instances', external_request: 'External requests' };
 const SIZE_WHY = 'The API does not report this yet. Run the command below for local numbers.';
+/** A size from the storage query: not loaded when that query failed, unknown when it answered without it. */
+const size = (failed: boolean, label?: string) => (failed ? <NotLoaded /> : <Unknown label={label} why={SIZE_WHY} />);
 
 export default function Storage() {
   const { timezone } = useSettings();
@@ -40,9 +42,9 @@ export default function Storage() {
       {storage.isPending ? <Skeleton height="6rem" label="Loading storage" /> : (
         <StatRow label="Storage summary">
           <Stat label="Current records" value={countsFailed ? <NotLoaded /> : countsKnown ? fmtInt(records) : '…'} sub={countsKnown ? `${fmtInt(rows.length)} record kinds` : undefined} />
-          <Stat label="Event revisions" value={isKnown(events) ? fmtInt(events) : <Unknown label="Unknown" why={SIZE_WHY} />} sub={isKnown(events) && records ? `${(events / records).toFixed(2)} per record` : undefined} />
-          <Stat label="Database size" value={isKnown(s?.duckdb_bytes) ? fmtBytes(s.duckdb_bytes) : <Unknown why={SIZE_WHY} />} sub={s?.capture_source ? `Source ${s.capture_source}` : undefined} />
-          <Stat label="Redacted text" value={isKnown(redacted) ? `${fmtCompact(redacted)} chars` : <Unknown why={SIZE_WHY} />} sub={isKnown(normalized) ? `${fmtCompact(normalized)} chars of normalized JSON` : undefined} />
+          <Stat label="Event revisions" value={isKnown(events) ? fmtInt(events) : size(storage.isError, 'Unknown')} sub={isKnown(events) && records ? `${(events / records).toFixed(2)} per record` : undefined} />
+          <Stat label="Database size" value={isKnown(s?.duckdb_bytes) ? fmtBytes(s.duckdb_bytes) : size(storage.isError)} sub={s?.capture_source ? `Source ${s.capture_source}` : undefined} />
+          <Stat label="Redacted text" value={isKnown(redacted) ? `${fmtCompact(redacted)} chars` : size(storage.isError)} sub={isKnown(normalized) ? `${fmtCompact(normalized)} chars of normalized JSON` : undefined} />
         </StatRow>
       )}
       <div className="split">
@@ -53,11 +55,11 @@ export default function Storage() {
         </Panel>
         <Panel className="grow-1" title="Freshness and span">
           <dl className="facts">
-            <div><dt>Oldest record</dt><dd>{s?.oldest_at ? fmtDateTime(s.oldest_at, timezone) : <Unknown label="Unknown" why={SIZE_WHY} />}</dd></div>
+            <div><dt>Oldest record</dt><dd>{s?.oldest_at ? fmtDateTime(s.oldest_at, timezone) : size(storage.isError, 'Unknown')}</dd></div>
             <div><dt>Newest record</dt><dd>{s?.newest_at || latest.data ? fmtDateTime(s?.newest_at ?? latest.data?.occurred_at, timezone) : latest.isPending ? '…' : <Unknown label="Unknown" />}</dd></div>
             <div><dt>Latest write</dt><dd>{latest.data?.captured_at ? fmtDateTime(latest.data.captured_at, timezone) : latest.isPending ? '…' : <Unknown label="Unknown" />}</dd></div>
             <div><dt>Source version</dt><dd className="mono">{latest.data?.source_version ?? 'Unknown'}</dd></div>
-            <div><dt>Archive size</dt><dd>{isKnown(s?.archive_bytes) ? fmtBytes(s.archive_bytes) : <Unknown why={SIZE_WHY} />}</dd></div>
+            <div><dt>Archive size</dt><dd>{isKnown(s?.archive_bytes) ? fmtBytes(s.archive_bytes) : size(storage.isError)}</dd></div>
           </dl>
         </Panel>
       </div>

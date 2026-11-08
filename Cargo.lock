@@ -1782,7 +1782,7 @@ dependencies = [
 
 [[package]]
 name = "runtrace"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "axum",
@@ -1792,6 +1792,7 @@ dependencies = [
  "hex",
  "rust-embed",
  "self-replace",
+ "serde",
  "serde_json",
  "sha2 0.10.9",
  "t3ui-core",
@@ -2217,7 +2218,7 @@ dependencies = [
 
 [[package]]
 name = "t3ui-core"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "chacha20poly1305",

@@ -5,7 +5,7 @@ import { ChevronRight, Folder } from 'lucide-react';
 import { ActivityChart } from '../components/charts';
 import { DataTable, type Column } from '../components/DataTable';
 import { TokenFacts } from '../components/tokens';
-import { AppLink, Async, ChartPanel, EmptyState, NoRecords, PageHeader, Panel, plural, RankedBars, Skeleton, SkeletonRows, Stat, StatRow, Tag, Tokens, Unknown, NotYetPage } from '../components/ui';
+import { AppLink, Async, ChartPanel, EmptyState, NoRecords, NotLoaded, PageHeader, Panel, plural, RankedBars, Skeleton, SkeletonRows, Stat, StatRow, Tag, Tokens, Unknown, NotYetPage } from '../components/ui';
 import { bucketActivity, tokensByKey, tokenSummary } from '../lib/analytics';
 import { useAgents, useFilters, useHourly, useModels, useModelTurns, useOverview, useOverviews, useProjects, useThreads, useUsage } from '../lib/data';
 import type { Filters } from '../lib/filters';
@@ -23,6 +23,8 @@ interface Row {
   tokens: number | null; share: number;
   /** Some provider turns here reported no total, so the tokens are at least this much. */
   atLeast: boolean;
+  /** This project's own counts were asked for and the request failed, so its blanks are not loaded rather than not counted. */
+  countsFailed: boolean;
 }
 
 export default function Projects() {
@@ -54,6 +56,7 @@ export default function Projects() {
         tools: pick(u?.observed_tool_calls, 'tool'), agents: pick(u?.observed_agents, 'agent'),
         tokens: u ? u.total_tokens : tokenFallback.get(p.source_id)?.total ?? null, share: 0,
         atLeast: !!u && u.total_tokens !== null && u.reported_turns !== undefined && u.reported_turns < u.observed_provider_turns,
+        countsFailed: !u && !usageReady && i < PER_PROJECT && !!stats[i]?.isError,
       };
     });
     const max = Math.max(1, ...raw.map((r) => r.tokens ?? 0));
@@ -61,7 +64,7 @@ export default function Projects() {
   }, [list, usage.data, stats, tokenFallback, needsFallback]);
 
   const loading = usage.isPending || (needsFallback && stats.some((q) => q.isPending));
-  const num = (v: number | null) => (v !== null ? fmtInt(v) : loading ? <span className="fine" role="status" aria-label="Loading">…</span> : <Unknown label="Not counted" why={`Only the first ${PER_PROJECT} projects are counted one by one when the service has no project totals.`} />);
+  const num = (v: number | null, failed = false) => (v !== null ? fmtInt(v) : failed ? <NotLoaded /> : loading ? <span className="fine" role="status" aria-label="Loading">…</span> : <Unknown label="Not counted" why={`Only the first ${PER_PROJECT} projects are counted one by one when the service has no project totals.`} />);
   const hasTokens = loading || rows.some((r) => r.tokens !== null);
   const columns: Column<Row>[] = [
     {
@@ -83,12 +86,12 @@ export default function Projects() {
         </span>
       ),
     }] : []),
-    { key: 'threads', header: 'Threads', align: 'end', sort: (r) => r.threads, render: (r) => num(r.threads) },
-    { key: 'prompts', header: 'Prompts', align: 'end', sort: (r) => r.prompts, render: (r) => num(r.prompts) },
-    { key: 'runs', header: 'Runs', align: 'end', sort: (r) => r.runs, render: (r) => num(r.runs) },
-    { key: 'turns', header: 'Provider turns', align: 'end', sort: (r) => r.turns, render: (r) => num(r.turns) },
-    { key: 'tools', header: 'Tool calls', align: 'end', sort: (r) => r.tools, render: (r) => num(r.tools) },
-    { key: 'agents', header: 'Sub-agents', align: 'end', sort: (r) => r.agents, render: (r) => num(r.agents) },
+    { key: 'threads', header: 'Threads', align: 'end', sort: (r) => r.threads, render: (r) => num(r.threads, r.countsFailed) },
+    { key: 'prompts', header: 'Prompts', align: 'end', sort: (r) => r.prompts, render: (r) => num(r.prompts, r.countsFailed) },
+    { key: 'runs', header: 'Runs', align: 'end', sort: (r) => r.runs, render: (r) => num(r.runs, r.countsFailed) },
+    { key: 'turns', header: 'Provider turns', align: 'end', sort: (r) => r.turns, render: (r) => num(r.turns, r.countsFailed) },
+    { key: 'tools', header: 'Tool calls', align: 'end', sort: (r) => r.tools, render: (r) => num(r.tools, r.countsFailed) },
+    { key: 'agents', header: 'Sub-agents', align: 'end', sort: (r) => r.agents, render: (r) => num(r.agents, r.countsFailed) },
     { key: 'created', header: 'First seen', sort: (r) => r.created, render: (r) => <time dateTime={r.created}>{fmtDateTime(r.created, timezone)}</time> },
     { key: 'detail', header: 'Detail', render: (r) => <AppLink className="link" href={hrefPatch({ project: f.project === r.id ? null : r.id })} ariaCurrent={f.project === r.id ? 'true' : undefined} ariaLabel={`${f.project === r.id ? 'Close details for' : 'Show details for'} ${r.name}`}>{f.project === r.id ? 'Close' : 'Show'}</AppLink> },
   ];

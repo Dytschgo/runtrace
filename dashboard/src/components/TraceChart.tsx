@@ -51,7 +51,9 @@ export function TraceChart({ rows, series, focus, replay, height: tall = 400, st
   const [width, setWidth] = useState(0);
   const [pointer, setPointer] = useState<number | null>(null);
   // A click pins the reading, so it can be read at leisure and a period opened from it. Nothing changes the window by accident.
-  const [pinnedAt, setPinned] = useState<number | null>(null);
+  // A pinned reading is held by the start time of its bucket, not its position: a live window drops its oldest bucket every
+  // so often, and a position would then point at the next bucket. A bucket that leaves the window lets go of the pin.
+  const [pinnedT, setPinned] = useState<number | null>(null);
   // A tap on a pinned reading lets go, but only when the press began on it. The click that follows the tap which pinned it lands there too.
   const tipPress = useRef(false);
   const [band, setBand] = useState<{ from: number; to: number } | null>(null);
@@ -72,7 +74,8 @@ export function TraceChart({ rows, series, focus, replay, height: tall = 400, st
 
   const height = width > 0 && width < 640 ? Math.min(tall, 280) : tall;
   const n = rows.length;
-  const pinned = pinnedAt !== null && pinnedAt < n ? pinnedAt : null;
+  const pinnedIndex = pinnedT === null ? -1 : rows.findIndex((r) => r.t === pinnedT);
+  const pinned = pinnedIndex >= 0 ? pinnedIndex : null;
   const hover = pinned ?? pointer;
   const max = useMemo(() => {
     const tops = rows.map((r) => (stacked ? series.reduce((s, x) => s + Number(r[x.key] ?? 0), 0) : Math.max(0, ...series.map((x) => Number(r[x.key] ?? 0)))));
@@ -171,7 +174,7 @@ export function TraceChart({ rows, series, focus, replay, height: tall = 400, st
       // A second tap on the same point lets go, like a second click.
       const i = indexAt(e.clientX);
       const release = pinned === i;
-      setPinned(release ? null : i);
+      setPinned(release ? null : rows[i]?.t ?? null);
       setPointer(release ? null : i);
       return;
     }
@@ -197,7 +200,7 @@ export function TraceChart({ rows, series, focus, replay, height: tall = 400, st
     if (!p) return;
     // A drag opens the stretch it covers. A plain click pins the reading there, and a second click on it lets go.
     if (p.moved && chosen && chosen.to > chosen.from) { setPinned(null); onZoom?.(rows[chosen.from].t, rows[chosen.to].end); }
-    else if (!p.moved) setPinned((cur) => (cur === p.i ? null : p.i));
+    else if (!p.moved) { const t = rows[p.i]?.t ?? null; setPinned((cur) => (cur === t ? null : t)); }
   };
 
   // A tap reads a point, and a tap anywhere else puts it away.

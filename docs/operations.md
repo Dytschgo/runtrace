@@ -4,7 +4,7 @@ A release install keeps the program, settings, data and logs in the per-user fol
 
 ```sh
 runtrace start          # update the database in the foreground, then start the service and wait until it answers
-runtrace status
+runtrace status         # add --json for one object: state running, stopped or port_in_use, with version and collector
 runtrace capture pause
 runtrace capture resume
 runtrace stop

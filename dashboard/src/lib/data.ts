@@ -1,10 +1,11 @@
 import { hasTurnUsage } from './entities';
-import { useMemo, useState, useSyncExternalStore } from 'react';
+import { useCallback, useMemo, useState, useSyncExternalStore } from 'react';
 import { keepPreviousData, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { tokensByKey, type ThreadTokens, type ToolCoverage, type ToolStat, type ToolSummary } from './analytics';
 import { getEntities, getJson, scanHourly, scanPages } from './api';
 import { toAgent, toThread, toTool, toTurn, type TurnRow } from './entities';
 import { apiParams, resolveFilters, type Filters, DEFAULT_RANGE } from './filters';
+import { fromQueries, type Load, type LoadState } from './load';
 import { assignModelColors } from './modelColors';
 import type { Entity, Envelope, HourRow, KindCount, ModelRow, QualityRow, StorageResponse, UsageRow } from './types';
 import { useUrl } from './url';
@@ -106,16 +107,18 @@ const addUp = (rows: Record<string, unknown>[], key: string) => {
 };
 
 /** The API takes one model or project at a time, so a selection of several asks for each and adds the answers up. */
-export function useHourlyMany(list: Filters[]) {
+/** Hours for several scopes added together. Ready only when every scope has loaded, so a partial sum is never shown. */
+export function useHourlyMany(list: Filters[]): Load<HourRow[]> {
   return useQueries({
     queries: list.map((f) => ({ queryKey: ['hourly', apiParams('activity/hourly', f).toString()], queryFn: ({ signal }: { signal: AbortSignal }) => scanHourly<HourRow>(apiParams('activity/hourly', f), signal) })),
-    combine: (results) => addUp(results.flatMap((r) => (r.data ?? []) as unknown as Record<string, unknown>[]), 'hour') as unknown as HourRow[],
+    combine: (results) => fromQueries(results, (lists) => addUp(lists.flat() as unknown as Record<string, unknown>[], 'hour') as unknown as HourRow[]),
   });
 }
-export function useToolAggregatesMany(list: Filters[]) {
+/** Tool counts for several scopes added together. Ready only when every scope has loaded. */
+export function useToolAggregatesMany(list: Filters[]): Load<ToolStat[]> {
   return useQueries({
     queries: list.map((f) => ({ queryKey: ['usage/tools', apiParams('usage/tools', f).toString()], retry: false, queryFn: async ({ signal }: { signal: AbortSignal }) => (await getJson<Envelope<ToolStat>>('usage/tools', apiParams('usage/tools', f), signal)).data ?? [] })),
-    combine: (results) => (addUp(results.flatMap((r) => (r.data ?? []) as unknown as Record<string, unknown>[]), 'name') as unknown as ToolStat[]).sort((a, b) => b.calls - a.calls),
+    combine: (results) => fromQueries(results, (lists) => (addUp(lists.flat() as unknown as Record<string, unknown>[], 'name') as unknown as ToolStat[]).sort((a, b) => b.calls - a.calls)),
   });
 }
 
@@ -206,7 +209,22 @@ export function useLiveTurns(f: Pick<Filters, 'project' | 'instance'>, enabled =
     for (const t of tail.data) merged.set(t.id, t);
     return [...merged.values()];
   }, [all.data, recent.data, tail.data]);
-  return { all, recent, rows, coversFrom };
+  /**
+   * Whether the turns read so far cover a window that starts at `since` (milliseconds; -Infinity for all history). The one
+   * place that answers it, so every page agrees:
+   *   ready    the whole history has arrived, or the window starts within the recent days and those have arrived
+   *   failed   every read that could cover the window has failed, so its totals are not known
+   *   loading  otherwise, including while the whole history is held back for what is on screen
+   */
+  const coverage = useCallback((since: number): LoadState => {
+    if (all.data) return 'ready';
+    if (since >= coversFrom) {
+      if (recent.data) return 'ready';
+      return recent.isError && all.isError ? 'failed' : 'loading';
+    }
+    return all.isError ? 'failed' : 'loading';
+  }, [all.data, all.isError, recent.data, recent.isError, coversFrom]);
+  return { all, recent, rows, coversFrom, coverage };
 }
 
 /** Token totals per thread, adding only turns that reported usage. */
@@ -256,14 +274,29 @@ export function useToolAggregates(f: Filters, enabled = true) {
  * Shows the newest calls at once, then swaps in the full history when it arrives. Above the
  * automatic limit, reading everything waits for the person to ask, because each row carries its content.
  */
+/**
+ * States: the sample is shown; it is complete, or more exist. Then the full read waits for the total, starts by itself
+ * (up to the automatic limit) or waits for "Analyze all"; it reads with progress, and either replaces the sample or fails.
+ * A failed full read keeps the sample on screen, says so, and can be retried.
+ */
 export function useToolAnalysis(f: Filters, forceAll = false) {
   const sample = useToolScan(f);
   const incomplete = sample.data?.complete === false;
   const total = useOverview(f, incomplete).data?.tool;
   const wantsFull = incomplete && (forceAll || (total !== undefined && total <= AUTO_FULL_SCAN));
-  const [progress, setProgress] = useState(0);
-  const full = useToolScan(f, TOOL_ALL, wantsFull, setProgress);
-  return { query: full.data ? full : sample, reading: wantsFull && full.isFetching, progress, total, fullError: full.error };
+  // Progress belongs to one filter, so a new read starts from zero rather than the last read's count.
+  const scope = apiParams('tool-calls', f).toString();
+  const [progress, setProgress] = useState<{ scope: string; rows: number }>({ scope, rows: 0 });
+  const full = useToolScan(f, TOOL_ALL, wantsFull, (rows) => setProgress({ scope, rows }));
+  const failed = wantsFull && full.isError && !full.isFetching;
+  return {
+    query: full.data ? full : sample,
+    reading: wantsFull && full.isFetching,
+    progress: progress.scope === scope ? progress.rows : 0,
+    total,
+    failed,
+    retryFull: () => { void full.refetch(); },
+  };
 }
 
 /** One page of the record feed, of every kind or of one kind, filtered by the service so each page is full. */

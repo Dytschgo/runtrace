@@ -3,7 +3,7 @@ import { ModelName } from '../components/model';
 import { useQuery } from '@tanstack/react-query';
 import { ChevronDown, ChevronRight, ExternalLink, Network, TriangleAlert } from 'lucide-react';
 import { DataTable, type Column } from '../components/DataTable';
-import { AppLink, EmptyState, ErrorState, PageHeader, Panel, SkeletonRows, Stat, StatRow, StatusBadge, Tag, Tokens, Unknown } from '../components/ui';
+import { AppLink, EmptyState, ErrorState, NotLoaded, PageHeader, Panel, SkeletonRows, Stat, StatRow, StatusBadge, Tag, Tokens, Unknown } from '../components/ui';
 import { windowTokens, type ThreadTokens } from '../lib/analytics';
 import { getEntities } from '../lib/api';
 import { useAgents, useFilters, useLiveTurns, useThreads, useThreadTokens } from '../lib/data';
@@ -32,7 +32,9 @@ export default function AgentTrees() {
   const windowed = !!(f.since || f.until);
   const liveTurns = useLiveTurns(f, windowed);
   const windowStart = f.since ? Date.parse(f.since) : -Infinity;
-  const turnsReady = !windowed || (windowStart >= liveTurns.coversFrom ? !!(liveTurns.recent.data || liveTurns.all.data) : !!liveTurns.all.data);
+  // Whether the turns cover this window comes from one place, so this page, Threads and the Overview agree.
+  const coverage = windowed ? liveTurns.coverage(windowStart) : 'ready';
+  const turnsReady = coverage === 'ready';
   const win = useMemo(() => (windowed ? windowTokens(liveTurns.rows, f) : null), [windowed, liveTurns.rows, f]);
   const tokens = win ? win.byThread : lifetime;
   const treeTokens = (root: TreeNode) => flatten(root).reduce<number | null>((s, n) => { const v = tokens.get(n.key)?.total; return v == null ? s : (s ?? 0) + v; }, null);
@@ -60,7 +62,7 @@ export default function AgentTrees() {
     { key: 'fanout', header: 'Fan-out', align: 'end', sort: (t) => t.stats.maxFanout, render: (t) => fmtInt(t.stats.maxFanout) },
     { key: 'parallel', header: 'Peak parallel', align: 'end', sort: (t) => t.stats.peakParallel, render: (t) => fmtInt(t.stats.peakParallel) },
     { key: 'busy', header: 'Busy time', align: 'end', sort: (t) => t.stats.busyMs, render: (t) => fmtDuration(t.stats.busyMs) },
-    { key: 'tokens', header: windowed ? 'Tokens here' : 'Tokens', align: 'end', sort: (t) => treeTokens(t.root), render: (t) => { if (!turnsReady) return <span className="fine" aria-label="Loading">…</span>; const v = treeTokens(t.root); const ran = flatten(t.root).some((n) => (tokens.get(n.key)?.turns ?? 0) > 0); return v === null && windowed && !ran ? <span className="fine">None here</span> : v === null || (v === 0 && treeShort(t.root)) ? <Unknown label="No complete total" why="Turns ran here but none with a total, or those with one summed to 0 while others reported none." /> : <>{v !== null && treeShort(t.root) && <span className="lower-bound" title="Some turns reported no total"><span aria-hidden="true">≥</span><span className="sr-only">at least </span></span>}<Tokens v={v} /></>; } },
+    { key: 'tokens', header: windowed ? 'Tokens here' : 'Tokens', align: 'end', sort: (t) => treeTokens(t.root), render: (t) => { if (coverage === 'failed') return <NotLoaded />; if (!turnsReady) return <span className="fine" aria-label="Loading">…</span>; const v = treeTokens(t.root); const ran = flatten(t.root).some((n) => (tokens.get(n.key)?.turns ?? 0) > 0); return v === null && windowed && !ran ? <span className="fine">None here</span> : v === null || (v === 0 && treeShort(t.root)) ? <Unknown label="No complete total" why="Turns ran here but none with a total, or those with one summed to 0 while others reported none." /> : <>{v !== null && treeShort(t.root) && <span className="lower-bound" title="Some turns reported no total"><span aria-hidden="true">≥</span><span className="sr-only">at least </span></span>}<Tokens v={v} /></>; } },
     { key: 'start', header: 'Started', sort: (t) => t.root.start, render: (t) => (t.root.start ? <time dateTime={new Date(t.root.start).toISOString()}>{fmtDay(new Date(t.root.start).toISOString(), timezone)}</time> : <span className="fine">Unknown</span>) },
   ];
 
@@ -147,7 +149,8 @@ function TreeView({ root, tz, tokens, win }: { root: TreeNode; tz: string; token
 
   const toggle = (key: string) => setCollapsed((c) => { const n = new Set(c); if (n.has(key)) n.delete(key); else n.add(key); return n; });
   const choose = (n: TreeNode) => { setCursor(n.key); set({ node: n.key === root.key ? null : n.key }, { replace: true }); };
-  const move = (key: string) => { focusCursor.current = true; setCursor(key); };
+  // Focus follows the cursor only when a key really moved it, so a move at the edge leaves no request behind.
+  const move = (key: string) => { if (key === cursor) return; focusCursor.current = true; setCursor(key); };
 
   const onKey = (e: KeyboardEvent, n: TreeNode, i: number) => {
     const isOpen = n.children.length > 0 && !collapsed.has(n.key);

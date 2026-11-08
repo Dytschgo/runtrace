@@ -79,6 +79,8 @@ export interface Player {
 /**
  * A transport for the story. Progress runs 0–1 on requestAnimationFrame; frame listeners get every value, React gets a
  * sample about twelve times a second. Reduced motion starts at the end and never plays by itself.
+ * States: playing; paused (not playing, progress below 1); ended (not playing, progress 1). `progressRef` is the source of
+ * truth and `progress` its sampled copy for rendering.
  */
 export function usePlayer(opts: { initial: number | null; autoplay: boolean; onPause?: (progress: number) => void }): Player {
   const still = prefersStill();

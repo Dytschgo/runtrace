@@ -79,7 +79,7 @@ export default function DataQuality() {
         <Stat label="Records" value={quality.isError ? <NotLoaded /> : quality.isPending ? '…' : fmtInt(total)} sub="Across all kinds" />
         <Stat label="Marked complete" value={quality.isError ? <NotLoaded /> : quality.isPending ? '…' : fmtPct(total ? complete / total : 0)} sub={quality.data ? `${fmtInt(partial)} marked partial` : undefined} />
         <Stat label="Fields fully known" value={coverageFailed ? <NotLoaded /> : coverage ? `${fmtInt(full)} of ${fmtInt(measured.length)}` : '…'} sub={coverage ? `${fmtInt(none)} never captured` : undefined} />
-        <Stat label="Quota status" value={quota.data?.data?.length ? 'Sampling' : quota.isPending ? '…' : <Unknown label="Unavailable" why={quota.data?.reason} />} sub={quota.data?.window_status === 'historical_without_snapshots' ? 'History without snapshots' : undefined} />
+        <Stat label="Quota status" value={quota.isError && !quota.data ? <NotLoaded /> : quota.data?.data?.length ? 'Sampling' : quota.isPending ? '…' : <Unknown label="Unavailable" why={quota.data?.reason} />} sub={quota.data?.window_status === 'historical_without_snapshots' ? 'History without snapshots' : undefined} />
       </StatRow>
 
       <div className="split">

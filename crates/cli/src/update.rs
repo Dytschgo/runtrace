@@ -183,21 +183,234 @@ fn backup(c: &Config, tag: &str) -> Result<()> {
 }
 
 /// Starts an update in its own process, so it can stop this service, swap the program and start the new one.
-pub fn spawn_apply(c: &Config, config_path: &Path) -> Result<()> {
+pub fn spawn_apply(
+    c: &Config,
+    config_path: &Path,
+) -> Result<(std::process::Child, std::path::PathBuf)> {
     let mut cmd = Command::new(std::env::current_exe()?);
     cmd.args(["update", "--yes", "--restart"])
         .env("RUNTRACE_CONFIG", config_path)
         .env_remove("T3UI_CONFIG");
-    control::spawn_detached(
-        cmd,
-        &control::logs_dir(c).join(format!("update-{}.log", control::stamp())),
-    )?;
-    Ok(())
+    let log = control::logs_dir(c).join(format!("update-{}.log", control::stamp()));
+    let child = control::spawn_detached(cmd, &log)?;
+    Ok((child, log))
+}
+
+/// The service's side of updates, as one state.
+///
+/// ```text
+/// disabled                                  ([update] check = false)
+/// not_checked --check--> up_to_date <-> available --apply--> applying --updater exits, service still here--> apply_failed
+///                                          ^                    | (success stops this service; the new one starts fresh)
+///                                          +------apply again---+----------------------------------------------+
+/// ```
+/// A failed check changes no state; it only records when it failed, so a known release is never forgotten.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UpdateState {
+    Disabled,
+    NotChecked,
+    UpToDate,
+    Available,
+    Applying,
+    ApplyFailed,
+}
+
+impl UpdateState {
+    pub fn name(self) -> &'static str {
+        match self {
+            UpdateState::Disabled => "disabled",
+            UpdateState::NotChecked => "not_checked",
+            UpdateState::UpToDate => "up_to_date",
+            UpdateState::Available => "available",
+            UpdateState::Applying => "applying",
+            UpdateState::ApplyFailed => "apply_failed",
+        }
+    }
+}
+
+pub struct UpdateStatus {
+    pub state: UpdateState,
+    /// The latest successful check, as `check` returns it.
+    release: Value,
+    check_failed_at: Option<String>,
+    /// The running updater while applying; its log stays named after a failure.
+    applier: Option<std::process::Child>,
+    log: Option<std::path::PathBuf>,
+}
+
+/// Why an update cannot start now.
+pub enum ApplyRefused {
+    AlreadyRunning,
+    NothingNewer,
+}
+
+impl UpdateStatus {
+    pub fn new(checking: bool) -> Self {
+        Self {
+            state: if checking {
+                UpdateState::NotChecked
+            } else {
+                UpdateState::Disabled
+            },
+            release: Value::Null,
+            check_failed_at: None,
+            applier: None,
+            log: None,
+        }
+    }
+
+    pub fn checked(&mut self, result: Result<Value>, at: String) {
+        match result {
+            Ok(release) => {
+                self.check_failed_at = None;
+                // An update in progress is not undone by a check that happens to land meanwhile.
+                if self.state != UpdateState::Applying {
+                    self.state = if release["available"] == true {
+                        UpdateState::Available
+                    } else {
+                        UpdateState::UpToDate
+                    };
+                }
+                self.release = release;
+            }
+            Err(_) => self.check_failed_at = Some(at),
+        }
+    }
+
+    /// Whether an update may start now. Only a known newer release that is not already being installed may.
+    pub fn may_apply(&mut self) -> std::result::Result<(), ApplyRefused> {
+        self.poll();
+        match self.state {
+            UpdateState::Applying => Err(ApplyRefused::AlreadyRunning),
+            UpdateState::Available | UpdateState::ApplyFailed
+                if self.release["available"] == true =>
+            {
+                Ok(())
+            }
+            _ => Err(ApplyRefused::NothingNewer),
+        }
+    }
+
+    pub fn applying(&mut self, child: std::process::Child, log: std::path::PathBuf) {
+        self.state = UpdateState::Applying;
+        self.applier = Some(child);
+        self.log = Some(log);
+    }
+
+    /// A successful update stops this service, so an updater that has exited while it still runs did not install.
+    fn poll(&mut self) {
+        if self.state != UpdateState::Applying {
+            return;
+        }
+        if let Some(child) = self.applier.as_mut()
+            && !matches!(child.try_wait(), Ok(None))
+        {
+            self.applier = None;
+            self.state = UpdateState::ApplyFailed;
+        }
+    }
+
+    /// The report the dashboard reads. `available` stays a plain flag, as earlier dashboards expect.
+    pub fn to_json(&mut self) -> Value {
+        self.poll();
+        let mut v = if self.release.is_object() {
+            self.release.clone()
+        } else {
+            json!({})
+        };
+        v["state"] = json!(self.state.name());
+        v["current"] = json!(VERSION);
+        v["available"] = json!(
+            matches!(
+                self.state,
+                UpdateState::Available | UpdateState::ApplyFailed
+            ) && self.release["available"] == true
+        );
+        if let Some(at) = &self.check_failed_at {
+            v["check_failed_at"] = json!(at);
+        }
+        if let Some(log) = self
+            .log
+            .as_ref()
+            .filter(|_| matches!(self.state, UpdateState::Applying | UpdateState::ApplyFailed))
+        {
+            v["log"] = json!(log);
+        }
+        v
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::parse_version;
+    use super::*;
+
+    fn release(newer: bool) -> Result<Value> {
+        Ok(
+            json!({"current": VERSION, "latest": "9.9.9", "available": newer, "url": "https://example.test/r"}),
+        )
+    }
+
+    #[test]
+    fn checks_move_between_up_to_date_and_available_and_a_failure_forgets_nothing() {
+        let mut u = UpdateStatus::new(true);
+        assert_eq!(u.to_json()["state"], "not_checked");
+        u.checked(release(true), "t1".into());
+        assert_eq!(
+            (u.state, u.to_json()["available"].clone()),
+            (UpdateState::Available, json!(true))
+        );
+        u.checked(Err(anyhow::anyhow!("offline")), "t2".into());
+        let j = u.to_json();
+        assert_eq!(
+            (
+                j["state"].clone(),
+                j["latest"].clone(),
+                j["check_failed_at"].clone()
+            ),
+            (json!("available"), json!("9.9.9"), json!("t2"))
+        );
+        u.checked(release(false), "t3".into());
+        assert_eq!(u.state, UpdateState::UpToDate);
+        assert!(u.to_json().get("check_failed_at").is_none());
+        assert!(matches!(u.may_apply(), Err(ApplyRefused::NothingNewer)));
+        assert_eq!(UpdateStatus::new(false).to_json()["state"], "disabled");
+    }
+
+    #[test]
+    fn one_update_at_a_time_and_an_updater_that_exits_early_has_failed() {
+        let mut u = UpdateStatus::new(true);
+        u.checked(release(true), "t1".into());
+        assert!(u.may_apply().is_ok());
+        // A short-lived process stands in for an updater that gives up before stopping the service.
+        let quick = if cfg!(windows) {
+            Command::new("cmd")
+                .args(["/C", "ping -n 2 127.0.0.1 >NUL & exit 3"])
+                .spawn()
+        } else {
+            Command::new("sh").args(["-c", "sleep 1; exit 3"]).spawn()
+        };
+        u.applying(quick.unwrap(), "update.log".into());
+        assert!(
+            matches!(u.may_apply(), Err(ApplyRefused::AlreadyRunning)),
+            "a second update is refused while one runs"
+        );
+        u.checked(release(true), "t2".into());
+        assert_eq!(
+            u.state,
+            UpdateState::Applying,
+            "a check does not undo an update in progress"
+        );
+        let deadline = std::time::Instant::now() + Duration::from_secs(15);
+        while u.to_json()["state"] == "applying" && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let j = u.to_json();
+        assert_eq!(
+            (j["state"].clone(), j["log"].clone()),
+            (json!("apply_failed"), json!("update.log"))
+        );
+        assert!(u.may_apply().is_ok(), "a failed update can be tried again");
+    }
     #[test]
     fn versions_compare_by_number() {
         assert_eq!(parse_version("v0.10.2"), Some((0, 10, 2)));

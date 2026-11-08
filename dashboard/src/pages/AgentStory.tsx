@@ -53,7 +53,12 @@ export default function AgentStory({ id }: { id: string }) {
           </>
         }
       />
-      {error ? <Panel><ErrorState error={error} onRetry={() => { events.refetch(); threads.refetch(); agents.refetch(); }} /></Panel>
+      {/* A story that loaded stays on screen when a later refresh fails, so playback keeps its place; only a story that never
+          loaded is replaced by the error. */}
+      {error && story && (
+        <p className="stale-note" role="status">Could not refresh, so this is what loaded earlier. <button type="button" className="link-btn" onClick={() => { events.refetch(); threads.refetch(); agents.refetch(); }}>Retry</button></p>
+      )}
+      {error && !story ? <Panel><ErrorState error={error} onRetry={() => { events.refetch(); threads.refetch(); agents.refetch(); }} /></Panel>
         : !story ? <Panel><SkeletonRows rows={6} label="Loading the story" /></Panel>
           : !story.events.length ? (
             <Panel><EmptyState title="Nothing recorded for this thread"><p>No prompts, turns, tool calls or sub-agents are stored against it, so there is nothing to play.</p></EmptyState></Panel>
@@ -291,11 +296,14 @@ function Stage({ story, player, selected, onSelect, colorOf, tz }: { story: Stor
   const focusKey = selected?.key ?? story.lanes[0].key;
   const onLaneKey = (e: ReactKeyboardEvent, lane: Lane) => {
     const i = ordered.findIndex((l) => l.key === lane.key);
+    // Focus follows the selection only after a key that really moved it; Tab, Space or a move at the edge must not leave a
+    // request behind that would pull focus into the stage on a later click elsewhere.
+    const go = (to: Lane | undefined) => { if (to && to.key !== lane.key) { focusPending.current = true; onSelect(to.key); } };
     const moves: Record<string, () => void> = {
-      ArrowDown: () => { if (ordered[i + 1]) onSelect(ordered[i + 1].key); },
-      ArrowUp: () => { if (ordered[i - 1]) onSelect(ordered[i - 1].key); },
-      Home: () => onSelect(ordered[0].key),
-      End: () => onSelect(ordered[ordered.length - 1].key),
+      ArrowDown: () => go(ordered[i + 1]),
+      ArrowUp: () => go(ordered[i - 1]),
+      Home: () => go(ordered[0]),
+      End: () => go(ordered[ordered.length - 1]),
       Enter: () => { if (lane.x0 !== null) player.seek(lane.x0); },
     };
     const m = moves[e.key];
@@ -401,7 +409,7 @@ function Stage({ story, player, selected, onSelect, colorOf, tz }: { story: Stor
           const w = l.row === 0 ? x(1) - x(0) : Math.max(8, x(l.x1!) - x0);
           return (
             <g key={l.key} className={`story-hit${selected?.key === l.key ? ' is-selected' : ''}`} role="button" tabIndex={focusKey === l.key ? 0 : -1} aria-pressed={selected?.key === l.key} aria-label={describe(l)}
-              onClick={() => onSelect(l.key)} onKeyDown={(e) => { focusPending.current = true; onLaneKey(e, l); }} onFocus={() => { if (selected?.key !== l.key) onSelect(l.key); }}>
+              onClick={() => onSelect(l.key)} onKeyDown={(e) => onLaneKey(e, l)} onFocus={() => { if (selected?.key !== l.key) onSelect(l.key); }}>
               <rect x={x0 - 4} y={ly - h / 2} width={w + 8} height={h} rx={3} />
               <title>{describe(l)}</title>
             </g>

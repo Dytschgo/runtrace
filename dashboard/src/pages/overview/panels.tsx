@@ -2,9 +2,10 @@ import { useMemo, type ComponentType } from 'react';
 import { Bot, MessageSquare, MessageSquareReply, MessagesSquare, Play, Repeat2, Terminal, XCircle } from 'lucide-react';
 import { Counter } from '../../components/motion';
 import { ToolName } from '../../components/model';
-import { AppLink, Async, EmptyState, ErrorState, NoRecords, Panel, plural, RankedBars, Segmented, SkeletonRows, Sparkline, Tag, Tokens, Unknown } from '../../components/ui';
+import { AppLink, Async, EmptyState, ErrorState, NoRecords, NotLoaded, Panel, plural, RankedBars, Segmented, SkeletonRows, Sparkline, Tag, Tokens, Unknown } from '../../components/ui';
 import { delta, toolStats, type ToolStat } from '../../lib/analytics';
-import type { useAgents, useOverview, useThreads, useToolAggregates, useToolScan } from '../../lib/data';
+import type { useAgents, useThreads, useToolAggregates, useToolScan } from '../../lib/data';
+import { dataOf, type Load } from '../../lib/load';
 import type { ThreadRow, TurnRow } from '../../lib/entities';
 import type { Filters } from '../../lib/filters';
 import { fmtCompact, fmtDuration, fmtInt, fmtPct, fmtRelative, isKnown } from '../../lib/format';
@@ -20,12 +21,12 @@ export interface ThreadActivity { last: string; turns: number; tokens: number | 
 interface Tile { label: string; kind: string; page: PageName; icon: ComponentType<{ size?: number; 'aria-hidden'?: boolean | 'true' }>; hint?: string }
 
 /** The row of totals under the chart, each compared with the period before when capture covers it. */
-export function KeyTotals({ counts, previous, comparable, overview, windowed, turnsSeen, unscopable, unknown, stale }: {
-  counts: Record<string, number>; previous: Record<string, number> | undefined; comparable: boolean; overview: ReturnType<typeof useOverview>;
+export function KeyTotals({ counts, previous, comparable, windowed, turnsSeen, unscopable, unknown, stale }: {
+  counts: Load<Record<string, number>>; previous: Record<string, number> | undefined; comparable: boolean;
   windowed: boolean; turnsSeen: boolean; unscopable: boolean; unknown: { title: string; text: string } | null; stale: boolean;
 }) {
   const { hrefPage } = useUrl();
-  const c = counts;
+  const c = dataOf(counts) ?? {};
   const perPrompt = (kind: string) => (isKnown(c[kind]) && c.prompt ? `${(c[kind] / c.prompt).toFixed(1)} per prompt` : undefined);
   const tiles: Tile[] = [
     { label: 'Prompts', kind: 'prompt', page: 'Activity', icon: MessageSquare },
@@ -49,7 +50,7 @@ export function KeyTotals({ counts, previous, comparable, overview, windowed, tu
         return (
           <article key={t.kind} className="tile" title={t.hint}>
             <h2><AppLink className="tile-link" href={hrefPage(t.page)}><Icon size={14} aria-hidden="true" />{t.label}</AppLink></h2>
-            {overview.isPending ? <div className="skeleton tile-skeleton" role="status" aria-label={`Loading ${t.label}`} /> : <strong title={isKnown(value) ? fmtInt(value) : undefined}>{unscopable ? <Unknown label="Unknown" why="Records that name no model cannot be counted on their own." /> : unknown && !value ? <Unknown label="Unknown" why={unknown.text} /> : isKnown(value) ? <Counter value={value} /> : '0'}</strong>}
+            {counts.state === 'loading' ? <div className="skeleton tile-skeleton" role="status" aria-label={`Loading ${t.label}`} /> : counts.state === 'failed' ? <strong><NotLoaded /></strong> : <strong title={isKnown(value) ? fmtInt(value) : undefined}>{unscopable ? <Unknown label="Unknown" why="Records that name no model cannot be counted on their own." /> : unknown && !value ? <Unknown label="Unknown" why={unknown.text} /> : isKnown(value) ? <Counter value={value} /> : '0'}</strong>}
             {d !== null && (
               <span className="delta" title="Compared with the same length of time just before">
                 <ChangeArrow change={d} />
@@ -135,14 +136,15 @@ export function RecentThreadsPanel({ threads, inWindow, activity, turns, agentsB
 
 /** The most used tools: every stored call when the service can count them, otherwise the latest calls loaded. */
 export function ToolsPanel({ aggregates, sample, picked }: {
-  aggregates: ReturnType<typeof useToolAggregates>; sample: ReturnType<typeof useToolScan>; picked: ToolStat[] | null;
+  aggregates: ReturnType<typeof useToolAggregates>; sample: ReturnType<typeof useToolScan>; picked: Load<ToolStat[]> | null;
 }) {
   const { hrefPage } = useUrl();
-  const top = useMemo(() => (picked ?? aggregates.data ?? toolStats(sample.data?.rows ?? [])).slice(0, 6), [picked, aggregates.data, sample.data]);
+  // Rows picked as a filter have their own counts, which are shown only once every picked row has loaded.
+  const top = useMemo(() => (picked ? dataOf(picked) ?? [] : aggregates.data ?? toolStats(sample.data?.rows ?? [])).slice(0, 6), [picked, aggregates.data, sample.data]);
   const sub = aggregates.data ? 'All matching stored calls' : sample.data ? (sample.data.complete ? `All ${fmtInt(sample.data.scanned)} calls` : `Latest ${fmtInt(sample.data.scanned)} calls`) : 'Loading calls';
   return (
     <Panel title="Most used tools" sub={sub} action={<AppLink className="link" href={hrefPage('Tool Calls')}>Tool Calls</AppLink>}>
-      <Async<unknown> query={aggregates.isError ? sample : aggregates} skeleton={<SkeletonRows label="Loading tools" />} isEmpty={() => !top.length} compact>
+      <Async<unknown> query={picked ?? (aggregates.isError ? sample : aggregates)} skeleton={<SkeletonRows label="Loading tools" />} isEmpty={() => !top.length} compact>
         {() => (
           <RankedBars
             label="Tool calls by tool"

@@ -39,9 +39,11 @@ function ThreadList() {
   // The same turns the Overview reads, cut to the same window, so both pages add up the same tokens.
   const live = useLiveTurns(f);
   const windowStart = f.since ? Date.parse(f.since) : -Infinity;
-  const turnsReady = windowStart >= live.coversFrom ? !!(live.recent.data || live.all.data) : !!live.all.data;
+  // Whether the turns cover this window comes from one place, so this page, Agent Trees and the Overview agree.
   // A failed read is said as such, so the counts never wait on it for ever.
-  const turnsFailed = !turnsReady && (windowStart >= live.coversFrom ? live.recent.isError && !live.all.data : live.all.isError);
+  const coverage = live.coverage(windowStart);
+  const turnsReady = coverage === 'ready';
+  const turnsFailed = coverage === 'failed';
   const win = useMemo(() => windowTokens(live.rows, f), [live.rows, f]);
   const type = params.get('type') ?? 'all';
   const tq = params.get('tq') ?? '';

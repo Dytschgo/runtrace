@@ -1,4 +1,5 @@
 mod assets;
+mod collector;
 mod control;
 mod mcp;
 mod update;
@@ -36,7 +37,11 @@ enum Command {
     /// Stop the background service.
     Stop,
     /// Show whether Runtrace is running, its version, and where its settings, data and logs are.
-    Status,
+    Status {
+        /// Print one JSON object (state: running, stopped or port_in_use) for scripts and agents.
+        #[arg(long)]
+        json: bool,
+    },
     /// Open the dashboard in your browser.
     Open,
     /// Install the latest release from GitHub, after a backup of the database.
@@ -175,8 +180,8 @@ async fn main() -> Result<()> {
             );
             return Ok(());
         }
-        Command::Status => {
-            control::status(&c, &config_path);
+        Command::Status { json } => {
+            control::status(&c, &config_path, *json);
             return Ok(());
         }
         Command::Open => {
@@ -280,7 +285,7 @@ async fn main() -> Result<()> {
     match cli.command {
         Command::Start { .. }
         | Command::Stop
-        | Command::Status
+        | Command::Status { .. }
         | Command::Open
         | Command::Update { .. }
         | Command::Autostart { .. } => unreachable!("handled above"),
@@ -467,17 +472,23 @@ async fn serve(c: Config, s: Store, config_path: std::path::PathBuf) -> Result<(
     use axum::{Router, routing::get};
     let addr = format!("{}:{}", c.server.host, c.server.port);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
-    let status = Arc::new(Mutex::new(
-        json!({"state":if c.source.collect_on_serve{"starting"}else{"disabled"}}),
-    ));
+    // The collector's state lives in one typed value; see collector.rs for its states and transitions.
+    let status = Arc::new(Mutex::new(collector::CollectorStatus::initial(
+        c.source.collect_on_serve,
+    )));
     let ready_status = status.clone();
     let storage_identity = c.storage_identity()?;
     if c.source.collect_on_serve {
+        // A spare connection, so a crashed import round can be retried with a fresh writer instead of ending collection.
+        let spare = s.try_clone()?;
         let writer = s.try_clone()?;
         let collect_config = c.clone();
         tokio::spawn(async move {
+            use collector::Event;
             let mut writer = writer;
             let mut delay = collect_config.source.poll_seconds;
+            let poll = collect_config.source.poll_seconds;
+            let backoff = |d: u64| (d * 2).min(3600);
             loop {
                 let config = collect_config.clone();
                 let started = std::time::Instant::now();
@@ -489,34 +500,56 @@ async fn serve(c: Config, s: Store, config_path: std::path::PathBuf) -> Result<(
                     (writer, report)
                 })
                 .await;
-                match result {
+                let event = match result {
                     Ok((returned, report)) => {
                         writer = returned;
                         match report {
                             Ok(report) => {
-                                *status.lock().unwrap() = json!({"state":if report["paused"]==true{"paused"}else if report["partial_sync"]==true{"partial"}else{"synced"},"last_successful_sync_at":if report["paused"]==true{None}else{Some(t3ui_core::storage::now())},"duration_ms":started.elapsed().as_millis(),"report":report});
-                                delay = collect_config.source.poll_seconds;
+                                delay = poll;
+                                Event::Synced {
+                                    report,
+                                    duration_ms: started.elapsed().as_millis(),
+                                    at: t3ui_core::storage::now(),
+                                }
                             }
+                            // The wait is lengthened first, so the reported retry time is the one that follows.
                             Err(_) => {
-                                *status.lock().unwrap() = json!({"state":"retrying","error_category":"source_sync_failed","retry_seconds":delay});
-                                delay = (delay * 2).min(3600);
+                                delay = backoff(delay);
+                                Event::SyncFailed {
+                                    retry_seconds: delay,
+                                }
                             }
                         }
                     }
-                    Err(_) => {
-                        *status.lock().unwrap() =
-                            json!({"state":"failed","error_category":"collector_task_failed"});
-                        break;
+                    Err(error) => {
+                        tracing::error!(operation = "collect", error = %error, "The import task crashed; retrying with a fresh connection");
+                        match spare.try_clone() {
+                            Ok(fresh) => {
+                                writer = fresh;
+                                delay = backoff(delay);
+                                Event::TaskCrashed {
+                                    retry_seconds: delay,
+                                }
+                            }
+                            Err(_) => {
+                                let mut st = status.lock().unwrap();
+                                *st = st.after(Event::CannotContinue);
+                                break;
+                            }
+                        }
                     }
+                };
+                {
+                    let mut st = status.lock().unwrap();
+                    *st = st.after(event);
                 }
                 tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
             }
         });
     }
     // Whether a newer release exists, checked shortly after starting and then once a day. Nothing installs on its own.
-    let update_status = Arc::new(Mutex::new(
-        json!({"current":update::VERSION,"available":false,"checking":c.update.check}),
-    ));
+    // The update side's state lives in one typed value; see update::UpdateStatus for its states and transitions.
+    let update_status = Arc::new(Mutex::new(update::UpdateStatus::new(c.update.check)));
     if c.update.check {
         let status = update_status.clone();
         let cfg = c.clone();
@@ -526,18 +559,12 @@ async fn serve(c: Config, s: Store, config_path: std::path::PathBuf) -> Result<(
                 let cfg2 = cfg.clone();
                 let result = tokio::task::spawn_blocking(move || update::check(&cfg2)).await;
                 // A failed check (offline, or GitHub unreachable) is tried again within the hour, not the next day.
-                let ok = matches!(result, Ok(Ok(_)));
-                {
-                    let mut s = status.lock().unwrap();
-                    match result {
-                        Ok(Ok(v)) => *s = v,
-                        // A failed check keeps what was known and says when it failed; the dashboard shows nothing for it.
-                        _ => {
-                            s["error"] = json!("check_failed");
-                            s["checked_at"] = json!(t3ui_core::storage::now());
-                        }
-                    }
-                }
+                let result = result.unwrap_or_else(|e| Err(anyhow::anyhow!(e)));
+                let ok = result.is_ok();
+                status
+                    .lock()
+                    .unwrap()
+                    .checked(result, t3ui_core::storage::now());
                 let wait = if ok { 24 * 3600 } else { 3600 };
                 tokio::time::sleep(std::time::Duration::from_secs(wait)).await;
             }
@@ -552,7 +579,7 @@ async fn serve(c: Config, s: Store, config_path: std::path::PathBuf) -> Result<(
             "/api/v1/update",
             get(move || {
                 let status = read_status.clone();
-                async move { axum::Json(status.lock().unwrap().clone()) }
+                async move { axum::Json(status.lock().unwrap().to_json()) }
             }),
         )
         .route(
@@ -571,11 +598,18 @@ async fn serve(c: Config, s: Store, config_path: std::path::PathBuf) -> Result<(
                     if header("x-runtrace-action") != "update" || !local(header("host")) || !origin_ok {
                         return (StatusCode::FORBIDDEN, axum::Json(json!({"error":{"code":"forbidden","message":"Updates can only be started from this computer's dashboard"}})));
                     }
-                    if status.lock().unwrap()["available"] != json!(true) {
-                        return (StatusCode::CONFLICT, axum::Json(json!({"error":{"code":"no_update","message":"No newer version is known"}})));
+                    // Held across the check and the start, so two requests cannot both start an updater.
+                    let mut st = status.lock().unwrap();
+                    match st.may_apply() {
+                        Err(update::ApplyRefused::AlreadyRunning) => return (StatusCode::CONFLICT, axum::Json(json!({"error":{"code":"update_running","message":"An update is already running"}}))),
+                        Err(update::ApplyRefused::NothingNewer) => return (StatusCode::CONFLICT, axum::Json(json!({"error":{"code":"no_update","message":"No newer version is known"}}))),
+                        Ok(()) => {}
                     }
                     match update::spawn_apply(&cfg, &path) {
-                        Ok(()) => (StatusCode::ACCEPTED, axum::Json(json!({"started":true}))),
+                        Ok((child, log)) => {
+                            st.applying(child, log);
+                            (StatusCode::ACCEPTED, axum::Json(json!({"started":true})))
+                        }
                         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, axum::Json(json!({"error":{"code":"update_failed","message":e.to_string()}}))),
                     }
                 }
@@ -591,7 +625,7 @@ async fn serve(c: Config, s: Store, config_path: std::path::PathBuf) -> Result<(
                 let status = ready_status.clone();
                 let identity = storage_identity.clone();
                 async move {
-                    axum::Json(json!({"ready":true,"version":update::VERSION,"pid":std::process::id(),"storage_identity":identity,"collector":status.lock().unwrap().clone()}))
+                    axum::Json(json!({"ready":true,"version":update::VERSION,"pid":std::process::id(),"storage_identity":identity,"collector":status.lock().unwrap().to_json()}))
                 }
             }),
         )

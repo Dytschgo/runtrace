@@ -4,6 +4,7 @@ import { AlertTriangle, Check, CheckCircle2, ChevronRight, CircleDashed, CircleS
 import { ApiError } from '../lib/api';
 import { fmtCompact, fmtInt, fmtPct, isKnown } from '../lib/format';
 import { focusRequest, pushSearch } from '../lib/url';
+import { fromQuery, type Load } from '../lib/load';
 import { smoothPath } from './TraceChart';
 
 /** A client-side link: real href for new tabs and copying, history navigation for plain clicks. */
@@ -99,14 +100,31 @@ export function ErrorState({ error, onRetry, compact }: { error: unknown; onRetr
   );
 }
 
-/** Loading, failure and empty handling for one query, so a failed panel never takes the page down. */
+/** Loading, failure and empty handling for one query or one Load, so a failed panel never takes the page down.
+ *  Data that already loaded stays shown when a later refresh fails, with a note and a retry, instead of vanishing. */
 export function Async<T>({ query, children, skeleton, isEmpty, empty, compact }: {
-  query: UseQueryResult<T>; children: (data: T) => ReactNode; skeleton?: ReactNode; isEmpty?: (data: T) => boolean; empty?: ReactNode; compact?: boolean;
+  query: UseQueryResult<T> | Load<T>; children: (data: T) => ReactNode; skeleton?: ReactNode; isEmpty?: (data: T) => boolean; empty?: ReactNode; compact?: boolean;
 }) {
-  if (query.isPending) return <>{skeleton ?? <Skeleton />}</>;
-  if (query.isError) return <ErrorState error={query.error} onRetry={() => query.refetch()} compact={compact} />;
-  if (isEmpty?.(query.data)) return <>{empty ?? <NoRecords compact={compact} />}</>;
-  return <>{children(query.data)}</>;
+  const load = 'state' in query ? query : fromQuery(query);
+  if (load.state === 'loading') return <>{skeleton ?? <Skeleton />}</>;
+  if (load.state === 'failed') return <ErrorState error={load.error} onRetry={load.retry} compact={compact} />;
+  const body = isEmpty?.(load.data) ? <>{empty ?? <NoRecords compact={compact} />}</> : <>{children(load.data)}</>;
+  if (!load.stale) return body;
+  return (
+    <>
+      {body}
+      <p className="stale-note" role="status">
+        Could not refresh, so this is what loaded earlier. <button type="button" className="link-btn" onClick={load.stale.retry}>Retry</button>
+      </p>
+    </>
+  );
+}
+
+/** One figure: "…" while loading, "Not loaded" when its read failed, the value once ready. Never a 0 that was not measured. */
+export function StatValue<T>({ load, children }: { load: Load<T>; children: (data: T) => ReactNode }) {
+  if (load.state === 'loading') return <span role="status" aria-label="Loading">…</span>;
+  if (load.state === 'failed') return <NotLoaded />;
+  return <>{children(load.data)}</>;
 }
 
 export function NoRecords({ compact }: { compact?: boolean }) {
@@ -312,13 +330,15 @@ export function PageHeader({ title, lead, action, quiet }: { title: string; lead
   );
 }
 
-export function ScanNote({ scanned, complete, noun, total, onExpand, reading, progress }: { scanned: number; complete: boolean; noun: string; total?: number; onExpand?: () => void; reading?: boolean; progress?: number }) {
+/** Whether a list covers everything: complete, a sample, reading the rest, or a failed attempt to read the rest. */
+export function ScanNote({ scanned, complete, noun, total, onExpand, reading, progress, failed, onRetry }: { scanned: number; complete: boolean; noun: string; total?: number; onExpand?: () => void; reading?: boolean; progress?: number; failed?: boolean; onRetry?: () => void }) {
   if (complete) return <span className="fine">All {fmtInt(scanned)} {noun} read</span>;
   return (
     <span className="scan-note" role="status">
       {reading ? <Loader size={13} aria-hidden="true" className="spin" /> : <AlertTriangle size={13} aria-hidden="true" />}
-      <span>Latest {fmtInt(scanned)}{isKnown(total) ? ` of ${fmtInt(total)}` : ''} {noun}.{reading ? ` Reading the rest${progress ? ` (${fmtInt(progress)})` : ''}…` : ''}</span>
-      {onExpand && !reading && <button type="button" className="link-btn" onClick={onExpand}>Analyze all</button>}
+      <span>Latest {fmtInt(scanned)}{isKnown(total) ? ` of ${fmtInt(total)}` : ''} {noun}.{reading ? ` Reading the rest${progress ? ` (${fmtInt(progress)})` : ''}…` : failed ? ' Could not read the rest.' : ''}</span>
+      {failed && onRetry && !reading ? <button type="button" className="link-btn" onClick={onRetry}>Retry</button>
+        : onExpand && !reading && <button type="button" className="link-btn" onClick={onExpand}>Analyze all</button>}
     </span>
   );
 }

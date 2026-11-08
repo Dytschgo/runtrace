@@ -22,7 +22,9 @@ export default function SearchPage() {
   const query = useQuery<Entity[]>({
     queryKey: ['search', q, apiParams('search', f).toString(), offset],
     enabled: !!q,
-    placeholderData: (prev) => prev,
+    // Earlier results stay on screen only while paging through the same search. A new search shows its own loading state,
+    // so results are never shown under a query that did not produce them.
+    placeholderData: (prev, prevQuery) => (prevQuery?.queryKey[1] === q && prevQuery?.queryKey[2] === apiParams('search', f).toString() ? prev : undefined),
     queryFn: ({ signal }) => getEntities<Entity>('search', apiParams('search', f, { q, limit: LIMIT, offset, include_content: 'true' }), signal),
   });
 
@@ -62,6 +64,7 @@ export default function SearchPage() {
                       );
                     })}
                   </ol>
+                  {query.isPlaceholderData && <p className="fine" role="status">Loading the next page…</p>}
                   <div className="table-foot">
                     <Pager offset={offset} limit={LIMIT} shown={rows.length} hasMore={rows.length === LIMIT} onPage={(o) => set({ offset: o || null })} />
                   </div>

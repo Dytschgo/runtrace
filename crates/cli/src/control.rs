@@ -46,11 +46,44 @@ pub fn health(c: &Config) -> Option<Value> {
         .ok()
 }
 
-/// The running service for this install: it answers on the port and reads the same database.
-pub fn running(c: &Config) -> Option<Value> {
-    let h = health(c)?;
+/// What answers on this install's port. Every command decides from this one answer.
+pub enum Service {
+    /// Nothing answers.
+    Stopped,
+    /// This install's service: it answers and reads the same database. Holds its health report.
+    Running(Value),
+    /// Something else answers: another program, or another Runtrace install with a different database.
+    Foreign,
+}
+
+impl Service {
+    pub fn name(&self) -> &'static str {
+        match self {
+            Service::Stopped => "stopped",
+            Service::Running(_) => "running",
+            Service::Foreign => "port_in_use",
+        }
+    }
+}
+
+pub fn probe(c: &Config) -> Service {
+    let Some(h) = health(c) else {
+        return Service::Stopped;
+    };
     let ours = c.storage_identity().ok();
-    (ours.is_some() && h["storage_identity"].as_str() == ours.as_deref()).then_some(h)
+    if ours.is_some() && h["storage_identity"].as_str() == ours.as_deref() {
+        Service::Running(h)
+    } else {
+        Service::Foreign
+    }
+}
+
+/// This install's running service, if it is running.
+pub fn running(c: &Config) -> Option<Value> {
+    match probe(c) {
+        Service::Running(h) => Some(h),
+        _ => None,
+    }
 }
 
 /// Starts a program that keeps running after this one exits, with its output in a log file.
@@ -79,19 +112,20 @@ pub fn spawn_detached(mut cmd: Command, log: &Path) -> Result<std::process::Chil
 
 /// Brings the database up to date in the foreground, then starts the service in the background and waits until it answers.
 pub fn start(c: &Config, config_path: &Path, open_after: bool) -> Result<()> {
-    if running(c).is_some() {
-        println!("Runtrace is already running at {}", url(c));
-        if open_after {
-            open(c)?;
+    match probe(c) {
+        Service::Running(_) => {
+            println!("Runtrace is already running at {}", url(c));
+            if open_after {
+                open(c)?;
+            }
+            return Ok(());
         }
-        return Ok(());
-    }
-    if health(c).is_some() {
-        bail!(
+        Service::Foreign => bail!(
             "Port {} is used by another program or another Runtrace install. Change server.port in {}",
             c.server.port,
             config_path.display()
-        );
+        ),
+        Service::Stopped => {}
     }
     println!("Checking the database...");
     let began = Instant::now();
@@ -173,9 +207,36 @@ fn kill(pid: u64) -> Result<()> {
     Ok(())
 }
 
-pub fn status(c: &Config, config_path: &Path) {
-    match running(c) {
-        Some(h) => {
+pub fn status(c: &Config, config_path: &Path, as_json: bool) {
+    let service = probe(c);
+    if as_json {
+        // For scripts and agents: one object naming the state, so nothing has to be read out of sentences.
+        let h = match &service {
+            Service::Running(h) => h.clone(),
+            _ => Value::Null,
+        };
+        println!(
+            "{}",
+            serde_json::json!({
+                "state": service.name(),
+                "url": url(c),
+                "version": h["version"],
+                "pid": h["pid"],
+                "collector": h["collector"],
+                "program_version": crate::update::VERSION,
+                "settings": config_path,
+                "database": c.storage.duckdb_path,
+                "logs": logs_dir(c),
+            })
+        );
+        return;
+    }
+    match service {
+        Service::Foreign => println!(
+            "Port {} is used by another program or another Runtrace install, so this one cannot start there.",
+            c.server.port
+        ),
+        Service::Running(h) => {
             println!(
                 "Runtrace {} is running at {} (process {}).",
                 h["version"].as_str().unwrap_or("?"),
@@ -186,7 +247,7 @@ pub fn status(c: &Config, config_path: &Path) {
                 println!("Collector: {state}");
             }
         }
-        None => println!("Runtrace is not running. Start it with `runtrace start`."),
+        Service::Stopped => println!("Runtrace is not running. Start it with `runtrace start`."),
     }
     println!("Settings: {}", config_path.display());
     println!("Database: {}", c.storage.duckdb_path);

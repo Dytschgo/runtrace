@@ -8,6 +8,7 @@ edition.workspace = true
 t3ui-core = { path = "../core" }
 anyhow.workspace = true
 serde_json.workspace = true
+serde.workspace = true
 tokio.workspace = true
 chrono.workspace = true
 dirs = "7"

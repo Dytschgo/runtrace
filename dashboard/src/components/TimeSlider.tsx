@@ -25,6 +25,9 @@ export function TimeSlider() {
   const n = slots.length;
 
   const committed = useMemo(() => windowFromFilters(slots, f), [slots, f.since, f.until]); // eslint-disable-line react-hooks/exhaustive-deps
+  // The gesture's states. idle: the window shown is the committed one. pressed: `grab` is set but not yet `armed` (a press
+  // that has not moved). dragging: `held` carries the window under the pointer. typed: a key moved the window, which
+  // commits after a short pause (`timer`). Releasing or the pause commits to the URL, which becomes `committed`.
   const [held, setHeld] = useState<{ window: SlotWindow; grip: Grip } | null>(null);
   const [typed, setTyped] = useState<SlotWindow | null>(null);
   const live = held?.window ?? typed ?? committed;

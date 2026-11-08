@@ -68,3 +68,20 @@ Tests that need a moment of the fixture name it through `FIXTURE` and `day(n, hh
 The frame-rate check (tests/frames.spec.ts) is its own Playwright project. It runs alone after the other tests, with the real browser clock, because a frame rate measured beside parallel browsers measures the machine. If another test fails it is not run; run it by itself with `npx playwright test --project=frame-rate --no-deps`.
 
 `T3UI_NOW` is for tests only. Unset, the service uses the system clock exactly as before.
+
+## State machines
+
+Behaviour that is really a set of states lives in one named place, so a page, a command or an agent reads the state instead of re-deriving it from flags.
+
+| What | Where | States |
+|---|---|---|
+| Background collector | `crates/cli/src/collector.rs` (`CollectorStatus::after`) | `disabled`, `starting`, `synced`, `partial`, `paused`, `retrying`, `failed`. The last good sync time survives failures and pauses; a crashed import round retries with a fresh connection. Reported as `collector` in `/health/ready`. |
+| Updates | `crates/cli/src/update.rs` (`UpdateStatus`) | `disabled`, `not_checked`, `up_to_date`, `available`, `applying`, `apply_failed`. One update at a time; an updater that exits while the service still runs is `apply_failed` with its log. Reported by `GET /api/v1/update`. |
+| The service on this install's port | `crates/cli/src/control.rs` (`probe`, `Service`) | `stopped`, `running`, `port_in_use`. `start`, `stop`, `status` and `open` all decide from it; `runtrace status --json` prints it. |
+| Record hydration | `crates/core/src/storage.rs` (`FACTS_*`, `SEARCH_CURRENT`) | `facts_version` moves FACTS_NONE → FACTS_BASE → FACTS_CURRENT; retention sends a record back to FACTS_NONE. |
+| Where a value stands in the dashboard | `dashboard/src/lib/load.ts` (`Load`, `fromQuery`, `fromQueries`) | `loading`, `failed`, `ready` (with `stale` after a failed refresh). `Async` and `StatValue` render it; several queries summed together are ready only when all are. |
+| Whether loaded turns cover a window | `useLiveTurns(...).coverage(since)` in `dashboard/src/lib/data.ts` | `loading`, `failed`, `ready`. Overview, Threads and Agent Trees all use it. |
+| Tool sample, then full read | `useToolAnalysis` in `dashboard/src/lib/data.ts`, `ScanNote` | sample, reading (with progress per filter), complete, failed with retry. |
+| Update dialog | `dashboard/src/components/UpdateNotice.tsx` (`Phase`) | idle, starting, waiting, slow, failed; follows an update another tab started. |
+
+Gestures keep their state in refs and are named in comments where they live: the time slider (idle, pressed, dragging, typed), the chart's pinned reading (held by bucket time), the story player (playing, paused, ended), and the Overview's one-way history latch.
