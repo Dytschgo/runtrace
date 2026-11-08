@@ -44,6 +44,10 @@ jobs:
         with:
           components: rustfmt
       - uses: Swatinem/rust-cache@v2
+        with:
+          # Bump when DuckDB's build settings change: its build script cannot unpack its sources over a cached build of
+          # different settings ("Directory not empty"), so such a change needs a fresh cache.
+          prefix-key: v1-duckdb-release
       - if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
       - run: cargo fmt --all --check
