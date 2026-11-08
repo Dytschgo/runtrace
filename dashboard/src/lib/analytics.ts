@@ -1,4 +1,4 @@
-import { hasTurnUsage } from './entities';
+import { hasTurnUsage, turnMs } from './entities';
 import { fmtDay, localParts, zonedDayStart } from './format';
 import type { AgentRow, ThreadRow, ToolRow, TurnRow } from './entities';
 import { isKnown } from './format';
@@ -331,7 +331,7 @@ export function windowTokens(turns: TurnRow[], f: { since?: string; until?: stri
   const byThread = new Map<string, ThreadTokens>();
   let total: number | null = null, logTotal: number | null = null, unthreaded: number | null = null, turnCount = 0, reported = 0;
   for (const t of turns) {
-    const ms = Date.parse(t.occurred_at);
+    const ms = turnMs(t);
     if (!(ms >= since && ms <= until) || (f.model && t.model !== f.model)) continue;
     total = add(total, t.total);
     if (t.log) { logTotal = add(logTotal, t.total); continue; }

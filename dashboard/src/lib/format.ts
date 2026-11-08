@@ -66,7 +66,8 @@ export function fmtRelative(iso: unknown, now = Date.now()) {
   const d = validDate(iso);
   if (!d) return 'unknown';
   const s = Math.round((now - d.getTime()) / 1000);
-  if (s < 0) return 'in the future';
+  // Pages keep a clock that ticks once a minute, and machines' clocks differ a little, so a reading a few minutes ahead is a fresh one.
+  if (s < -300) return 'in the future';
   if (s < 60) return 'just now';
   if (s < 3600) return `${Math.floor(s / 60)}m ago`;
   if (s < 172800) return `${Math.floor(s / 3600)}h ago`;

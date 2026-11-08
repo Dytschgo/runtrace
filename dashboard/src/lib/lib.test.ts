@@ -399,6 +399,14 @@ describe('api', () => {
   });
 });
 
+describe('fmtRelative', () => {
+  it('reads a timestamp a little ahead of a once-a-minute clock as fresh', () => {
+    const now = Date.parse('2026-11-08T00:00:00Z');
+    expect(fmtRelative('2026-11-08T00:00:50Z', now)).toBe('just now');
+    expect(fmtRelative('2026-11-08T00:10:00Z', now)).toBe('in the future');
+  });
+});
+
 describe('providerFromThread', () => {
   it('reads the agent out of a provider thread id', () => {
     expect(providerFromThread('provider-thread:provider:codex:native-thread:01a')).toBe('codex');

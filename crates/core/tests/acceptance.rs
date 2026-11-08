@@ -1536,3 +1536,48 @@ fn provider_filter_counts_turns_that_name_no_model() {
     assert_eq!(total, 150, "tokens include the session-log hour");
     assert!(Filter { provider: Some("Open AI".into()), ..Default::default() }.validate().is_err());
 }
+
+// A lean turn carries the same values the dashboard reads from the full document, in far fewer bytes.
+#[test]
+fn lean_turns_match_the_full_document() {
+    let (_tmp, c) = fixture();
+    let s = Store::open(&c).unwrap();
+    s.put("local","model_turn","full","p","thread:provider:codex:native-thread:x","r","2026-01-01T00:00:00Z","2026-01-01T00:00:00Z","partial","synthetic",json!({"model":null,"requested_model":"gpt-6.1-sol","provider":null,"provider_thread_id":"provider-thread:provider:codex:native-thread:x","node_id":"n".repeat(120),"usage_status":"complete","usage_scope":"main_agent","total_tokens":30,"input_tokens":20,"cached_input_tokens":5,"cache_write_tokens":1,"output_tokens":10,"reasoning_tokens":2,"has_subagents":true,"started_at":"2026-01-01T00:00:00Z","completed_at":"2026-01-01T00:00:02Z"})).unwrap();
+    s.put("local","model_turn","partial","p","t","r","2026-01-01T00:01:00Z","2026-01-01T00:01:00Z","partial","synthetic",json!({"model":"claude-opus-5-5","provider":"claudeAgent","usage_status":"partial","total_tokens":99,"input_tokens":7,"duration_ms":40})).unwrap();
+    let read = |shape: Option<&str>| analytics::query(&s, "model-turns", &Filter { shape: shape.map(str::to_owned), ..Default::default() }).unwrap()["data"].as_array().unwrap().clone();
+    let (full, lean) = (read(None), read(Some("lean")));
+    assert_eq!(full.len(), 2);
+    for (a, b) in full.iter().zip(&lean) {
+        assert_eq!(a["id"], b["id"]);
+        assert_eq!(a["thread_id"], b["thread_id"]);
+        for k in ["total_tokens", "input_tokens", "output_tokens", "usage_status"] { assert_eq!(a["data"][k], b["data"][k], "{k}"); }
+        assert!(b["data"].get("node_id").is_none());
+        assert!(b.to_string().len() < a.to_string().len());
+    }
+    let first = &lean[1];
+    assert_eq!(first["data"]["provider"], "codex");
+    assert_eq!(first["data"]["model"], "gpt-6.1-sol");
+    assert_eq!(first["data"]["duration_ms"], 2000);
+    assert_eq!(first["data"]["cache_write_tokens"], 1);
+    assert_eq!(first["data"]["has_subagents"], true);
+    assert_eq!(lean[0]["data"]["total_tokens"], serde_json::Value::Null, "a partial turn has no complete total");
+    assert_eq!(lean[0]["data"]["provider"], "claudeAgent");
+    assert!(Filter { shape: Some("wide".into()), ..Default::default() }.validate().is_err());
+}
+
+// Rows written before the second set of analytic columns, or restored from an older snapshot, are filled in one pass.
+#[test]
+fn older_rows_get_the_new_analytic_columns() {
+    let (_tmp, c) = fixture();
+    let s = Store::open(&c).unwrap();
+    s.put("local","model_turn","old","p","t","r","2026-01-01T00:00:00Z","2026-01-01T00:00:00Z","partial","synthetic",json!({"model":"m","provider":"codex","cache_write_tokens":7,"started_at":"2026-01-01T00:00:00Z","completed_at":"2026-01-01T00:00:03Z","has_subagents":false,"usage_status":"complete","total_tokens":5})).unwrap();
+    s.put("local","tool","t1","p","t","r","2026-01-01T00:00:00Z","2026-01-01T00:00:00Z","partial","synthetic",json!({"tool_category":"shell","exit_code":2})).unwrap();
+    s.conn.execute_batch("UPDATE records SET cache_write_tokens=NULL,exit_code=NULL,agent_provider=NULL,has_subagents=NULL,elapsed_ms=NULL,facts_version=1").unwrap();
+    t3ui_core::storage::hydrate_more_facts(&s.conn).unwrap();
+    let row: (i64, String, i64, bool, i32) = s.conn.query_row("SELECT cache_write_tokens,agent_provider,elapsed_ms,has_subagents,facts_version FROM records WHERE kind='model_turn'", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))).unwrap();
+    assert_eq!(row, (7, "codex".into(), 3000, false, 2));
+    let exit: i64 = s.conn.query_row("SELECT exit_code FROM records WHERE kind='tool'", [], |r| r.get(0)).unwrap();
+    assert_eq!(exit, 2);
+    let summary = analytics::query(&s, "usage/tool-summary", &Filter::default()).unwrap();
+    assert_eq!(summary["data"][0]["nonZero"], 1);
+}

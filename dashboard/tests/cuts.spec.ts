@@ -348,12 +348,16 @@ test('the chart download says which values are missing and which are lower bound
 test('opening today stops at now and compares equal time', async ({ page }) => {
   const startOfToday = new Date(); startOfToday.setUTCHours(0, 0, 0, 0);
   const endOfToday = new Date(startOfToday.getTime() + 86_400_000 - 1);
-  await open(page, `?since=${startOfToday.toISOString()}&until=${endOfToday.toISOString()}&res=1h`);
+  // Turns that name no model are drawn too, because early in the day they can be the only ones.
+  await open(page, `?since=${startOfToday.toISOString()}&until=${endOfToday.toISOString()}&res=1h&nr=1`);
   await expect(page.locator('.trace-line').first()).toBeVisible();
   // Every row in the table lies before now.
   await page.getByRole('button', { name: 'Show as table' }).click();
   const rows = await page.locator('.hero-chart tbody tr').count();
-  expect(rows).toBeLessThanOrEqual(Math.ceil((Date.now() - startOfToday.getTime()) / 3_600_000) + 2);
+  // Early in the day an hour is too long for the window, and the chart falls back to a finer bucket, which its heading names.
+  const per = /per (\d+)?\s*(minute|hour|day)/.exec((await page.locator('.hero-chart h2').first().textContent()) ?? '');
+  const bucket = (Number(per?.[1] ?? 1)) * (per?.[2] === 'minute' ? 60_000 : per?.[2] === 'day' ? 86_400_000 : 3_600_000);
+  expect(rows).toBeLessThanOrEqual(Math.ceil((Date.now() - startOfToday.getTime()) / bucket) + 2);
   await expect(page.locator('.ts-read')).toContainText('now');
 });
 
@@ -520,9 +524,13 @@ test('the whole history arrives in the background and a chosen window waits only
 });
 
 test('every provider and model stays listed, ranked by use', async ({ page }) => {
+  // Groups with no turns here are folded under one button, and unfolding it lists them all.
+  const unfold = async () => { const t = page.locator('.idle-toggle'); if (await t.count()) await t.click(); };
   await open(page, '?by=provider&range=24h');
+  await unfold();
   for (const name of ['OpenAI', 'Anthropic', 'xAI', 'Meta', 'Google']) await expect(page.locator('.model-lines li', { hasText: name })).toHaveCount(1);
   await open(page, '?range=24h');
+  await unfold();
   await expect(page.locator('.more-models')).toHaveCount(0);
   const values = await page.locator('.model-lines li b[title]').evaluateAll((b) => b.map((x) => Number((x as HTMLElement).title.replace(/[^0-9]/g, ''))));
   expect([...values].sort((a, c) => c - a)).toEqual(values);
@@ -930,8 +938,12 @@ test('a resolution chosen by link stays lit while the chart falls back', async (
 
 test('a group with no turns in the window shows no share', async ({ page }) => {
   await open(page, '?range=24h');
+  const toggle = page.locator('.idle-toggle');
+  test.skip(!(await toggle.count()), 'Every group ran in the last day.');
   const idle = page.locator('.model-lines li[data-idle]');
-  test.skip(!(await idle.count()), 'Every group ran in the last day.');
+  await expect(idle).toHaveCount(0);
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
   await expect(idle.first().locator('small')).toHaveText('No turns here');
 });
 
@@ -978,4 +990,31 @@ test('a chosen provider is counted exactly, including turns that name no model',
   // Capture keeps running, so the two are read together until they agree.
   await expect.poll(async () => { const [a, b] = [await turnsInRow(), await turnsInTile()]; return a > 0 && a === b; }, { timeout: 20_000 }).toBe(true);
   await expect(page.locator('.stats .lower-bound')).toHaveCount(0);
+});
+
+test('groups with no turns fold under one button, and a chosen one stays in view', async ({ page }) => {
+  await open(page, '?range=24h');
+  const toggle = page.locator('.idle-toggle');
+  test.skip(!(await toggle.count()), 'Every group ran in the last day.');
+  const folded = Number(/\d+/.exec((await toggle.textContent()) ?? '')![0]);
+  const before = await page.locator('.model-lines li').count();
+  await toggle.click();
+  await expect(page.locator('.model-lines li')).toHaveCount(before + folded);
+  const quiet = page.locator('.model-lines li[data-idle]').first();
+  const name = (await quiet.locator('.model-line-name').textContent())!;
+  await quiet.locator('button').first().click();
+  await toggle.click();
+  await expect(page.locator('.model-lines li', { hasText: name })).toHaveCount(1);
+});
+
+test('the busiest delegating threads open their tree in one click', async ({ page }) => {
+  await open(page, '?range=7d');
+  const links = page.locator('.busiest-trees a');
+  await expect(links.first()).toBeVisible({ timeout: 20_000 });
+  const title = (await links.first().textContent())!.trim();
+  await links.first().click();
+  await expect(page).toHaveURL(/page=Agent(\+|%20)Trees/);
+  await expect(page).toHaveURL(/root=/);
+  await expect(page).toHaveURL(/range=7d/);
+  await expect(page.locator('[aria-current="true"]', { hasText: title }).first()).toBeVisible();
 });

@@ -1,5 +1,5 @@
-import type { TurnRow } from './entities';
-import { localParts, zonedDayStart } from './format';
+import { turnMs, type TurnRow } from './entities';
+import { localParts, zonedDayStart, type LocalParts } from './format';
 import { FAMILIES, modelProvider, OTHER_COLOR, type Provider } from './modelColors';
 import { nextDay } from './timeWindow';
 
@@ -126,19 +126,37 @@ export function idleGroup(by: GroupBy, key: string, modelColors: Map<string, str
 
 const pad = (n: number) => String(n).padStart(2, '0');
 
+/** Local dates per 15 minutes and local midnights per day, for each timezone. A clock change happens on such a boundary, so a 15-minute slot has one offset. */
+const zoneCaches = new Map<string, { parts: Map<number, LocalParts>; days: Map<string, number> }>();
+function zoneCache(tz: string) {
+  let c = zoneCaches.get(tz);
+  // Bounded: a few years of slots, then it starts over.
+  if (!c || c.parts.size > 200_000) { c = { parts: new Map(), days: new Map() }; zoneCaches.set(tz, c); }
+  return c;
+}
+const labelFormats = new Map<string, Intl.DateTimeFormat>();
+function labelFormat(tz: string, sub: boolean) {
+  const key = `${tz}|${sub}`;
+  let f = labelFormats.get(key);
+  if (!f) { f = new Intl.DateTimeFormat('en-GB', { timeZone: tz, weekday: 'short', day: 'numeric', month: 'short', ...(sub ? { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' as const } : {}) }); labelFormats.set(key, f); }
+  return f;
+}
+
 /**
  * Turns as chart rows and list totals for one window. Empty buckets stay on the axis so spacing is true to time,
  * and a metric no turn reported totals null rather than zero.
  */
 export function buildTrace({ turns, by, metric, res, tz, since, until, modelColors, projectName, limit = 8, cumulative, totalsOnly }: TraceInput): Trace {
-  const hourDate = new Map<number, { date: string; hour: number; weekday: number }>();
+  // Local dates are kept between calls, because dragging the slider rebuilds the trace on every move over the same turns.
+  const cache = zoneCache(tz);
+  const hourDate = cache.parts;
   const partsAt = (ms: number) => {
     const key = Math.floor(ms / (15 * MIN));
     let p = hourDate.get(key);
     if (!p) { p = localParts(new Date(ms), tz); hourDate.set(key, p); }
     return p;
   };
-  const dayStart = new Map<string, number>();
+  const dayStart = cache.days;
   const startOfDay = (date: string) => {
     let v = dayStart.get(date);
     if (v === undefined) { v = zonedDayStart(date, tz).getTime(); dayStart.set(date, v); }
@@ -167,7 +185,7 @@ export function buildTrace({ turns, by, metric, res, tz, since, until, modelColo
     return startOfDay(d);
   };
 
-  const inWindow = turns.filter((t) => { const ms = Date.parse(t.occurred_at); return ms >= since && ms <= until; });
+  const inWindow = turns.filter((t) => { const ms = turnMs(t); return ms >= since && ms <= until; });
 
   // Totals decide which groups earn a line, and the rest share one.
   const infos = new Map<string, GroupInfo>();
@@ -175,15 +193,16 @@ export function buildTrace({ turns, by, metric, res, tz, since, until, modelColo
   // Whether anything in the window reported this measure, session-log hours included, so a total of them is known.
   let measuredAny = false;
   for (const t of inWindow) {
-    const info = groupOf(t, by, modelColors, projectName);
-    if (!infos.has(info.key)) infos.set(info.key, info);
-    const entry = totals.get(info.key) ?? { value: 0, turns: 0, reported: 0, partial: false };
+    // A group is described once, from its first turn. Every later turn only needs its key.
+    const key = turnGroupKey(t, by);
+    if (!infos.has(key)) infos.set(key, groupOf(t, by, modelColors, projectName));
+    const entry = totals.get(key) ?? { value: 0, turns: 0, reported: 0, partial: false };
     const v = metricValue(t, metric);
     // An hour read from a session log adds its tokens, but it is not a turn, so it never counts as one.
     if (!t.log) entry.turns += 1;
     if (v !== null) { entry.value += v; measuredAny = true; if (!t.log) entry.reported += 1; }
     if (hasAnyTokens(t)) entry.partial = true;
-    totals.set(info.key, entry);
+    totals.set(key, entry);
   }
   const ranked = [...totals.entries()].sort((a, b) => b[1].value - a[1].value || b[1].turns - a[1].turns);
   if (by === 'project') {
@@ -221,7 +240,8 @@ export function buildTrace({ turns, by, metric, res, tz, since, until, modelColo
   const OTHER: GroupInfo = { key: 'Other', label: 'Other', color: OTHER_COLOR, model: null, provider: null, dash: true };
 
   const sub = res !== '1d' && res !== '1w';
-  const fmtLabel = (ms: number) => new Intl.DateTimeFormat('en-GB', { timeZone: tz, weekday: 'short', day: 'numeric', month: 'short', ...(sub ? { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' as const } : {}) }).format(new Date(ms));
+  const labels = labelFormat(tz, sub);
+  const fmtLabel = (ms: number) => labels.format(new Date(ms));
   const fmtDate = new Intl.DateTimeFormat('en-GB', { timeZone: tz, day: 'numeric', month: 'short' });
   const multiDay = until - since > DAY;
   const fmtTick = (ms: number) => {
@@ -252,9 +272,9 @@ export function buildTrace({ turns, by, metric, res, tz, since, until, modelColo
   rows.forEach((r, i) => r.__i = i);
   const mark = (m: Map<number, Set<string>>, i: number, key: string) => { const set = m.get(i) ?? new Set<string>(); set.add(key); m.set(i, set); };
   for (const t of inWindow) {
-    const row = index.get(floor(Date.parse(t.occurred_at)));
+    const row = index.get(floor(turnMs(t)));
     if (!row) continue;
-    const key = groupOf(t, by, modelColors, projectName).key;
+    const key = turnGroupKey(t, by);
     const i = Number(row.__i);
     const target = drawnSet.has(key) ? key : 'Other';
     mark(groupsRan, i, key);

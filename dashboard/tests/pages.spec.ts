@@ -239,3 +239,19 @@ test('a thread whose totals sum to 0 while other turns reported none is not an e
   await expect(cell).toContainText('No complete total');
   await expect(cell).not.toHaveText(/^0$/);
 });
+
+test('the quota page answers whether a limit is close in one line', async ({ page }) => {
+  await page.goto('/?page=Quota%20and%20Resets');
+  await page.waitForLoadState('networkidle');
+  const summary = page.locator('.quota-summary');
+  test.skip(!(await page.locator('.quota-pace').count()), 'No window has enough readings for a pace.');
+  await expect(summary).toHaveCount(1);
+  if (await summary.getAttribute('data-risk')) {
+    // Each risk names the window and says whether it is measured or projected.
+    for (const text of await summary.locator('li').allTextContents()) expect(text).toMatch(/% used|\(projection\)/);
+    await expect(page.locator('.quota-pace[data-soon]').first()).toBeVisible();
+  } else {
+    await expect(summary).toContainText('No limit is near full');
+  }
+  await expect(page.locator('.quota-sampled', { hasText: 'in the future' })).toHaveCount(0);
+});

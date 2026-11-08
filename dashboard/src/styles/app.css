@@ -179,6 +179,10 @@ small.fine { font-size: var(--text-xs); }
 .model-lines[data-picking] > li:not([data-selected]) { opacity: 0.42; }
 .model-lines > li[data-idle] .model-line b { color: var(--ink-3); font-weight: 450; }
 .model-lines > li[data-selected] .model-line-name { font-weight: 600; }
+.idle-toggle { justify-self: start; inline-size: fit-content; margin-block-start: 0.65rem; padding: 0.25rem 0.6rem; border: 1px solid var(--line-strong); border-radius: 999px; background: none; cursor: pointer; font: inherit; font-size: var(--text-xs); color: var(--ink-3); }
+.idle-toggle:focus-visible { outline: 2px solid var(--ink-1); outline-offset: 2px; }
+.idle-toggle:active { color: var(--ink-1); }
+@media (hover: hover) and (pointer: fine) { .idle-toggle:hover { color: var(--ink-1); } }
 .unnamed-toggle { justify-self: start; inline-size: fit-content; margin-block-start: 0.65rem; cursor: pointer; font-size: var(--text-xs); }
 .unnamed-toggle b { font-weight: 600; }
 .unnamed-toggle[aria-pressed='true'] { color: var(--ink-1); border-color: var(--ink-3); }
@@ -791,6 +795,13 @@ pre { margin: 0; padding: 0.6rem 0.75rem; max-block-size: 24rem; overflow: auto;
 .quota-pace-time { white-space: nowrap; }
 .quota-pace-basis { white-space: nowrap; }
 .quota-pace[data-soon] { color: var(--ink-1); }
+.quota-pace[data-soon] svg { color: var(--warn, oklch(0.8 0.15 75)); }
+.quota-summary { display: flex; gap: 0.6rem; align-items: start; margin-block-end: 1rem; padding: 0.7rem 0.9rem; border: 1px solid var(--line); border-radius: 0.6rem; color: var(--ink-2); font-size: var(--text-sm); text-wrap: pretty; }
+.quota-summary svg { flex: none; margin-block-start: 0.15rem; color: var(--ink-3); }
+.quota-summary ul { display: grid; gap: 0.25rem; margin: 0; padding: 0; list-style: none; }
+.quota-summary b { color: var(--ink-1); font-weight: 600; }
+.quota-summary[data-risk] { border-color: color-mix(in oklch, var(--warn, oklch(0.8 0.15 75)) 45%, transparent); color: var(--ink-1); }
+.quota-summary[data-risk] svg { color: var(--warn, oklch(0.8 0.15 75)); }
 .quota-pace-basis { color: var(--ink-3); margin-inline-start: 0.3rem; }
 
 /* pages round */
@@ -823,3 +834,10 @@ pre { margin: 0; padding: 0.6rem 0.75rem; max-block-size: 24rem; overflow: auto;
 @media (max-width: 760px) { .quota-alert-mini { display: grid; } }
 .unnamed-toggle[aria-pressed='true'] { background: var(--ink-1); color: var(--on-accent); border-color: var(--ink-1); background-image: none; }
 .trace-tip-pinned { background: oklch(0.13 0 none); }
+
+/* The busiest delegating threads under the delegation facts, each a link to its tree. */
+.busiest-trees { display: grid; gap: 0.35rem; margin: 0.9rem 0 0; padding: 0.75rem 0 0; list-style: none; border-block-start: 1px solid var(--line); }
+.busiest-trees li { display: flex; align-items: baseline; justify-content: space-between; gap: 0.75rem; min-inline-size: 0; }
+.busiest-trees .row-link { min-inline-size: 0; }
+.busiest-trees .row-link span { min-inline-size: 0; overflow: clip; text-overflow: ellipsis; white-space: nowrap; }
+.busiest-trees small { flex: none; color: var(--ink-3); font-variant-numeric: tabular-nums; }

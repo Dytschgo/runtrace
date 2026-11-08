@@ -246,7 +246,7 @@ fn verify_streamed_table(conn: &duckdb::Connection, table: &str, quoted_path: &s
     anyhow::ensure!(
         schema
             .iter()
-            .all(|(_, t)| ["VARCHAR", "JSON", "BIGINT", "INTEGER"].contains(&t.as_str())),
+            .all(|(_, t)| ["VARCHAR", "JSON", "BIGINT", "INTEGER", "BOOLEAN"].contains(&t.as_str())),
         "Unsupported exact snapshot comparison type"
     );
     let archived_schema: Vec<(String, String)> = conn

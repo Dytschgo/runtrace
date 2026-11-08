@@ -13,8 +13,16 @@ export const FAMILIES: Record<Provider, string[]> = {
 
 export const OTHER_COLOR = 'oklch(0.42 0 none)';
 
+const providerOf = new Map<string, Provider>();
+/** Model names are few and turns are many, so each name is classified once. */
 export function modelProvider(model: string | null | undefined): Provider {
   if (!model) return 'other';
+  let p = providerOf.get(model);
+  if (!p) { p = classify(model); providerOf.set(model, p); }
+  return p;
+}
+
+function classify(model: string): Provider {
   if (/^(gpt|codex|o\d|chatgpt)/i.test(model)) return 'openai';
   if (/claude/i.test(model)) return 'anthropic';
   if (/grok/i.test(model)) return 'xai';

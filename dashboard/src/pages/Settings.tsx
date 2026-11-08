@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, type UseQueryResult } from '@tanstack/react-query';
 import { CheckCircle2, XCircle } from 'lucide-react';
 import { Async, Command, PageHeader, Panel, Segmented, SelectField, SkeletonRows, Tag, Tokens, Unknown } from '../components/ui';
 import { getJson } from '../lib/api';
@@ -24,9 +24,11 @@ export default function Settings() {
   const { timezone, density, pageSize } = useSettings();
   const health = useHealth();
   const ready = useReady();
-  const threads = useThreads({});
+  // The per-machine aggregate names each instance and counts its threads. Threads are read whole only when it is unavailable.
   const machines = useUsage('machines', {});
-  const instanceIds = useMemo(() => [...new Set((threads.data?.rows ?? []).map((t) => t.instance_id))].sort(), [threads.data]);
+  const threads = useThreads({}, machines.isError);
+  const instanceIds = useMemo(() => [...new Set(machines.data ? machines.data.map((m) => m.identity) : (threads.data?.rows ?? []).map((t) => t.instance_id))].sort(), [machines.data, threads.data]);
+  const threadCount = (id: string) => machines.data ? machines.data.find((m) => m.identity === id)?.observed_threads ?? 0 : threads.data?.rows.filter((t) => t.instance_id === id).length ?? 0;
   const tzOptions = [...new Set([timezone, browserTimezone(), ...TIMEZONES])];
 
   return (
@@ -54,8 +56,8 @@ export default function Settings() {
       </div>
 
       <Panel title="Capture instances" sub="Each collector keeps its own identity">
-        <Async query={threads} skeleton={<SkeletonRows rows={2} label="Loading instances" />} isEmpty={() => !instanceIds.length} compact>
-          {() => <div className="instance-grid">{instanceIds.map((id) => <Instance key={id} id={id} threads={threads.data?.rows.filter((t) => t.instance_id === id).length ?? 0} tz={timezone} totalTokens={machines.data?.find((m) => m.identity === id)?.total_tokens} />)}</div>}
+        <Async<unknown> query={(machines.isError ? threads : machines) as UseQueryResult<unknown>} skeleton={<SkeletonRows rows={2} label="Loading instances" />} isEmpty={() => !instanceIds.length} compact>
+          {() => <div className="instance-grid">{instanceIds.map((id) => <Instance key={id} id={id} threads={threadCount(id)} tz={timezone} totalTokens={machines.data?.find((m) => m.identity === id)?.total_tokens} />)}</div>}
         </Async>
       </Panel>
 

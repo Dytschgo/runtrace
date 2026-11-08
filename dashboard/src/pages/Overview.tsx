@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ComponentType, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
+import { useDeferredValue, useEffect, useMemo, useState, type ComponentType, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
 import { ArrowDownRight, ArrowUpRight, Bot, Cpu, Folder, Download, GitCompareArrows, MessageSquare, Minus, MessageSquareReply, MessagesSquare, Play, Repeat2, Terminal, XCircle, ZoomOut } from 'lucide-react';
 import { ActivityHeatmap } from '../components/heatmap';
 import { Counter } from '../components/motion';
@@ -7,9 +7,9 @@ import { TraceChart } from '../components/TraceChart';
 import { AppLink, Async, ChartPanel, CoverageBar, EmptyState, ErrorState, NoRecords, PageHeader, Panel, plural, RankedBars, Segmented, SelectField, Skeleton, SkeletonRows, Sparkline, Tag, Tokens, Unknown } from '../components/ui';
 import { buildHeatmap, captureGaps, delta, summaryFromTurns, tokenSummary, toolStats, type TokenSummary } from '../lib/analytics';
 import { toCsv } from '../lib/api';
-import { hasTurnUsage } from '../lib/entities';
+import { hasTurnUsage, turnMs } from '../lib/entities';
 import { useAgents, useCollectorReadiness, useFilters, useHourly, useHourlyMany, useLiveTurns, useModels, useModelSlots, useOverview, useOverviews, useProjects, useQuota, useThreads, useToolAggregates, useToolAggregatesMany, useToolScan } from '../lib/data';
-import { inTimeRange, previousWindow, zoomInTrail, zoomOutPatch } from '../lib/filters';
+import { inTimeRange, previousWindow, windowTest, zoomInTrail, zoomOutPatch } from '../lib/filters';
 import { fmtCompact, fmtDuration, fmtInt, fmtPct, fmtRelative, isKnown, repairText } from '../lib/format';
 import { modelIcon, providerIcon } from '../lib/icons';
 import { modelProvider, OTHER_COLOR, seriesColor } from '../lib/modelColors';
@@ -62,12 +62,17 @@ export default function Overview() {
   const readiness = useCollectorReadiness();
   const slots = useModelSlots();
   // Every turn in scope, unfiltered by time, so the headline, list and chart agree and follow the slider without a request per day moved.
-  const { all: wholeTurns, recent: recentTurns, rows: turnRows, coversFrom } = useLiveTurns(f);
-  // The service answers one heavy read at a time per connection, so what the chart needs goes first and the rest follows.
+  // Older history waits until the panels on screen have their data, unless the window reaches back past the recent turns.
+  const [historyGo, setHistoryGo] = useState(false);
+  const { all: wholeTurns, recent: recentTurns, rows: turnRows, coversFrom } = useLiveTurns(f, true, !historyGo);
+  // Heavy reads slow each other down on the service, so what the chart needs goes first and the rest follows.
   const chartReady = !!(recentTurns.data || wholeTurns.data) || recentTurns.isError;
   const models = useModels(f, chartReady);
   const threads = useThreads(f, chartReady);
   const agents = useAgents(f, chartReady);
+  const needsHistory = !live.since || Date.parse(live.since) < coversFrom;
+  const panelsIn = (threads.isFetched || threads.isError) && (agents.isFetched || agents.isError);
+  useEffect(() => { if (!historyGo && (needsHistory || panelsIn || recentTurns.isError)) setHistoryGo(true); }, [historyGo, needsHistory, panelsIn, recentTurns.isError]);
   const projects = useProjects();
   const toolAggregates = useToolAggregates(f, chartReady);
   const tools = useToolScan(f, 1000, toolAggregates.isError);
@@ -142,7 +147,7 @@ export default function Overview() {
   }, [projects.data]);
 
   const scoped = useMemo(() => turnRows.filter((t) => !f.model || t.model === f.model), [turnRows, f.model]);
-  const firstTurn = useMemo(() => scoped.reduce((m, t) => Math.min(m, Date.parse(t.occurred_at)), Infinity), [scoped]);
+  const firstTurn = useMemo(() => scoped.reduce((m, t) => Math.min(m, turnMs(t)), Infinity), [scoped]);
   // The recent turns are enough for a recent window. Anything earlier waits for the whole history, which is on its way in the background.
   const covered = !!wholeTurns.data || (!!live.since && Date.parse(live.since) >= coversFrom);
   const allTurns = wholeTurns.data || !covered ? wholeTurns : recentTurns;
@@ -276,7 +281,12 @@ export default function Overview() {
   // A model can report some fields but no complete total, and that is said plainly.
   const whyMissing = (partial: boolean) => (partial ? `Reported token fields, but ${metric === 'total' ? 'no complete total' : `no ${metricInfo.label.toLowerCase()}`}. Pick another measure to see them.` : 'Reported no token usage.');
   const unnamed = lines.find((l) => l.key === 'not-recorded' && l.value > 0);
-  const shownLines = useMemo(() => lines.filter((l) => l.key !== 'not-recorded' || l.value > 0 || l.turns > 0), [lines]);
+  const allLines = useMemo(() => lines.filter((l) => l.key !== 'not-recorded' || l.value > 0 || l.turns > 0), [lines]);
+  // Groups with no turns in this window stay listed so they can be chosen, but folded under one button so the ones that ran stand out.
+  const [showIdle, setShowIdle] = useState(false);
+  const windowUnknown = !!unknownWindow;
+  const idle = useMemo(() => (windowUnknown ? [] : allLines.filter((l) => l.turns === 0 && l.value === 0 && !picks.has(l.key))), [allLines, windowUnknown, picks]);
+  const shownLines = useMemo(() => (showIdle || idle.length < 2 ? allLines : allLines.filter((l) => !idle.includes(l))), [allLines, idle, showIdle]);
   // One tab stop for the whole list. The arrow keys move between rows.
   const [rove, setRove] = useState(0);
   const roveTo = (e: ReactKeyboardEvent<HTMLUListElement>) => {
@@ -317,11 +327,14 @@ export default function Overview() {
     URL.revokeObjectURL(url);
   };
 
+  // The panels below the chart follow the window once a drag pauses, so moving the slider redraws the chart and headline first.
+  const settled = useDeferredValue(live);
   // What each thread did inside the window. A thread started last week still counts if it ran today.
   const activity = useMemo(() => {
     const m = new Map<string, { last: string; turns: number; tokens: number | null; missing: boolean }>();
+    const inLive = windowTest(settled);
     for (const t of picks.size ? chartTurns : scoped) {
-      if (!inTimeRange(t.occurred_at, live)) continue;
+      if (!inLive(turnMs(t))) continue;
       const e = m.get(t.thread_id) ?? { last: t.occurred_at, turns: 0, tokens: null, missing: false };
       e.turns += 1;
       if (t.occurred_at > e.last) e.last = t.occurred_at;
@@ -329,18 +342,21 @@ export default function Overview() {
       m.set(t.thread_id, e);
     }
     return m;
-  }, [scoped, chartTurns, picks.size, live]);
+  }, [scoped, chartTurns, picks.size, settled]);
   const inWindow = useMemo(
-    () => (threadRows ?? []).filter((t) => activity.has(t.source_id) || (!picks.size && inTimeRange(t.occurred_at, live) && (!f.model || t.model === f.model))),
-    [threadRows, activity, live, f.model, picks.size],
+    () => (threadRows ?? []).filter((t) => activity.has(t.source_id) || (!picks.size && inTimeRange(t.occurred_at, settled) && (!f.model || t.model === f.model))),
+    [threadRows, activity, settled, f.model, picks.size],
   );
   const delegation = useMemo(() => {
     if (!forest) return null;
     // The same definition as the Agent Trees page: a tree in view that started at least one sub-agent inside the window.
-    const inView = forestInView(forest.roots, { since: live.since, until: live.until, model: f.model }).trees
+    const inView = forestInView(forest.roots, { since: settled.since, until: settled.until, model: f.model }).trees
       .filter((r) => !picks.size || (!!r.thread && activity.has(r.thread.source_id)));
-    const stats = inView.map((r) => treeStats(r, live)).filter((s) => s.delegated > 0);
+    const scored = inView.map((r) => ({ root: r, s: treeStats(r, settled) })).filter((x) => x.s.delegated > 0);
+    const stats = scored.map((x) => x.s);
     return {
+      // The busiest trees, so what the sub-agents did is one click away.
+      top: [...scored].sort((a, b) => b.s.delegated - a.s.delegated || b.s.busyMs - a.s.busyMs).slice(0, 3).map((x) => ({ key: x.root.key, title: x.root.title, delegated: x.s.delegated, busy: x.s.busyMs })),
       trees: stats.length,
       deepest: Math.max(0, ...stats.map((s) => s.maxDepth)),
       fanout: Math.max(0, ...stats.map((s) => s.maxFanout)),
@@ -349,7 +365,7 @@ export default function Overview() {
       returned: stats.reduce((sum, s) => sum + s.returned, 0),
       known: stats.reduce((sum, s) => sum + s.returned + s.notReturned, 0),
     };
-  }, [forest, f.model, live, picks.size, activity]);
+  }, [forest, f.model, settled, picks.size, activity]);
   const mainThreads = useMemo(() => inWindow.filter((t) => t.type !== 'child').length, [inWindow]);
   const recent = useMemo(() => {
     const lastSeen = (id: string, fallback: string) => activity.get(id)?.last ?? fallback;
@@ -377,11 +393,12 @@ export default function Overview() {
   // The parts are taken from turns that reported a total, so they add up to the headline. Turns with parts but no total are counted and named, not mixed in.
   const { typeSummary, partsOnly } = useMemo(() => {
     if (!fromTurns) return { typeSummary: summary, partsOnly: 0 };
-    const here = (picks.size ? chartTurns : scoped).filter((t) => inTimeRange(t.occurred_at, live));
+    const inLive = windowTest(settled);
+    const here = (picks.size ? chartTurns : scoped).filter((t) => inLive(turnMs(t)));
     const all = summaryFromTurns(here);
     const parts = summaryFromTurns(here.filter((t) => t.total !== null));
     return { typeSummary: { ...parts, turns: all.turns, withUsage: all.withUsage }, partsOnly: here.filter((t) => t.total === null && hasTurnUsage(t)).length };
-  }, [fromTurns, picks.size, chartTurns, scoped, live, summary]);
+  }, [fromTurns, picks.size, chartTurns, scoped, settled, summary]);
   const hasTokens = summary.total !== null;
   const callsKnown = (models.data ?? []).some((m) => isKnown(m.calls));
   const resolvedKnown = useMemo(() => turnRows.some((t) => t.resolved !== null), [turnRows]);
@@ -426,6 +443,11 @@ export default function Overview() {
                   <ul className="model-lines" onKeyDown={roveTo} aria-label={`${GROUPS.find((g) => g.value === by)!.label}. Arrow keys move between rows.`} data-focus={focus ? 'true' : undefined} data-picking={picks.size ? 'true' : undefined}>
                     {shownLines.map((l, i) => <GroupLine key={l.key} tabIndex={i === Math.min(rove, shownLines.length - 1) ? 0 : -1} onRove={() => setRove(i)} offChart={l.key === 'not-recorded' && !showUnnamed && !picks.has('not-recorded')} line={l} total={listTrace.total ?? total} top={topValue} by={by} unit={metricInfo.unit} draft={!!draft} focused={focus === (drawn.has(l.key) ? l.key : 'Other')} seriesKey={l.key === 'not-recorded' && !drawn.has(l.key) ? '' : drawn.has(l.key) ? l.key : 'Other'} onFocus={setFocus} selected={picks.has(l.key)} onToggle={togglePick} why={whyMissing(l.partial)} unknown={unknownWindow} />)}
                   </ul>
+                  {idle.length >= 2 && (
+                    <button type="button" className="idle-toggle" aria-expanded={showIdle} onClick={() => setShowIdle((v) => !v)}>
+                      {showIdle ? `Fold ${idle.length} with no turns here` : `${idle.length} more with no turns here`}
+                    </button>
+                  )}
                   {unnamed && !picks.size && (
                     <button type="button" className="usage-chip unnamed-toggle" aria-pressed={showUnnamed} onClick={() => set({ nr: showUnnamed ? null : 1 })} title={showUnnamed ? 'Take turns that name no model off the chart' : 'Draw turns that name no model on the chart'}>
                       Not recorded on chart
@@ -589,6 +611,7 @@ export default function Overview() {
                 : !delegation ? <SkeletonRows rows={5} label="Loading delegation" />
                   : !delegation.trees ? <EmptyState title="No delegation recorded here" compact><p>No thread in this view has a recorded sub-agent.</p></EmptyState>
                     : (
+                      <>
                       <dl className="facts">
                         <div><dt>Delegating threads</dt><dd>{fmtInt(delegation.trees)}</dd></div>
                         <div><dt>Deepest level</dt><dd>{fmtInt(delegation.deepest)}</dd></div>
@@ -597,6 +620,15 @@ export default function Overview() {
                         <div><dt>Sub-agent busy time</dt><dd>{fmtDuration(delegation.busy)}</dd></div>
                         <div><dt>Results delivered</dt><dd>{delegation.known ? `${fmtInt(delegation.returned)} of ${fmtInt(delegation.known)} recorded` : <Unknown />}</dd></div>
                       </dl>
+                      <ol className="busiest-trees" aria-label="Busiest delegating threads">
+                        {delegation.top.map((t) => (
+                          <li key={t.key}>
+                            <AppLink className="row-link" href={hrefPage('Agent Trees', { root: t.key, node: null })}><span>{t.title}</span></AppLink>
+                            <small>{plural(t.delegated, 'sub-agent')}{t.busy > 0 ? ` · ${fmtDuration(t.busy)} busy` : ''}</small>
+                          </li>
+                        ))}
+                      </ol>
+                      </>
                     )}
             </Panel>
           </div>

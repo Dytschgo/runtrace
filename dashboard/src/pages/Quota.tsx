@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { CircleGauge, OctagonAlert, TrendingUp, TriangleAlert } from 'lucide-react';
+import { CircleCheck, CircleGauge, OctagonAlert, TrendingUp, TriangleAlert } from 'lucide-react';
 import { Async, EmptyState, PageHeader, Panel, QualityBadge, Skeleton, Unknown } from '../components/ui';
 import { useMinute, useQuota, useQuotaSamples } from '../lib/data';
 import { fmtDateTime, fmtDuration, fmtPct, fmtRelative, isKnown } from '../lib/format';
@@ -101,8 +101,28 @@ function Live({ rows, samples, tz, now }: { rows: Row[]; samples: Row[]; tz: str
     return [...m.entries()];
   }, [rows]);
   const seen = new Set(agents.map(([p]) => owner(p)).filter(Boolean));
+  // One line that answers "am I about to hit a limit?": windows nearly full, or on pace to fill before they reset.
+  const risks = agents.flatMap(([provider, list]) => list.flatMap((r) => {
+    const used = isKnown(r.used_percentage) ? r.used_percentage : isKnown(r.remaining_percentage) ? 100 - r.remaining_percentage : null;
+    const reset = typeof r.reset_at === 'string' ? Date.parse(r.reset_at) : NaN;
+    if (r.reset_passed === true || (Number.isFinite(reset) && reset <= now)) return [];
+    const pace = quotaPace(readings.get(`${provider}|${r.window}`) ?? [], isKnown(r.window_minutes) ? r.window_minutes : null, Number.isFinite(reset) ? reset : null, now);
+    const name = `${agentName(provider)} ${windowName(r.window).toLowerCase()}`;
+    if (used !== null && used >= QUOTA_HIGH) return [{ key: `${provider}|${r.window}`, text: <><b>{name}</b> is {pct(used)} used{Number.isFinite(reset) ? <>, resets in {fmtDuration(reset - now)}</> : null}</> }];
+    if (pace?.fullAt != null) return [{ key: `${provider}|${r.window}`, text: <><b>{name}</b> is on pace to fill around {clock.format(new Date(pace.fullAt))}{Number.isFinite(reset) ? <>, {fmtDuration(reset - pace.fullAt)} before its reset</> : null} <span className="quota-pace-basis">(projection)</span></> }];
+    return [];
+  }));
+  const anyPace = agents.some(([provider, list]) => list.some((r) => (readings.get(`${provider}|${r.window}`)?.length ?? 0) > 1));
   return (
     <>
+      {risks.length ? (
+        <div className="quota-summary" data-risk="true" role="status">
+          <TriangleAlert size={15} aria-hidden="true" />
+          <ul>{risks.map((r) => <li key={r.key}>{r.text}</li>)}</ul>
+        </div>
+      ) : anyPace ? (
+        <div className="quota-summary" role="status"><CircleCheck size={15} aria-hidden="true" /><span>No limit is near full or on pace to fill before it resets.</span></div>
+      ) : null}
       <div className="quota-cards">
         {agents.map(([provider, list]) => {
           const o = owner(provider);
@@ -136,7 +156,7 @@ function Live({ rows, samples, tz, now }: { rows: Row[]; samples: Row[]; tz: str
                     </p>
                     {pace && (
                       <p className="fine quota-pace" data-soon={pace.fullAt !== null ? 'true' : undefined} title={`A projection from the readings of the last ${spanText(pace.basisMs)}, not a reading. ${pace.perHour > 0 ? `About ${pace.perHour.toFixed(1)} points an hour.` : ''}`}>
-                        <TrendingUp size={12} aria-hidden="true" />
+                        {pace.fullAt !== null ? <TriangleAlert size={12} aria-hidden="true" /> : <TrendingUp size={12} aria-hidden="true" />}
                         {pace.fullAt !== null ? <>At this pace, full around <span className="quota-pace-time">{clock.format(new Date(pace.fullAt))}</span></> : pace.perHour > 0 ? 'At this pace, lasts until the reset' : 'Not rising lately'}
                         <span className="quota-pace-basis">· projection from {spanText(pace.basisMs)}</span>
                       </p>

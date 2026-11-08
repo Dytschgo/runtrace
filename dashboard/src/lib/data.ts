@@ -151,9 +151,11 @@ export function useAgents(f: Pick<Filters, 'project' | 'instance'>, enabled = tr
 }
 
 const TURN_MAX = 50_000;
-/** Provider turns hold no content, so they are cheap to read whole. */
+/** Turns come lean: only the fields a chart or list reads, with the provider already worked out. About half the bytes of the stored record. */
+const LEAN = { shape: 'lean' } as const;
+/** Provider turns hold no content and come lean, so they are cheap to read whole. */
 export function useModelTurns(f: Filters, enabled = true) {
-  const params = apiParams('model-turns', f);
+  const params = apiParams('model-turns', f, LEAN);
   return useQuery({
     queryKey: ['model-turns', params.toString()],
     enabled,
@@ -169,17 +171,18 @@ const RECENT_DAYS = 15;
  * without re-reading thousands of rows, and the headline, list and chart all move together.
  * New turns build up between polls, and a full page with nothing already known means some were missed, so history is read again.
  */
-export function useLiveTurns(f: Pick<Filters, 'project' | 'instance'>, enabled = true) {
+export function useLiveTurns(f: Pick<Filters, 'project' | 'instance'>, enabled = true, holdHistory = false) {
   const [coversFrom] = useState(() => Math.floor((Date.now() - RECENT_DAYS * 86_400_000) / 3_600_000) * 3_600_000);
-  const recentParams = apiParams('model-turns', { project: f.project, instance: f.instance, since: new Date(coversFrom).toISOString() });
+  const recentParams = apiParams('model-turns', { project: f.project, instance: f.instance, since: new Date(coversFrom).toISOString() }, LEAN);
   const recent = useQuery({
     queryKey: ['turns-recent', recentParams.toString()],
     enabled,
     queryFn: ({ signal }) => scanPages('model-turns', recentParams, toTurn, TURN_MAX, signal, BIG_PAGE),
   });
-  const all = useModelTurns({ project: f.project, instance: f.instance }, enabled && !recent.isPending);
+  // The whole history can wait while what is on screen loads, as long as the recent turns cover the window.
+  const all = useModelTurns({ project: f.project, instance: f.instance }, enabled && !recent.isPending && !holdHistory);
   const queryClient = useQueryClient();
-  const params = apiParams('model-turns', { project: f.project, instance: f.instance }, { limit: TAIL });
+  const params = apiParams('model-turns', { project: f.project, instance: f.instance }, { limit: TAIL, ...LEAN });
   const tailKey = ['turn-tail', params.toString()];
   const tail = useQuery({
     queryKey: tailKey,
@@ -231,7 +234,8 @@ export function useToolScan(f: Filters, max = TOOL_SAMPLE, enabled = true, onPro
   return useQuery({
     queryKey: ['tools', params.toString(), max],
     enabled,
-    queryFn: ({ signal }) => scanPages('tool-calls', params, toTool, max, signal, 500, onProgress),
+    // The sample is one page, so it is one read rather than two in a row.
+    queryFn: ({ signal }) => scanPages('tool-calls', params, toTool, max, signal, TOOL_SAMPLE, onProgress),
   });
 }
 

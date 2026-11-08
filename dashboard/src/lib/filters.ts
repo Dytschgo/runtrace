@@ -95,10 +95,20 @@ export function apiParams(route: string, f: Filters, extra: Record<string, strin
   return p;
 }
 
+/** A test for instants in a window, with its ends read once rather than for every row. */
+export function windowTest(f: Pick<Filters, 'since' | 'until'>): (ms: number) => boolean {
+  const a = f.since ? Date.parse(f.since) : -Infinity;
+  const b = f.until ? Date.parse(f.until) : Infinity;
+  return (ms) => !(ms < a) && !(ms > b);
+}
+
+// Lists filter thousands of rows against the same window, so its ends are read once and kept.
+const parsed = new Map<string, number>();
+const parseOnce = (iso: string) => { let v = parsed.get(iso); if (v === undefined) { if (parsed.size > 64) parsed.clear(); v = Date.parse(iso); parsed.set(iso, v); } return v; };
 export function inTimeRange(iso: string, f: Filters): boolean {
   const t = Date.parse(iso);
-  if (f.since && t < Date.parse(f.since)) return false;
-  if (f.until && t > Date.parse(f.until)) return false;
+  if (f.since && t < parseOnce(f.since)) return false;
+  if (f.until && t > parseOnce(f.until)) return false;
   return true;
 }
 
