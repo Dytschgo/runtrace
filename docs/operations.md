@@ -1,16 +1,19 @@
 # Operations
 
-Production root: `D:/Code/Runtrace`. Source checkout: `C:/Users/DylanFerraro/.t3/projects/runtrace`.
+A release install keeps the program, settings, data and logs in the per-user folder that `runtrace status` names (see the README). A source-built install made with `scripts/install.ps1` keeps them side by side in one folder, with `start.ps1`, `stop.ps1` and `runtrace.cmd` wrappers that pass its settings file.
 
-```powershell
-Set-Location D:/Code/Runtrace
-./start.ps1
-./t3ui.cmd capture pause
-./t3ui.cmd capture resume
-./stop.ps1
+```sh
+runtrace start          # update the database in the foreground, then start the service and wait until it answers
+runtrace status
+runtrace capture pause
+runtrace capture resume
+runtrace stop
+runtrace update         # back up the database, install the latest release, start again
 ```
 
-The launcher starts a hidden release process, saves its PID, redirects logs into logs/, and verifies HTTP readiness with a matching process ID. Windows socket inventory proved unreliable in this environment, so readiness does not depend on it. stop.ps1 stops only this installation's binary and waits for process exit before upgrades. Forced stops rely on DuckDB transaction recovery; committed import batches remain intact.
+`runtrace start` runs one-time database updates (for example filling new analytic columns, about 20 to 40 s on a large history) before the service starts, so they never race the readiness wait. It records the process id beside the data folder and confirms readiness with the process id the service reports. `runtrace stop` stops only a process that answers as this install, by its database identity.
+
+Updates: the service asks GitHub for the latest release about 20 s after starting and then daily (`[update] check`, or `RUNTRACE_NO_UPDATE_CHECK=1`). The dashboard offers a newer release; starting it sends a POST that only this computer's dashboard can make (loopback host, same-origin, and a custom header a foreign page cannot send). The update runs in its own process: it downloads the platform's file, checks it against the release's SHA256SUMS, stops the service, copies the database and its write-ahead log into `backups/before-update-*` (keeping only the newest such copy), swaps the program and starts the new version, which applies its own database updates first.
 
 `serve` collects through a dedicated DuckDB connection while readers use a separate connection. Collection backs off on source errors and catches up from retained projections. Every project and every 1,000 changed entities form commit boundaries. Final checkpoints advance after successful scope completion. Existing history may be visible in stages during the first backfill; capture quality remains partial.
 
@@ -30,7 +33,7 @@ Retention removes expired content from prompt, answer, tool and agent records wh
 
 ## Upgrade and removal
 
-Stop the installed runtime, preserve a backup, then run scripts/install.ps1 from the source checkout. It builds optimized Rust and frontend artifacts, preserves configuration/data, and refuses to replace a running binary. Restart and check health/ready, which includes collector state. Current source schemas are inspected and source SQLite is always read-only.
+A release install updates with `runtrace update` or from the dashboard. A source-built install updates by running scripts/install.ps1 again: it builds the dashboard and the release program, stops the running service, swaps the program, keeps settings and data, and starts it again. Current source schemas are inspected and source SQLite is always read-only.
 
 Uninstall by stopping the runtime, removing D:/Code/Runtrace and any external backups/exports, then removing the optional OS credential entry t3-usage-intelligence/content-key-v1 if encrypted capture was enabled. Remove the source checkout separately if desired. Original T3 history is unaffected.
 
@@ -38,7 +41,7 @@ The source checkout data directory is a Windows junction to the installed D: dat
 
 The explicit maintenance configuration at D:/Code/Runtrace/config/maintenance.toml uses a 4,096 MB DuckDB budget for full snapshot verification; the normal service retains 512 MB. Run expensive maintenance offline. Live queries use the normal configuration again after start.ps1.
 
-start.ps1 first runs `t3ui migrate` in the foreground with no time limit, prints its progress and saves it to logs/migrate-*.log. One-time updates such as filling new analytic columns (migration 006 takes about 20 s on the full history) or the search cache therefore never count against the 20-second readiness wait. If the update fails the service is not started. Back up the database before deploying a release with a new migration. Older snapshot restores rebuild missing search cache versions. Retention clears the cache and captured content together.
+`runtrace start` applies database updates before starting the service; if they fail, the service is not started and the database is left as it was. Older snapshot restores rebuild missing search cache versions. Retention clears the cache and captured content together.
 
 Full snapshots stream native row order with insertion-order preservation and verify every column in bounded ranges before publication. Unexpected ordering/schema/value differences fail closed. Replay of the current purge ledger precedes cache hydration. The completed-dataset snapshot and restore are qualified using the existing offline 4 GB maintenance budget; normal serving stays at 512 MB. See hill-climb-20261106.md for measured durations.
 

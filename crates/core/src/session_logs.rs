@@ -12,7 +12,9 @@ pub const SOURCE: &str = "session_logs";
 
 /// Encodes a folder the way Claude names its log folders: every character that is not a letter or digit becomes a dash.
 pub fn claude_folder(root: &str) -> String {
-    root.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect()
+    root.chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect()
 }
 
 #[derive(Default)]
@@ -30,21 +32,45 @@ struct Block {
 }
 
 /// With no store this only reads and reports what an import would write.
-pub fn import(c: &crate::config::Config, s: Option<&Store>, cache: &str, old_db: &str) -> Result<Value> {
+pub fn import(
+    c: &crate::config::Config,
+    s: Option<&Store>,
+    cache: &str,
+    old_db: &str,
+) -> Result<Value> {
     let raw = std::fs::read_to_string(cache).context("Cannot read the usage cache")?;
     let d: Value = serde_json::from_str(&raw)?;
-    let names = |key: &str| -> Vec<String> { d[key].as_array().map(|a| a.iter().map(|v| v.as_str().unwrap_or("").to_string()).collect()).unwrap_or_default() };
+    let names = |key: &str| -> Vec<String> {
+        d[key]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .map(|v| v.as_str().unwrap_or("").to_string())
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
     let (models, sessions) = (names("models"), names("sessions"));
 
-    let current = rusqlite::Connection::open_with_flags(&c.source.sqlite_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-    let cutoff: String = current.query_row("SELECT min(started_at) FROM orchestration_v2_projection_provider_turns", [], |r| r.get(0))?;
+    let current = rusqlite::Connection::open_with_flags(
+        &c.source.sqlite_path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )?;
+    let cutoff: String = current.query_row(
+        "SELECT min(started_at) FROM orchestration_v2_projection_provider_turns",
+        [],
+        |r| r.get(0),
+    )?;
     let cutoff_ms = chrono::DateTime::parse_from_rfc3339(&cutoff)?.timestamp_millis();
-    let old = rusqlite::Connection::open_with_flags(old_db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    let old =
+        rusqlite::Connection::open_with_flags(old_db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
 
     // Sessions the previous database already accounts for.
     let mut covered: HashSet<String> = HashSet::new();
     {
-        let mut stmt = old.prepare("SELECT provider_thread_id, provider_session_id FROM projection_thread_sessions")?;
+        let mut stmt = old.prepare(
+            "SELECT provider_thread_id, provider_session_id FROM projection_thread_sessions",
+        )?;
         let mut rows = stmt.query([])?;
         while let Some(r) = rows.next()? {
             for i in 0..2 {
@@ -65,7 +91,12 @@ pub fn import(c: &crate::config::Config, s: Option<&Store>, cache: &str, old_db:
 
     // A Claude log folder names the project it ran in. Live projects win over deleted copies of the same folder.
     let mut folders: HashMap<String, String> = HashMap::new();
-    for (conn, which) in [(&old, "deleted_at IS NOT NULL"), (&old, "deleted_at IS NULL"), (&current, "deleted_at IS NOT NULL"), (&current, "deleted_at IS NULL")] {
+    for (conn, which) in [
+        (&old, "deleted_at IS NOT NULL"),
+        (&old, "deleted_at IS NULL"),
+        (&current, "deleted_at IS NOT NULL"),
+        (&current, "deleted_at IS NULL"),
+    ] {
         let mut stmt = conn.prepare(&format!("SELECT project_id, workspace_root FROM projection_projects WHERE workspace_root IS NOT NULL AND {which}"))?;
         let mut rows = stmt.query([])?;
         while let Some(r) = rows.next()? {
@@ -77,7 +108,9 @@ pub fn import(c: &crate::config::Config, s: Option<&Store>, cache: &str, old_db:
     let mut blocks: BTreeMap<(String, i64, String), Block> = BTreeMap::new();
     let mut seen: HashSet<(String, i64, u64, u64, u64, u64)> = HashSet::new();
     let mut skipped_covered = 0u64;
-    let files = d["files"].as_object().context("No files in the usage cache")?;
+    let files = d["files"]
+        .as_object()
+        .context("No files in the usage cache")?;
     for (path, f) in files {
         let family = f["p"].as_str().unwrap_or("");
         let provider = match family {
@@ -87,7 +120,14 @@ pub fn import(c: &crate::config::Config, s: Option<&Store>, cache: &str, old_db:
             other => other.to_string(),
         };
         let parts: Vec<&str> = path.split(['\\', '/']).collect();
-        let project = if family == "claude" && parts.len() >= 2 { folders.get(parts[parts.len() - 2]).cloned().unwrap_or_default() } else { String::new() };
+        let project = if family == "claude" && parts.len() >= 2 {
+            folders
+                .get(parts[parts.len() - 2])
+                .cloned()
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
         for r in f["r"].as_array().into_iter().flatten() {
             let n = |i: usize| r.get(i).and_then(Value::as_u64).unwrap_or(0);
             let ts = r.get(0).and_then(Value::as_i64).unwrap_or(0);
@@ -98,12 +138,22 @@ pub fn import(c: &crate::config::Config, s: Option<&Store>, cache: &str, old_db:
             if !seen.insert((family.to_string(), ts, n(3), n(4), n(5), n(6))) {
                 continue;
             }
-            let session = r.get(2).and_then(Value::as_u64).and_then(|i| sessions.get(i as usize)).cloned().unwrap_or_default();
+            let session = r
+                .get(2)
+                .and_then(Value::as_u64)
+                .and_then(|i| sessions.get(i as usize))
+                .cloned()
+                .unwrap_or_default();
             if session.is_empty() || covered.contains(&session) {
                 skipped_covered += 1;
                 continue;
             }
-            let model = r.get(1).and_then(Value::as_u64).and_then(|i| models.get(i as usize)).cloned().unwrap_or_default();
+            let model = r
+                .get(1)
+                .and_then(Value::as_u64)
+                .and_then(|i| models.get(i as usize))
+                .cloned()
+                .unwrap_or_default();
             let hour = ts - ts.rem_euclid(3_600_000);
             let b = blocks.entry((session, hour, model)).or_default();
             if b.calls == 0 {
@@ -122,7 +172,11 @@ pub fn import(c: &crate::config::Config, s: Option<&Store>, cache: &str, old_db:
         }
     }
 
-    let iso = |ms: i64| chrono::DateTime::<chrono::Utc>::from_timestamp_millis(ms).map(|d| d.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)).unwrap_or_default();
+    let iso = |ms: i64| {
+        chrono::DateTime::<chrono::Utc>::from_timestamp_millis(ms)
+            .map(|d| d.to_rfc3339_opts(chrono::SecondsFormat::Millis, true))
+            .unwrap_or_default()
+    };
     let mut tokens: BTreeMap<String, BTreeMap<String, u64>> = BTreeMap::new();
     let (mut written, mut with_project, mut pending) = (0u64, 0u64, 0u32);
     if let Some(s) = s {
@@ -133,13 +187,19 @@ pub fn import(c: &crate::config::Config, s: Option<&Store>, cache: &str, old_db:
         for ((session, hour, model), b) in &blocks {
             let total = b.input + b.output;
             let first = iso(b.first);
-            *tokens.entry(first.chars().take(7).collect()).or_default().entry(b.provider.clone()).or_default() += total;
+            *tokens
+                .entry(first.chars().take(7).collect())
+                .or_default()
+                .entry(b.provider.clone())
+                .or_default() += total;
             written += 1;
             if !b.project.is_empty() {
                 with_project += 1;
             }
             let Some(s) = s else { continue };
-            if s.setting(&format!("privacy:{}", b.project)).as_deref() == Some("disabled") || s.blocked("", &b.project, &first)? {
+            if s.setting(&format!("privacy:{}", b.project)).as_deref() == Some("disabled")
+                || s.blocked("", &b.project, &first)?
+            {
                 continue;
             }
             let data = json!({
@@ -150,7 +210,19 @@ pub fn import(c: &crate::config::Config, s: Option<&Store>, cache: &str, old_db:
                 "duration_ms": b.last - b.first, "started_at": first, "completed_at": iso(b.last), "node_id": null,
                 "provider_thread_id": session, "prompt_id": null,
             });
-            s.put(&c.source.instance_id, "model_turn", &format!("log:{session}:{hour}:{model}"), &b.project, "", "", &first, &iso(b.last), "partial", SOURCE, data)?;
+            s.put(
+                &c.source.instance_id,
+                "model_turn",
+                &format!("log:{session}:{hour}:{model}"),
+                &b.project,
+                "",
+                "",
+                &first,
+                &iso(b.last),
+                "partial",
+                SOURCE,
+                data,
+            )?;
             pending += 1;
             if pending >= 2000 {
                 s.conn.execute_batch("COMMIT; BEGIN")?;
@@ -169,9 +241,15 @@ pub fn import(c: &crate::config::Config, s: Option<&Store>, cache: &str, old_db:
         }
     }
     result?;
-    let session_count = blocks.keys().map(|k| k.0.as_str()).collect::<HashSet<_>>().len();
-    Ok(json!({"dry_run": s.is_none(), "source": SOURCE, "before": cutoff, "usage_blocks": written, "with_project": with_project,
-        "calls_skipped_as_already_imported": skipped_covered, "sessions": session_count, "tokens_by_month_and_provider": tokens}))
+    let session_count = blocks
+        .keys()
+        .map(|k| k.0.as_str())
+        .collect::<HashSet<_>>()
+        .len();
+    Ok(
+        json!({"dry_run": s.is_none(), "source": SOURCE, "before": cutoff, "usage_blocks": written, "with_project": with_project,
+        "calls_skipped_as_already_imported": skipped_covered, "sessions": session_count, "tokens_by_month_and_provider": tokens}),
+    )
 }
 
 #[cfg(test)]
@@ -179,6 +257,9 @@ mod tests {
     #[test]
     fn claude_folders_encode_every_symbol_as_a_dash() {
         assert_eq!(super::claude_folder("D:\\Code\\Thesis"), "D--Code-Thesis");
-        assert_eq!(super::claude_folder("C:\\Users\\a\\.t3\\projects\\example-site.ch"), "C--Users-a--t3-projects-example-site-ch");
+        assert_eq!(
+            super::claude_folder("C:\\Users\\a\\.t3\\projects\\example-site.ch"),
+            "C--Users-a--t3-projects-example-site-ch"
+        );
     }
 }

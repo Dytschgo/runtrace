@@ -14,23 +14,38 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// The release file for this platform, e.g. runtrace-x86_64-pc-windows-msvc.exe.
 pub fn asset_name() -> String {
-    format!("runtrace-{}{}", env!("RUNTRACE_TARGET"), std::env::consts::EXE_SUFFIX)
+    format!(
+        "runtrace-{}{}",
+        env!("RUNTRACE_TARGET"),
+        std::env::consts::EXE_SUFFIX
+    )
 }
 
 /// "v1.2.3" or "1.2.3" as numbers. Anything after a dash (a pre-release) is ignored.
 pub fn parse_version(v: &str) -> Option<(u64, u64, u64)> {
     let core = v.trim().trim_start_matches('v').split(['-', '+']).next()?;
     let mut p = core.split('.').map(|x| x.parse::<u64>().ok());
-    Some((p.next()??, p.next().flatten().unwrap_or(0), p.next().flatten().unwrap_or(0)))
+    Some((
+        p.next()??,
+        p.next().flatten().unwrap_or(0),
+        p.next().flatten().unwrap_or(0),
+    ))
 }
 
 fn agent(timeout: u64) -> ureq::Agent {
-    ureq::Agent::config_builder().timeout_global(Some(Duration::from_secs(timeout))).build().into()
+    ureq::Agent::config_builder()
+        .timeout_global(Some(Duration::from_secs(timeout)))
+        .build()
+        .into()
 }
 
 /// The latest published release.
 pub fn latest(c: &Config) -> Result<Value> {
-    let url = format!("{}/repos/{}/releases/latest", c.update.api_base.trim_end_matches('/'), c.update.repo);
+    let url = format!(
+        "{}/repos/{}/releases/latest",
+        c.update.api_base.trim_end_matches('/'),
+        c.update.repo
+    );
     let rel: Value = agent(20)
         .get(&url)
         .header("Accept", "application/vnd.github+json")
@@ -46,8 +61,11 @@ pub fn latest(c: &Config) -> Result<Value> {
 pub fn check(c: &Config) -> Result<Value> {
     let rel = latest(c)?;
     let tag = rel["tag_name"].as_str().unwrap_or_default().to_string();
-    let newer = matches!((parse_version(&tag), parse_version(VERSION)), (Some(a), Some(b)) if a > b);
-    let has_asset = rel["assets"].as_array().is_some_and(|a| a.iter().any(|x| x["name"] == asset_name()));
+    let newer =
+        matches!((parse_version(&tag), parse_version(VERSION)), (Some(a), Some(b)) if a > b);
+    let has_asset = rel["assets"]
+        .as_array()
+        .is_some_and(|a| a.iter().any(|x| x["name"] == asset_name()));
     Ok(json!({
         "current": VERSION,
         "latest": tag.trim_start_matches('v'),
@@ -65,7 +83,11 @@ fn download(rel: &Value, name: &str) -> Result<Vec<u8>> {
         .and_then(|a| a.iter().find(|x| x["name"] == name))
         .and_then(|x| x["browser_download_url"].as_str())
         .with_context(|| format!("The release has no {name}"))?;
-    let mut body = agent(600).get(url).header("User-Agent", &format!("runtrace/{VERSION}")).call()?.into_body();
+    let mut body = agent(600)
+        .get(url)
+        .header("User-Agent", &format!("runtrace/{VERSION}"))
+        .call()?
+        .into_body();
     Ok(body.with_config().limit(512 * 1024 * 1024).read_to_vec()?)
 }
 
@@ -73,7 +95,9 @@ fn download(rel: &Value, name: &str) -> Result<Vec<u8>> {
 pub fn apply(c: &Config, config_path: &Path, restart: bool) -> Result<()> {
     let rel = latest(c)?;
     let tag = rel["tag_name"].as_str().unwrap_or_default();
-    let (Some(new), Some(cur)) = (parse_version(tag), parse_version(VERSION)) else { bail!("Cannot read the release version {tag:?}") };
+    let (Some(new), Some(cur)) = (parse_version(tag), parse_version(VERSION)) else {
+        bail!("Cannot read the release version {tag:?}")
+    };
     if new <= cur {
         println!("Runtrace {VERSION} is up to date.");
         return Ok(());
@@ -107,9 +131,16 @@ pub fn apply(c: &Config, config_path: &Path, restart: bool) -> Result<()> {
     println!("Updated Runtrace {VERSION} to {tag}.");
     if was_running || restart {
         // The new program starts itself, so the new version's database updates run before it serves.
-        let status = Command::new(&exe).arg("start").env("RUNTRACE_CONFIG", config_path).env_remove("T3UI_CONFIG").status()?;
+        let status = Command::new(&exe)
+            .arg("start")
+            .env("RUNTRACE_CONFIG", config_path)
+            .env_remove("T3UI_CONFIG")
+            .status()?;
         if !status.success() {
-            bail!("The new version did not start. Run `runtrace start` to see why; the database backup is in {}", backups_dir(c).display());
+            bail!(
+                "The new version did not start. Run `runtrace start` to see why; the database backup is in {}",
+                backups_dir(c).display()
+            );
         }
     }
     Ok(())
@@ -126,7 +157,11 @@ fn backup(c: &Config, tag: &str) -> Result<()> {
         return Ok(());
     }
     let root = backups_dir(c);
-    let dir = root.join(format!("before-update-{VERSION}-to-{}-{}", tag.trim_start_matches('v'), control::stamp()));
+    let dir = root.join(format!(
+        "before-update-{VERSION}-to-{}-{}",
+        tag.trim_start_matches('v'),
+        control::stamp()
+    ));
     std::fs::create_dir_all(&dir)?;
     for file in [db.to_path_buf(), db.with_extension("duckdb.wal")] {
         if let (true, Some(n)) = (file.exists(), file.file_name()) {
@@ -136,7 +171,11 @@ fn backup(c: &Config, tag: &str) -> Result<()> {
     println!("Backed up the database to {}", dir.display());
     for old in std::fs::read_dir(&root)?.flatten() {
         let p = old.path();
-        if p != dir && p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with("before-update-")) {
+        if p != dir
+            && p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("before-update-"))
+        {
             let _ = std::fs::remove_dir_all(p);
         }
     }
@@ -146,8 +185,13 @@ fn backup(c: &Config, tag: &str) -> Result<()> {
 /// Starts an update in its own process, so it can stop this service, swap the program and start the new one.
 pub fn spawn_apply(c: &Config, config_path: &Path) -> Result<()> {
     let mut cmd = Command::new(std::env::current_exe()?);
-    cmd.args(["update", "--yes", "--restart"]).env("RUNTRACE_CONFIG", config_path).env_remove("T3UI_CONFIG");
-    control::spawn_detached(cmd, &control::logs_dir(c).join(format!("update-{}.log", control::stamp())))?;
+    cmd.args(["update", "--yes", "--restart"])
+        .env("RUNTRACE_CONFIG", config_path)
+        .env_remove("T3UI_CONFIG");
+    control::spawn_detached(
+        cmd,
+        &control::logs_dir(c).join(format!("update-{}.log", control::stamp())),
+    )?;
     Ok(())
 }
 

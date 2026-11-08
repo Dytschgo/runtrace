@@ -71,7 +71,11 @@ impl Store {
                     .parent()
                     .map(|p| p.join("purges.jsonl"))
             });
-        let store = Self { conn, purge_ledger, capture_source: std::cell::Cell::new("t3_sqlite_v2") };
+        let store = Self {
+            conn,
+            purge_ledger,
+            capture_source: std::cell::Cell::new("t3_sqlite_v2"),
+        };
         store.apply_purge_ledger()?;
         let conn = &store.conn;
         // Added before the first analytic pass, which fills these too.
@@ -384,19 +388,36 @@ pub fn hydrate_facts(conn: &Connection) -> Result<()> {
 
 /// The later analytic columns and the list view (version 3), filled in one pass for rows written before they existed or restored from an older snapshot.
 pub fn hydrate_more_facts(conn: &Connection) -> Result<()> {
-    let pending: i64 = conn.query_row("SELECT count(*) FROM records WHERE facts_version IN (1,2)", [], |r| r.get(0))?;
+    let pending: i64 = conn.query_row(
+        "SELECT count(*) FROM records WHERE facts_version IN (1,2)",
+        [],
+        |r| r.get(0),
+    )?;
     if pending == 0 {
         return Ok(());
     }
     // In slices of rows, because one pass over every document can exceed the service's query memory.
-    let end: i64 = conn.query_row("SELECT coalesce(max(rowid),-1)+1 FROM records", [], |r| r.get(0))?;
+    let end: i64 = conn.query_row("SELECT coalesce(max(rowid),-1)+1 FROM records", [], |r| {
+        r.get(0)
+    })?;
     let sql = "UPDATE records SET  cache_write_tokens=try_cast(json_extract_string(data,'$.cache_write_tokens') AS BIGINT),  exit_code=try_cast(json_extract_string(data,'$.exit_code') AS BIGINT),  agent_provider=coalesce(nullif(json_extract_string(data,'$.provider'),''),nullif(regexp_extract(coalesce(json_extract_string(data,'$.provider_thread_id'),''),'(?:^|:)provider:([^:]+)',1),'')),  resolved_model=nullif(json_extract_string(data,'$.resolved_model'),''),  usage_scope=json_extract_string(data,'$.usage_scope'),  usage_source=json_extract_string(data,'$.usage_source'),  has_subagents=try_cast(json_extract_string(data,'$.has_subagents') AS BOOLEAN),  elapsed_ms=CASE WHEN duration_ms>=0 THEN duration_ms WHEN date_diff('millisecond',try_cast(json_extract_string(data,'$.started_at') AS TIMESTAMPTZ),try_cast(json_extract_string(data,'$.completed_at') AS TIMESTAMPTZ))>=0 THEN date_diff('millisecond',try_cast(json_extract_string(data,'$.started_at') AS TIMESTAMPTZ),try_cast(json_extract_string(data,'$.completed_at') AS TIMESTAMPTZ)) END,  preview_doc=json_merge_patch(json_merge_patch(data,'{\"content_ciphertext\":null,\"repository_path_encrypted\":null,\"content_redacted\":null}'),json_object('content_redacted',left(json_extract_string(data,'$.content_redacted'),512),'content_truncated',length(json_extract_string(data,'$.content_redacted'))>512))::VARCHAR,  facts_version=3 WHERE facts_version IN (1,2)";
     // The bounds are written into the statement: as parameters they are not used to narrow the scan, and every slice reads the whole table.
-    tracing::info!(operation = "hydrate_more_facts", pending_rows = pending, "Filling analytic columns");
+    tracing::info!(
+        operation = "hydrate_more_facts",
+        pending_rows = pending,
+        "Filling analytic columns"
+    );
     for start in (0..end).step_by(10_000) {
-        conn.execute_batch(&format!("{sql} AND rowid>={start} AND rowid<{}", start + 10_000))?;
+        conn.execute_batch(&format!(
+            "{sql} AND rowid>={start} AND rowid<{}",
+            start + 10_000
+        ))?;
         if start % 50_000 == 0 {
-            tracing::info!(operation = "hydrate_more_facts", done_rows = (start + 10_000).min(end), total_rows = end);
+            tracing::info!(
+                operation = "hydrate_more_facts",
+                done_rows = (start + 10_000).min(end),
+                total_rows = end
+            );
         }
     }
     Ok(())
@@ -404,7 +425,11 @@ pub fn hydrate_more_facts(conn: &Connection) -> Result<()> {
 
 /// The agent named in a provider id such as provider-thread:provider:codex:native-thread:abc.
 fn provider_in_id(id: &str) -> Option<&str> {
-    let at = if let Some(rest) = id.strip_prefix("provider:") { rest } else { &id[id.find(":provider:")? + ":provider:".len()..] };
+    let at = if let Some(rest) = id.strip_prefix("provider:") {
+        rest
+    } else {
+        &id[id.find(":provider:")? + ":provider:".len()..]
+    };
     at.split(':').next().filter(|s| !s.is_empty())
 }
 
@@ -431,10 +456,18 @@ pub fn preview_doc(data: &Value) -> String {
 
 /// How long a record ran: its own duration, else the time between its start and end.
 fn elapsed_ms(data: &Value) -> Option<i64> {
-    if let Some(d) = data.get("duration_ms").and_then(Value::as_i64).filter(|d| *d >= 0) {
+    if let Some(d) = data
+        .get("duration_ms")
+        .and_then(Value::as_i64)
+        .filter(|d| *d >= 0)
+    {
         return Some(d);
     }
-    let at = |k: &str| data.get(k).and_then(Value::as_str).and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok());
+    let at = |k: &str| {
+        data.get(k)
+            .and_then(Value::as_str)
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+    };
     let ms = (at("completed_at")? - at("started_at")?).num_milliseconds();
     (ms >= 0).then_some(ms)
 }

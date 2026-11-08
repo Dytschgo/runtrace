@@ -12,7 +12,10 @@ pub fn url(c: &Config) -> String {
 
 /// The folder for logs and the process id: beside the data folder, so every install keeps its own.
 pub fn run_dir(c: &Config) -> PathBuf {
-    let data = Path::new(&c.storage.duckdb_path).parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("."));
+    let data = Path::new(&c.storage.duckdb_path)
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
     data.parent().map(Path::to_path_buf).unwrap_or(data)
 }
 
@@ -30,8 +33,17 @@ pub fn stamp() -> String {
 
 /// What the service on the configured port says about itself, if anything answers.
 pub fn health(c: &Config) -> Option<Value> {
-    let agent: ureq::Agent = ureq::Agent::config_builder().timeout_global(Some(Duration::from_millis(1500))).build().into();
-    agent.get(format!("{}/health/ready", url(c))).call().ok()?.body_mut().read_json::<Value>().ok()
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_global(Some(Duration::from_millis(1500)))
+        .build()
+        .into();
+    agent
+        .get(format!("{}/health/ready", url(c)))
+        .call()
+        .ok()?
+        .body_mut()
+        .read_json::<Value>()
+        .ok()
 }
 
 /// The running service for this install: it answers on the port and reads the same database.
@@ -47,7 +59,9 @@ pub fn spawn_detached(mut cmd: Command, log: &Path) -> Result<std::process::Chil
         std::fs::create_dir_all(dir)?;
     }
     let out = std::fs::File::create(log)?;
-    cmd.stdin(Stdio::null()).stdout(out.try_clone()?).stderr(out);
+    cmd.stdin(Stdio::null())
+        .stdout(out.try_clone()?)
+        .stderr(out);
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -73,23 +87,35 @@ pub fn start(c: &Config, config_path: &Path, open_after: bool) -> Result<()> {
         return Ok(());
     }
     if health(c).is_some() {
-        bail!("Port {} is used by another program or another Runtrace install. Change server.port in {}", c.server.port, config_path.display());
+        bail!(
+            "Port {} is used by another program or another Runtrace install. Change server.port in {}",
+            c.server.port,
+            config_path.display()
+        );
     }
     println!("Checking the database...");
     let began = Instant::now();
-    drop(t3ui_core::storage::Store::open(c).context("The database could not be opened or updated, so Runtrace was not started")?);
+    drop(
+        t3ui_core::storage::Store::open(c)
+            .context("The database could not be opened or updated, so Runtrace was not started")?,
+    );
     if began.elapsed() > Duration::from_secs(2) {
         println!("Database updated in {:.0} s", began.elapsed().as_secs_f64());
     }
     let log = logs_dir(c).join(format!("server-{}.log", stamp()));
     let mut cmd = Command::new(std::env::current_exe()?);
-    cmd.arg("serve").env("RUNTRACE_CONFIG", config_path).env_remove("T3UI_CONFIG");
+    cmd.arg("serve")
+        .env("RUNTRACE_CONFIG", config_path)
+        .env_remove("T3UI_CONFIG");
     let mut child = spawn_detached(cmd, &log)?;
     std::fs::write(pid_file(c), child.id().to_string())?;
     let deadline = Instant::now() + Duration::from_secs(60);
     while Instant::now() < deadline {
         if let Some(code) = child.try_wait()? {
-            bail!("Runtrace stopped right after starting ({code}). See {}", log.display());
+            bail!(
+                "Runtrace stopped right after starting ({code}). See {}",
+                log.display()
+            );
         }
         if running(c).is_some_and(|h| h["pid"].as_u64() == Some(child.id() as u64)) {
             println!("Runtrace is running at {}", url(c));
@@ -101,7 +127,10 @@ pub fn start(c: &Config, config_path: &Path, open_after: bool) -> Result<()> {
         std::thread::sleep(Duration::from_millis(250));
     }
     let _ = child.kill();
-    bail!("Runtrace did not answer within a minute. See {}", log.display())
+    bail!(
+        "Runtrace did not answer within a minute. See {}",
+        log.display()
+    )
 }
 
 /// Stops this install's service. Only a process that answers as this install is stopped.
@@ -110,7 +139,9 @@ pub fn stop(c: &Config) -> Result<bool> {
         let _ = std::fs::remove_file(pid_file(c));
         return Ok(false);
     };
-    let pid = h["pid"].as_u64().context("The service did not report its process id")?;
+    let pid = h["pid"]
+        .as_u64()
+        .context("The service did not report its process id")?;
     kill(pid)?;
     let deadline = Instant::now() + Duration::from_secs(20);
     while Instant::now() < deadline {
@@ -127,9 +158,15 @@ pub fn stop(c: &Config) -> Result<bool> {
 
 fn kill(pid: u64) -> Result<()> {
     #[cfg(windows)]
-    let status = Command::new("taskkill").args(["/PID", &pid.to_string(), "/F"]).stdout(Stdio::null()).stderr(Stdio::null()).status()?;
+    let status = Command::new("taskkill")
+        .args(["/PID", &pid.to_string(), "/F"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()?;
     #[cfg(not(windows))]
-    let status = Command::new("kill").args(["-TERM", &pid.to_string()]).status()?;
+    let status = Command::new("kill")
+        .args(["-TERM", &pid.to_string()])
+        .status()?;
     if !status.success() {
         bail!("Could not stop process {pid}");
     }
@@ -139,7 +176,12 @@ fn kill(pid: u64) -> Result<()> {
 pub fn status(c: &Config, config_path: &Path) {
     match running(c) {
         Some(h) => {
-            println!("Runtrace {} is running at {} (process {}).", h["version"].as_str().unwrap_or("?"), url(c), h["pid"]);
+            println!(
+                "Runtrace {} is running at {} (process {}).",
+                h["version"].as_str().unwrap_or("?"),
+                url(c),
+                h["pid"]
+            );
             if let Some(state) = h["collector"]["state"].as_str() {
                 println!("Collector: {state}");
             }
@@ -174,10 +216,24 @@ pub fn autostart(on: bool, config_path: &Path) -> Result<()> {
     {
         let key = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
         let status = if on {
-            let cmd = format!("\"{}\" start --config \"{}\"", exe.display(), config.display()).replace(r"\\?\", "");
-            Command::new("reg").args(["add", key, "/v", "Runtrace", "/t", "REG_SZ", "/d", &cmd, "/f"]).stdout(Stdio::null()).status()?
+            let cmd = format!(
+                "\"{}\" start --config \"{}\"",
+                exe.display(),
+                config.display()
+            )
+            .replace(r"\\?\", "");
+            Command::new("reg")
+                .args([
+                    "add", key, "/v", "Runtrace", "/t", "REG_SZ", "/d", &cmd, "/f",
+                ])
+                .stdout(Stdio::null())
+                .status()?
         } else {
-            Command::new("reg").args(["delete", key, "/v", "Runtrace", "/f"]).stdout(Stdio::null()).stderr(Stdio::null()).status()?
+            Command::new("reg")
+                .args(["delete", key, "/v", "Runtrace", "/f"])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()?
         };
         if on && !status.success() {
             bail!("Could not register Runtrace to start at login");
@@ -185,26 +241,51 @@ pub fn autostart(on: bool, config_path: &Path) -> Result<()> {
     }
     #[cfg(target_os = "macos")]
     {
-        let dir = dirs::home_dir().context("No home folder")?.join("Library/LaunchAgents");
+        let dir = dirs::home_dir()
+            .context("No home folder")?
+            .join("Library/LaunchAgents");
         let file = dir.join("ch.runtrace.start.plist");
         if on {
             std::fs::create_dir_all(&dir)?;
-            std::fs::write(&file, format!("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\"><dict><key>Label</key><string>ch.runtrace.start</string><key>ProgramArguments</key><array><string>{}</string><string>start</string><string>--config</string><string>{}</string></array><key>RunAtLoad</key><true/></dict></plist>\n", exe.display(), config.display()))?;
+            std::fs::write(
+                &file,
+                format!(
+                    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\"><dict><key>Label</key><string>ch.runtrace.start</string><key>ProgramArguments</key><array><string>{}</string><string>start</string><string>--config</string><string>{}</string></array><key>RunAtLoad</key><true/></dict></plist>\n",
+                    exe.display(),
+                    config.display()
+                ),
+            )?;
         } else {
             let _ = std::fs::remove_file(&file);
         }
     }
     #[cfg(all(unix, not(target_os = "macos")))]
     {
-        let dir = dirs::config_dir().context("No config folder")?.join("autostart");
+        let dir = dirs::config_dir()
+            .context("No config folder")?
+            .join("autostart");
         let file = dir.join("runtrace.desktop");
         if on {
             std::fs::create_dir_all(&dir)?;
-            std::fs::write(&file, format!("[Desktop Entry]\nType=Application\nName=Runtrace\nExec=\"{}\" start --config \"{}\"\nX-GNOME-Autostart-enabled=true\n", exe.display(), config.display()))?;
+            std::fs::write(
+                &file,
+                format!(
+                    "[Desktop Entry]\nType=Application\nName=Runtrace\nExec=\"{}\" start --config \"{}\"\nX-GNOME-Autostart-enabled=true\n",
+                    exe.display(),
+                    config.display()
+                ),
+            )?;
         } else {
             let _ = std::fs::remove_file(&file);
         }
     }
-    println!("{}", if on { "Runtrace will start when you log in." } else { "Runtrace will no longer start at login." });
+    println!(
+        "{}",
+        if on {
+            "Runtrace will start when you log in."
+        } else {
+            "Runtrace will no longer start at login."
+        }
+    );
     Ok(())
 }

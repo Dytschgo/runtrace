@@ -13,7 +13,11 @@ use t3ui_core::{
     storage::Store,
 };
 #[derive(Parser)]
-#[command(name = "runtrace", version, about = "Local analytics for coding agents, read from T3 Code history.")]
+#[command(
+    name = "runtrace",
+    version,
+    about = "Local analytics for coding agents, read from T3 Code history."
+)]
 struct Cli {
     /// Settings file to use, instead of the one in your Runtrace folder.
     #[arg(long, global = true)]
@@ -48,7 +52,9 @@ enum Command {
         restart: bool,
     },
     /// Start Runtrace when you log in (on), or stop doing so (off).
-    Autostart { action: String },
+    Autostart {
+        action: String,
+    },
     Init,
     Doctor,
     /// Bring the database up to date, with progress, before the service starts. start.ps1 runs this first.
@@ -159,7 +165,14 @@ async fn main() -> Result<()> {
     match &cli.command {
         Command::Start { open } => return control::start(&c, &config_path, *open),
         Command::Stop => {
-            println!("{}", if control::stop(&c)? { "Runtrace stopped." } else { "Runtrace was not running." });
+            println!(
+                "{}",
+                if control::stop(&c)? {
+                    "Runtrace stopped."
+                } else {
+                    "Runtrace was not running."
+                }
+            );
             return Ok(());
         }
         Command::Status => {
@@ -173,16 +186,32 @@ async fn main() -> Result<()> {
             return control::open(&c);
         }
         Command::Autostart { action } => {
-            anyhow::ensure!(action == "on" || action == "off", "Use `runtrace autostart on` or `runtrace autostart off`");
+            anyhow::ensure!(
+                action == "on" || action == "off",
+                "Use `runtrace autostart on` or `runtrace autostart off`"
+            );
             return control::autostart(action == "on", &config_path);
         }
-        Command::Update { check, yes, restart } => {
+        Command::Update {
+            check,
+            yes,
+            restart,
+        } => {
             let status = update::check(&c)?;
             if !status["available"].as_bool().unwrap_or(false) {
-                println!("Runtrace {} is up to date (latest release: {}).", update::VERSION, status["latest"].as_str().unwrap_or("none"));
+                println!(
+                    "Runtrace {} is up to date (latest release: {}).",
+                    update::VERSION,
+                    status["latest"].as_str().unwrap_or("none")
+                );
                 return Ok(());
             }
-            println!("Runtrace {} is available (you have {}). {}", status["latest"].as_str().unwrap_or("?"), update::VERSION, status["url"].as_str().unwrap_or(""));
+            println!(
+                "Runtrace {} is available (you have {}). {}",
+                status["latest"].as_str().unwrap_or("?"),
+                update::VERSION,
+                status["url"].as_str().unwrap_or("")
+            );
             if *check {
                 return Ok(());
             }
@@ -223,11 +252,23 @@ async fn main() -> Result<()> {
         println!("Capture {action}");
         return Ok(());
     }
-    if let Command::ImportSessionLogs { ref cache, ref old_db, dry_run: true } = cli.command {
-        println!("{}", t3ui_core::session_logs::import(&c, None, cache, old_db)?);
+    if let Command::ImportSessionLogs {
+        ref cache,
+        ref old_db,
+        dry_run: true,
+    } = cli.command
+    {
+        println!(
+            "{}",
+            t3ui_core::session_logs::import(&c, None, cache, old_db)?
+        );
         return Ok(());
     }
-    if let Command::ImportLegacy { ref source, dry_run: true } = cli.command {
+    if let Command::ImportLegacy {
+        ref source,
+        dry_run: true,
+    } = cli.command
+    {
         println!("{}", t3ui_core::legacy::import_v1(&c, None, source)?);
         return Ok(());
     }
@@ -237,7 +278,12 @@ async fn main() -> Result<()> {
     let opened = std::time::Instant::now();
     let s = Store::open(&c)?;
     match cli.command {
-        Command::Start { .. } | Command::Stop | Command::Status | Command::Open | Command::Update { .. } | Command::Autostart { .. } => unreachable!("handled above"),
+        Command::Start { .. }
+        | Command::Stop
+        | Command::Status
+        | Command::Open
+        | Command::Update { .. }
+        | Command::Autostart { .. } => unreachable!("handled above"),
         Command::Migrate => println!(
             "Database is up to date ({:.1} s)",
             opened.elapsed().as_secs_f64()
@@ -250,7 +296,10 @@ async fn main() -> Result<()> {
             println!("Initialized. Policy: {}", c.capture.default_policy);
         }
         Command::ImportSessionLogs { cache, old_db, .. } => {
-            println!("{}", t3ui_core::session_logs::import(&c, Some(&s), &cache, &old_db)?);
+            println!(
+                "{}",
+                t3ui_core::session_logs::import(&c, Some(&s), &cache, &old_db)?
+            );
         }
         Command::QuotaCollect => println!("{}", t3ui_core::quota_sources::collect(&s)?),
         Command::ImportLegacy { source, .. } => {
@@ -400,7 +449,10 @@ async fn main() -> Result<()> {
             }
         }
         Command::Fixture { now } => {
-            println!("{}", t3ui_core::fixture::build(&s, &c.source.instance_id, &now)?)
+            println!(
+                "{}",
+                t3ui_core::fixture::build(&s, &c.source.instance_id, &now)?
+            )
         }
         Command::Retention { action } => {
             anyhow::ensure!(action == "run", "Use retention run");
@@ -462,7 +514,9 @@ async fn serve(c: Config, s: Store, config_path: std::path::PathBuf) -> Result<(
         });
     }
     // Whether a newer release exists, checked shortly after starting and then once a day. Nothing installs on its own.
-    let update_status = Arc::new(Mutex::new(json!({"current":update::VERSION,"available":false,"checking":c.update.check})));
+    let update_status = Arc::new(Mutex::new(
+        json!({"current":update::VERSION,"available":false,"checking":c.update.check}),
+    ));
     if c.update.check {
         let status = update_status.clone();
         let cfg = c.clone();
@@ -558,7 +612,9 @@ async fn serve(c: Config, s: Store, config_path: std::path::PathBuf) -> Result<(
         .with_graceful_shutdown(async {
             #[cfg(unix)]
             {
-                let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).expect("signal handler");
+                let mut term =
+                    tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                        .expect("signal handler");
                 tokio::select! { _ = tokio::signal::ctrl_c() => {}, _ = term.recv() => {} }
             }
             #[cfg(not(unix))]

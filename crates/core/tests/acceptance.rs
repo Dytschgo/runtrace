@@ -218,7 +218,14 @@ fn encrypted_redacted_api() {
 fn filters_reject_unknown() {
     assert!(serde_json::from_value::<Filter>(json!({"scope":"analytics:content-full"})).is_err());
     // Full content stays in small pages. Previews may come in big ones, up to a bound.
-    let page = |limit: u32, include_content: Option<bool>| Filter { limit: Some(limit), include_content, ..Default::default() }.validate();
+    let page = |limit: u32, include_content: Option<bool>| {
+        Filter {
+            limit: Some(limit),
+            include_content,
+            ..Default::default()
+        }
+        .validate()
+    };
     assert!(page(501, Some(true)).is_err());
     assert!(page(501, None).is_ok());
     assert!(page(20_000, Some(false)).is_ok());
@@ -869,17 +876,39 @@ fn tool_aggregates_cover_all_matching_rows_and_preserve_unknown_durations() {
     let hours = analytics::query(&s, "usage/tool-hours", &f).unwrap();
     let by_hour = hours["data"].as_array().unwrap();
     let sum = |k: &str| by_hour.iter().map(|h| h[k].as_i64().unwrap()).sum::<i64>();
-    assert_eq!(sum("completed") + sum("cancelled") + sum("failed") + sum("running") + sum("unknown"), 2);
+    assert_eq!(
+        sum("completed") + sum("cancelled") + sum("failed") + sum("running") + sum("unknown"),
+        2
+    );
     assert_eq!(sum("failed"), 1);
     let of_kind = |kind: &str| {
-        analytics::query(&s, "timeline", &Filter { project: Some("p".into()), kind: Some(kind.into()), ..Default::default() }).unwrap()["data"]
+        analytics::query(
+            &s,
+            "timeline",
+            &Filter {
+                project: Some("p".into()),
+                kind: Some(kind.into()),
+                ..Default::default()
+            },
+        )
+        .unwrap()["data"]
             .as_array()
             .unwrap()
             .len()
     };
     assert_eq!(of_kind("tool"), 2);
     assert_eq!(of_kind("prompt"), 0);
-    assert!(analytics::query(&s, "timeline", &Filter { kind: Some("tool' OR 1=1".into()), ..Default::default() }).is_err());
+    assert!(
+        analytics::query(
+            &s,
+            "timeline",
+            &Filter {
+                kind: Some("tool' OR 1=1".into()),
+                ..Default::default()
+            }
+        )
+        .is_err()
+    );
     let next = analytics::query(
         &s,
         "tool-calls",
@@ -1102,7 +1131,9 @@ fn bulk_tools_bound_topn_memory_and_recover_after_failed_query() {
     s.conn.execute_batch("SET memory_limit='2GB'; INSERT INTO records(id,kind,instance_id,source_id,project_id,thread_id,run_id,occurred_at,source_updated_at,capture_quality,capture_source,source_version,captured_at,payload_hash,data) SELECT md5(i::VARCHAR),'tool','local',i::VARCHAR,'p','t','r','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z','partial','synthetic','v','2026-01-01T00:00:00Z',md5(i::VARCHAR),json_object('content_redacted',repeat(md5(i::VARCHAR),256),'content_ciphertext','excluded') FROM range(3000) t(i); CHECKPOINT").unwrap();
     // Rows written by SQL skip put(), so they get their analytic columns and list view the way opening the database gives them.
     t3ui_core::storage::hydrate_facts(&s.conn).unwrap();
-    s.conn.execute_batch("CHECKPOINT; SET memory_limit='128MB'").unwrap();
+    s.conn
+        .execute_batch("CHECKPOINT; SET memory_limit='128MB'")
+        .unwrap();
     let f = Filter {
         limit: Some(500),
         offset: Some(1500),
@@ -1517,27 +1548,129 @@ fn session_log_hours_add_tokens_but_never_count_as_provider_turns() {
 fn provider_filter_counts_turns_that_name_no_model() {
     let (_tmp, c) = fixture();
     let s = Store::open(&c).unwrap();
-    s.put("local","model_turn","named","p","t","r","2026-01-01T00:00:00Z","2026-01-01T00:00:00Z","partial","synthetic",json!({"model":"gpt-6.1-sol","usage_status":"complete","total_tokens":10})).unwrap();
-    s.put("local","model_turn","driver","p","t","r","2026-01-01T00:01:00Z","2026-01-01T00:01:00Z","partial","synthetic",json!({"model":null,"provider":"codex","usage_status":"complete","total_tokens":20})).unwrap();
+    s.put(
+        "local",
+        "model_turn",
+        "named",
+        "p",
+        "t",
+        "r",
+        "2026-01-01T00:00:00Z",
+        "2026-01-01T00:00:00Z",
+        "partial",
+        "synthetic",
+        json!({"model":"gpt-6.1-sol","usage_status":"complete","total_tokens":10}),
+    )
+    .unwrap();
+    s.put(
+        "local",
+        "model_turn",
+        "driver",
+        "p",
+        "t",
+        "r",
+        "2026-01-01T00:01:00Z",
+        "2026-01-01T00:01:00Z",
+        "partial",
+        "synthetic",
+        json!({"model":null,"provider":"codex","usage_status":"complete","total_tokens":20}),
+    )
+    .unwrap();
     s.put("local","model_turn","thread-id","p","t","r","2026-01-01T00:02:00Z","2026-01-01T00:02:00Z","partial","synthetic",json!({"model":null,"provider":null,"provider_thread_id":"provider-thread:provider:codex:native-thread:x","usage_status":"complete","total_tokens":30})).unwrap();
-    s.put("local","prompt","native","p","thread:provider:codex:native-thread:y","r","2026-01-01T00:03:00Z","2026-01-01T00:03:00Z","partial","synthetic",json!({})).unwrap();
-    s.put("local","model_turn","claude","p","t","r","2026-01-01T00:04:00Z","2026-01-01T00:04:00Z","partial","synthetic",json!({"model":"claude-opus-5-5","usage_status":"complete","total_tokens":40})).unwrap();
-    s.put("local","model_turn","unknown","p","t","r","2026-01-01T00:05:00Z","2026-01-01T00:05:00Z","partial","synthetic",json!({"usage_status":"complete","total_tokens":50})).unwrap();
+    s.put(
+        "local",
+        "prompt",
+        "native",
+        "p",
+        "thread:provider:codex:native-thread:y",
+        "r",
+        "2026-01-01T00:03:00Z",
+        "2026-01-01T00:03:00Z",
+        "partial",
+        "synthetic",
+        json!({}),
+    )
+    .unwrap();
+    s.put(
+        "local",
+        "model_turn",
+        "claude",
+        "p",
+        "t",
+        "r",
+        "2026-01-01T00:04:00Z",
+        "2026-01-01T00:04:00Z",
+        "partial",
+        "synthetic",
+        json!({"model":"claude-opus-5-5","usage_status":"complete","total_tokens":40}),
+    )
+    .unwrap();
+    s.put(
+        "local",
+        "model_turn",
+        "unknown",
+        "p",
+        "t",
+        "r",
+        "2026-01-01T00:05:00Z",
+        "2026-01-01T00:05:00Z",
+        "partial",
+        "synthetic",
+        json!({"usage_status":"complete","total_tokens":50}),
+    )
+    .unwrap();
     s.capture_source.set("session_logs");
     s.put("local","model_turn","log:x:1:m","p","","","2026-01-01T01:00:00Z","2026-01-01T02:00:00Z","partial","session_logs",json!({"model":"gpt-6.1-sol","usage_status":"complete","usage_source":"session_log","total_tokens":90})).unwrap();
     s.capture_source.set("t3_sqlite_v2");
     let count = |provider: Option<&str>, kind: &str| {
-        let f = Filter { provider: provider.map(str::to_owned), ..Default::default() };
-        analytics::query(&s, "overview", &f).unwrap()["data"].as_array().unwrap().iter().find(|r| r["kind"] == kind).map(|r| r["count"].as_i64().unwrap()).unwrap_or(0)
+        let f = Filter {
+            provider: provider.map(str::to_owned),
+            ..Default::default()
+        };
+        analytics::query(&s, "overview", &f).unwrap()["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["kind"] == kind)
+            .map(|r| r["count"].as_i64().unwrap())
+            .unwrap_or(0)
     };
-    assert_eq!(count(Some("openai"), "model_turn"), 3, "named, by driver and by provider thread, never the session-log hour");
+    assert_eq!(
+        count(Some("openai"), "model_turn"),
+        3,
+        "named, by driver and by provider thread, never the session-log hour"
+    );
     assert_eq!(count(Some("openai"), "prompt"), 1);
     assert_eq!(count(Some("anthropic"), "model_turn"), 1);
-    assert_eq!(count(None, "model_turn"), 5, "session-log hours are not provider turns");
-    let models = analytics::query(&s, "models", &Filter { provider: Some("openai".into()), ..Default::default() }).unwrap();
-    let total: i64 = models["data"].as_array().unwrap().iter().map(|r| r["total_tokens"].as_i64().unwrap_or(0)).sum();
+    assert_eq!(
+        count(None, "model_turn"),
+        5,
+        "session-log hours are not provider turns"
+    );
+    let models = analytics::query(
+        &s,
+        "models",
+        &Filter {
+            provider: Some("openai".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let total: i64 = models["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["total_tokens"].as_i64().unwrap_or(0))
+        .sum();
     assert_eq!(total, 150, "tokens include the session-log hour");
-    assert!(Filter { provider: Some("Open AI".into()), ..Default::default() }.validate().is_err());
+    assert!(
+        Filter {
+            provider: Some("Open AI".into()),
+            ..Default::default()
+        }
+        .validate()
+        .is_err()
+    );
 }
 
 // A lean turn carries the same values the dashboard reads from the full document, in far fewer bytes.
@@ -1547,13 +1680,33 @@ fn lean_turns_match_the_full_document() {
     let s = Store::open(&c).unwrap();
     s.put("local","model_turn","full","p","thread:provider:codex:native-thread:x","r","2026-01-01T00:00:00Z","2026-01-01T00:00:00Z","partial","synthetic",json!({"model":null,"requested_model":"gpt-6.1-sol","provider":null,"provider_thread_id":"provider-thread:provider:codex:native-thread:x","node_id":"n".repeat(120),"usage_status":"complete","usage_scope":"main_agent","total_tokens":30,"input_tokens":20,"cached_input_tokens":5,"cache_write_tokens":1,"output_tokens":10,"reasoning_tokens":2,"has_subagents":true,"started_at":"2026-01-01T00:00:00Z","completed_at":"2026-01-01T00:00:02Z"})).unwrap();
     s.put("local","model_turn","partial","p","t","r","2026-01-01T00:01:00Z","2026-01-01T00:01:00Z","partial","synthetic",json!({"model":"claude-opus-5-5","provider":"claudeAgent","usage_status":"partial","total_tokens":99,"input_tokens":7,"duration_ms":40})).unwrap();
-    let read = |shape: Option<&str>| analytics::query(&s, "model-turns", &Filter { shape: shape.map(str::to_owned), ..Default::default() }).unwrap()["data"].as_array().unwrap().clone();
+    let read = |shape: Option<&str>| {
+        analytics::query(
+            &s,
+            "model-turns",
+            &Filter {
+                shape: shape.map(str::to_owned),
+                ..Default::default()
+            },
+        )
+        .unwrap()["data"]
+            .as_array()
+            .unwrap()
+            .clone()
+    };
     let (full, lean) = (read(None), read(Some("lean")));
     assert_eq!(full.len(), 2);
     for (a, b) in full.iter().zip(&lean) {
         assert_eq!(a["id"], b["id"]);
         assert_eq!(a["thread_id"], b["thread_id"]);
-        for k in ["total_tokens", "input_tokens", "output_tokens", "usage_status"] { assert_eq!(a["data"][k], b["data"][k], "{k}"); }
+        for k in [
+            "total_tokens",
+            "input_tokens",
+            "output_tokens",
+            "usage_status",
+        ] {
+            assert_eq!(a["data"][k], b["data"][k], "{k}");
+        }
         assert!(b["data"].get("node_id").is_none());
         assert!(b.to_string().len() < a.to_string().len());
     }
@@ -1563,9 +1716,20 @@ fn lean_turns_match_the_full_document() {
     assert_eq!(first["data"]["duration_ms"], 2000);
     assert_eq!(first["data"]["cache_write_tokens"], 1);
     assert_eq!(first["data"]["has_subagents"], true);
-    assert_eq!(lean[0]["data"]["total_tokens"], serde_json::Value::Null, "a partial turn has no complete total");
+    assert_eq!(
+        lean[0]["data"]["total_tokens"],
+        serde_json::Value::Null,
+        "a partial turn has no complete total"
+    );
     assert_eq!(lean[0]["data"]["provider"], "claudeAgent");
-    assert!(Filter { shape: Some("wide".into()), ..Default::default() }.validate().is_err());
+    assert!(
+        Filter {
+            shape: Some("wide".into()),
+            ..Default::default()
+        }
+        .validate()
+        .is_err()
+    );
 }
 
 // Rows written before the second set of analytic columns, or restored from an older snapshot, are filled in one pass.
@@ -1574,12 +1738,30 @@ fn older_rows_get_the_new_analytic_columns() {
     let (_tmp, c) = fixture();
     let s = Store::open(&c).unwrap();
     s.put("local","model_turn","old","p","t","r","2026-01-01T00:00:00Z","2026-01-01T00:00:00Z","partial","synthetic",json!({"model":"m","provider":"codex","cache_write_tokens":7,"started_at":"2026-01-01T00:00:00Z","completed_at":"2026-01-01T00:00:03Z","has_subagents":false,"usage_status":"complete","total_tokens":5})).unwrap();
-    s.put("local","tool","t1","p","t","r","2026-01-01T00:00:00Z","2026-01-01T00:00:00Z","partial","synthetic",json!({"tool_category":"shell","exit_code":2})).unwrap();
+    s.put(
+        "local",
+        "tool",
+        "t1",
+        "p",
+        "t",
+        "r",
+        "2026-01-01T00:00:00Z",
+        "2026-01-01T00:00:00Z",
+        "partial",
+        "synthetic",
+        json!({"tool_category":"shell","exit_code":2}),
+    )
+    .unwrap();
     s.conn.execute_batch("UPDATE records SET cache_write_tokens=NULL,exit_code=NULL,agent_provider=NULL,has_subagents=NULL,elapsed_ms=NULL,facts_version=1").unwrap();
     t3ui_core::storage::hydrate_more_facts(&s.conn).unwrap();
     let row: (i64, String, i64, bool, i32) = s.conn.query_row("SELECT cache_write_tokens,agent_provider,elapsed_ms,has_subagents,facts_version FROM records WHERE kind='model_turn'", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))).unwrap();
     assert_eq!(row, (7, "codex".into(), 3000, false, 3));
-    let exit: i64 = s.conn.query_row("SELECT exit_code FROM records WHERE kind='tool'", [], |r| r.get(0)).unwrap();
+    let exit: i64 = s
+        .conn
+        .query_row("SELECT exit_code FROM records WHERE kind='tool'", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
     assert_eq!(exit, 2);
     let summary = analytics::query(&s, "usage/tool-summary", &Filter::default()).unwrap();
     assert_eq!(summary["data"][0]["nonZero"], 1);
@@ -1592,24 +1774,78 @@ fn stored_list_view_matches_the_backfill() {
     let s = Store::open(&c).unwrap();
     let long = format!("{{\"arguments\":\"{}\"}}", "é🙂x".repeat(400));
     s.put("local","tool","long","p","t","r","2026-01-01T00:00:02Z","2026-01-01T00:00:02Z","partial","synthetic",json!({"tool_name":"shell","tool_category":"shell","exit_code":1,"character_count":1200,"redaction_count":2,"redaction_categories":["path"],"parent_tool_call_id":"pt","content_redacted":long,"content_ciphertext":"secret","repository_path_encrypted":"secret"})).unwrap();
-    s.put("local","tool","short","p","t","r","2026-01-01T00:00:01Z","2026-01-01T00:00:01Z","partial","synthetic",json!({"tool_name":"read","content_redacted":"{\"arguments\":\"a.txt\"}"})).unwrap();
-    s.put("local","tool","none","p","t","r","2026-01-01T00:00:00Z","2026-01-01T00:00:00Z","partial","synthetic",json!({"tool_name":"read"})).unwrap();
-    let read = || analytics::query(&s, "tool-calls", &Filter::default()).unwrap()["data"].as_array().unwrap().clone();
+    s.put(
+        "local",
+        "tool",
+        "short",
+        "p",
+        "t",
+        "r",
+        "2026-01-01T00:00:01Z",
+        "2026-01-01T00:00:01Z",
+        "partial",
+        "synthetic",
+        json!({"tool_name":"read","content_redacted":"{\"arguments\":\"a.txt\"}"}),
+    )
+    .unwrap();
+    s.put(
+        "local",
+        "tool",
+        "none",
+        "p",
+        "t",
+        "r",
+        "2026-01-01T00:00:00Z",
+        "2026-01-01T00:00:00Z",
+        "partial",
+        "synthetic",
+        json!({"tool_name":"read"}),
+    )
+    .unwrap();
+    let read = || {
+        analytics::query(&s, "tool-calls", &Filter::default()).unwrap()["data"]
+            .as_array()
+            .unwrap()
+            .clone()
+    };
     let written = read();
     assert_eq!(written.len(), 3);
     let first = &written[0]["data"];
-    assert_eq!(first["content_redacted"].as_str().unwrap().chars().count(), 512);
+    assert_eq!(
+        first["content_redacted"].as_str().unwrap().chars().count(),
+        512
+    );
     assert_eq!(first["content_truncated"], true);
-    assert!(first.get("content_ciphertext").is_none() && first.get("repository_path_encrypted").is_none());
+    assert!(
+        first.get("content_ciphertext").is_none()
+            && first.get("repository_path_encrypted").is_none()
+    );
     assert_eq!(first["redaction_categories"], json!(["path"]));
     assert_eq!(first["parent_tool_call_id"], "pt");
     assert_eq!(written[1]["data"]["content_truncated"], false);
     assert!(written[2]["data"].get("content_redacted").is_none());
-    s.conn.execute_batch("UPDATE records SET preview_doc=NULL,facts_version=2").unwrap();
+    s.conn
+        .execute_batch("UPDATE records SET preview_doc=NULL,facts_version=2")
+        .unwrap();
     t3ui_core::storage::hydrate_more_facts(&s.conn).unwrap();
-    assert_eq!(read(), written, "the backfill computes the same list view as a write");
-    let full = analytics::query(&s, "tool-calls", &Filter { include_content: Some(true), ..Default::default() }).unwrap();
-    assert_eq!(full["data"][0]["data"]["content_redacted"], long, "full content still comes from the document");
+    assert_eq!(
+        read(),
+        written,
+        "the backfill computes the same list view as a write"
+    );
+    let full = analytics::query(
+        &s,
+        "tool-calls",
+        &Filter {
+            include_content: Some(true),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        full["data"][0]["data"]["content_redacted"], long,
+        "full content still comes from the document"
+    );
 }
 
 // The Models page reads threads and sub-agents per model from the model list, in one query instead of one per model.
@@ -1617,15 +1853,41 @@ fn stored_list_view_matches_the_backfill() {
 fn models_count_their_threads_and_agents() {
     let (_tmp, c) = fixture();
     let s = Store::open(&c).unwrap();
-    let put = |kind: &str, id: &str, model: &str| s.put("local", kind, id, "p", "t", "r", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z", "partial", "synthetic", json!({"model": model})).unwrap();
+    let put = |kind: &str, id: &str, model: &str| {
+        s.put(
+            "local",
+            kind,
+            id,
+            "p",
+            "t",
+            "r",
+            "2026-01-01T00:00:00Z",
+            "2026-01-01T00:00:00Z",
+            "partial",
+            "synthetic",
+            json!({"model": model}),
+        )
+        .unwrap()
+    };
     put("run", "r1", "m");
     put("thread", "t1", "m");
     put("thread", "t2", "m");
     put("agent", "a1", "m");
     put("thread", "t3", "only-a-thread");
-    let rows = analytics::query(&s, "models", &Filter::default()).unwrap()["data"].as_array().unwrap().clone();
+    let rows = analytics::query(&s, "models", &Filter::default()).unwrap()["data"]
+        .as_array()
+        .unwrap()
+        .clone();
     assert_eq!(rows.len(), 1, "a model that never ran is not listed");
-    assert_eq!((rows[0]["model"].as_str(), rows[0]["observed_threads"].as_i64(), rows[0]["observed_agents"].as_i64(), rows[0]["observed_runs"].as_i64()), (Some("m"), Some(2), Some(1), Some(1)));
+    assert_eq!(
+        (
+            rows[0]["model"].as_str(),
+            rows[0]["observed_threads"].as_i64(),
+            rows[0]["observed_agents"].as_i64(),
+            rows[0]["observed_runs"].as_i64()
+        ),
+        (Some("m"), Some(2), Some(1), Some(1))
+    );
 }
 
 // Data Quality counts field coverage over every tool call and redactions over tools and sub-agents, never a sample.
@@ -1633,12 +1895,41 @@ fn models_count_their_threads_and_agents() {
 fn field_report_counts_every_tool_call() {
     let (_tmp, c) = fixture();
     let s = Store::open(&c).unwrap();
-    let put = |kind: &str, id: &str, data: serde_json::Value| s.put("local", kind, id, "p", "t", "r", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z", "partial", "synthetic", data).unwrap();
-    put("tool", "a", json!({"tool_category":"shell","status":"completed","exit_code":0,"duration_ms":5,"redaction_categories":["path","path","bearer"]}));
-    put("tool", "b", json!({"tool_category":"shell","status":"","redaction_categories":["path"]}));
+    let put = |kind: &str, id: &str, data: serde_json::Value| {
+        s.put(
+            "local",
+            kind,
+            id,
+            "p",
+            "t",
+            "r",
+            "2026-01-01T00:00:00Z",
+            "2026-01-01T00:00:00Z",
+            "partial",
+            "synthetic",
+            data,
+        )
+        .unwrap()
+    };
+    put(
+        "tool",
+        "a",
+        json!({"tool_category":"shell","status":"completed","exit_code":0,"duration_ms":5,"redaction_categories":["path","path","bearer"]}),
+    );
+    put(
+        "tool",
+        "b",
+        json!({"tool_category":"shell","status":"","redaction_categories":["path"]}),
+    );
     put("tool", "c", json!({"tool_category":"unknown"}));
     put("agent", "d", json!({"redaction_categories":["email"]}));
     let r = analytics::query(&s, "data-quality/fields", &Filter::default()).unwrap();
-    assert_eq!(r["tools"], json!({"calls":3,"duration":1,"status":1,"category":2,"shell":2,"exit":1}));
-    assert_eq!(r["redactions"], json!([{"category":"path","records":2},{"category":"bearer","records":1},{"category":"email","records":1}]));
+    assert_eq!(
+        r["tools"],
+        json!({"calls":3,"duration":1,"status":1,"category":2,"shell":2,"exit":1})
+    );
+    assert_eq!(
+        r["redactions"],
+        json!([{"category":"path","records":2},{"category":"bearer","records":1},{"category":"email","records":1}])
+    );
 }

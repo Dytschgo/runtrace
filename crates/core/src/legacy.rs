@@ -91,14 +91,22 @@ fn month(at: &str) -> String {
 
 /// With no store this only reads the source and reports what an import would write.
 pub fn import_v1(c: &crate::config::Config, s: Option<&Store>, path: &str) -> Result<Value> {
-    let source = rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
-        .context("Cannot open the old T3 SQLite read-only")?;
+    let source =
+        rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .context("Cannot open the old T3 SQLite read-only")?;
     source.busy_timeout(std::time::Duration::from_secs(5))?;
 
     // The new database takes over from its first provider turn, and nothing from then on is read here.
-    let current = rusqlite::Connection::open_with_flags(&c.source.sqlite_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
-        .context("Cannot open the current T3 SQLite read-only")?;
-    let cutoff: String = current.query_row("SELECT min(started_at) FROM orchestration_v2_projection_provider_turns", [], |r| r.get(0))?;
+    let current = rusqlite::Connection::open_with_flags(
+        &c.source.sqlite_path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .context("Cannot open the current T3 SQLite read-only")?;
+    let cutoff: String = current.query_row(
+        "SELECT min(started_at) FROM orchestration_v2_projection_provider_turns",
+        [],
+        |r| r.get(0),
+    )?;
 
     let mut threads: HashMap<String, (String, Value, String, Option<String>)> = HashMap::new();
     {
@@ -106,8 +114,18 @@ pub fn import_v1(c: &crate::config::Config, s: Option<&Store>, path: &str) -> Re
         let mut rows = stmt.query([])?;
         while let Some(r) = rows.next()? {
             let selection: Option<String> = r.get(2)?;
-            let selection = selection.and_then(|x| serde_json::from_str(&x).ok()).unwrap_or(Value::Null);
-            threads.insert(r.get(0)?, (r.get(1)?, selection, r.get::<_, Option<String>>(3)?.unwrap_or_default(), r.get(4)?));
+            let selection = selection
+                .and_then(|x| serde_json::from_str(&x).ok())
+                .unwrap_or(Value::Null);
+            threads.insert(
+                r.get(0)?,
+                (
+                    r.get(1)?,
+                    selection,
+                    r.get::<_, Option<String>>(3)?.unwrap_or_default(),
+                    r.get(4)?,
+                ),
+            );
         }
     }
 
@@ -119,7 +137,10 @@ pub fn import_v1(c: &crate::config::Config, s: Option<&Store>, path: &str) -> Re
         while let Some(r) = rows.next()? {
             let raw: String = r.get(0)?;
             let v: Value = serde_json::from_str(&raw)?;
-            if let (Some(m), Some(sel)) = (v.get("messageId").and_then(Value::as_str), v.get("modelSelection")) {
+            if let (Some(m), Some(sel)) = (
+                v.get("messageId").and_then(Value::as_str),
+                v.get("modelSelection"),
+            ) {
                 selections.insert(m.to_string(), sel.clone());
             }
         }
@@ -130,7 +151,15 @@ pub fn import_v1(c: &crate::config::Config, s: Option<&Store>, path: &str) -> Re
         let mut stmt = source.prepare("SELECT turn_id,thread_id,requested_at,started_at,completed_at,state,pending_message_id FROM projection_turns WHERE turn_id IS NOT NULL AND requested_at IS NOT NULL ORDER BY thread_id,requested_at")?;
         let mut rows = stmt.query([])?;
         while let Some(r) = rows.next()? {
-            turns.push(Turn { id: r.get(0)?, thread: r.get(1)?, requested: r.get(2)?, started: r.get(3)?, completed: r.get(4)?, state: r.get(5)?, pending: r.get(6)? });
+            turns.push(Turn {
+                id: r.get(0)?,
+                thread: r.get(1)?,
+                requested: r.get(2)?,
+                started: r.get(3)?,
+                completed: r.get(4)?,
+                state: r.get(5)?,
+                pending: r.get(6)?,
+            });
         }
     }
     turns.retain(|t| t.requested < cutoff && threads.contains_key(&t.thread));
@@ -138,8 +167,16 @@ pub fn import_v1(c: &crate::config::Config, s: Option<&Store>, path: &str) -> Re
     for (i, t) in turns.iter().enumerate() {
         by_thread.entry(&t.thread).or_default().push(i);
     }
-    let by_id: HashMap<&str, usize> = turns.iter().enumerate().map(|(i, t)| (t.id.as_str(), i)).collect();
-    let by_prompt: HashMap<&str, usize> = turns.iter().enumerate().filter_map(|(i, t)| t.pending.as_deref().map(|p| (p, i))).collect();
+    let by_id: HashMap<&str, usize> = turns
+        .iter()
+        .enumerate()
+        .map(|(i, t)| (t.id.as_str(), i))
+        .collect();
+    let by_prompt: HashMap<&str, usize> = turns
+        .iter()
+        .enumerate()
+        .filter_map(|(i, t)| t.pending.as_deref().map(|p| (p, i)))
+        .collect();
     // The turn running at a moment: the last one requested by then, or the thread's first.
     let turn_at = |thread: &str, at: &str| -> Option<usize> {
         let list = by_thread.get(thread)?;
@@ -149,8 +186,21 @@ pub fn import_v1(c: &crate::config::Config, s: Option<&Store>, path: &str) -> Re
     let model_of = |t: &Turn| -> (Value, Value) {
         let thread = &threads[&t.thread];
         let selection = t.pending.as_ref().and_then(|p| selections.get(p));
-        let model = selection.and_then(|v| v.get("model")).or_else(|| thread.1.get("model")).cloned().unwrap_or(Value::Null);
-        let provider = selection.and_then(|v| v.get("instanceId")).cloned().unwrap_or_else(|| if thread.2.is_empty() { Value::Null } else { json!(thread.2) });
+        let model = selection
+            .and_then(|v| v.get("model"))
+            .or_else(|| thread.1.get("model"))
+            .cloned()
+            .unwrap_or(Value::Null);
+        let provider = selection
+            .and_then(|v| v.get("instanceId"))
+            .cloned()
+            .unwrap_or_else(|| {
+                if thread.2.is_empty() {
+                    Value::Null
+                } else {
+                    json!(thread.2)
+                }
+            });
         (model, provider)
     };
 
@@ -163,7 +213,9 @@ pub fn import_v1(c: &crate::config::Config, s: Option<&Store>, path: &str) -> Re
         while let Some(r) = rows.next()? {
             let thread: String = r.get(0)?;
             let at: String = r.get(1)?;
-            let Some(i) = turn_at(&thread, &at) else { continue };
+            let Some(i) = turn_at(&thread, &at) else {
+                continue;
+            };
             if at >= cutoff {
                 continue;
             }
@@ -191,13 +243,19 @@ pub fn import_v1(c: &crate::config::Config, s: Option<&Store>, path: &str) -> Re
             .filter(|v| rank(v) > rank(&c.capture.default_policy))
             .unwrap_or_else(|| c.capture.default_policy.clone())
     };
-    let key = if c.capture.default_policy == "full_encrypted" && s.is_some() { Some(privacy::key(false)?) } else { None };
+    let key = if c.capture.default_policy == "full_encrypted" && s.is_some() {
+        Some(privacy::key(false)?)
+    } else {
+        None
+    };
 
     // Records the current importer already has are its to keep.
     let existing: HashSet<(String, String)> = match s {
         Some(s) => {
             let mut stmt = s.conn.prepare("SELECT kind,source_id FROM records WHERE kind IN ('prompt','answer','tool','run','model_turn') AND capture_source<>?")?;
-            let rows = stmt.query_map([SOURCE], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+            let rows = stmt.query_map([SOURCE], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+            })?;
             rows.collect::<duckdb::Result<_>>()?
         }
         None => HashSet::new(),
@@ -212,7 +270,15 @@ pub fn import_v1(c: &crate::config::Config, s: Option<&Store>, path: &str) -> Re
         s.capture_source.set(SOURCE);
         s.conn.execute_batch("BEGIN")?;
     }
-    let mut put = |kind: &'static str, source_id: &str, project: &str, thread: &str, run: &str, at: &str, updated: &str, data: Value| -> Result<()> {
+    let mut put = |kind: &'static str,
+                   source_id: &str,
+                   project: &str,
+                   thread: &str,
+                   run: &str,
+                   at: &str,
+                   updated: &str,
+                   data: Value|
+     -> Result<()> {
         if existing.contains(&(kind.to_string(), source_id.to_string())) {
             *counts.entry("skipped_already_present").or_default() += 1;
             return Ok(());
@@ -222,7 +288,10 @@ pub fn import_v1(c: &crate::config::Config, s: Option<&Store>, path: &str) -> Re
                 *counts.entry("skipped_purged").or_default() += 1;
                 return Ok(());
             }
-            s.put(&instance, kind, source_id, project, thread, run, at, updated, "partial", SOURCE, data)?;
+            s.put(
+                &instance, kind, source_id, project, thread, run, at, updated, "partial", SOURCE,
+                data,
+            )?;
             pending += 1;
             if pending >= 2000 {
                 s.conn.execute_batch("COMMIT; BEGIN")?;
@@ -230,7 +299,11 @@ pub fn import_v1(c: &crate::config::Config, s: Option<&Store>, path: &str) -> Re
             }
         }
         *counts.entry(kind).or_default() += 1;
-        *months.entry(month(at)).or_default().entry(kind).or_default() += 1;
+        *months
+            .entry(month(at))
+            .or_default()
+            .entry(kind)
+            .or_default() += 1;
         Ok(())
     };
 
@@ -249,11 +322,20 @@ pub fn import_v1(c: &crate::config::Config, s: Option<&Store>, path: &str) -> Re
             let started = t.started.as_ref().unwrap_or(&t.requested);
             let updated = t.completed.as_deref().unwrap_or(&t.requested);
             let duration = millis(Some(started), t.completed.as_ref());
-            put("run", &run_id, &thread.0, &t.thread, &run_id, &t.requested, updated, json!({
-                "duration_ms": duration, "provider": provider, "requested_model": model, "resolved_model": null, "status": status,
-                "started_at": t.started, "completed_at": t.completed, "user_message_id": t.pending,
-                "input_tokens": null, "cached_input_tokens": null, "output_tokens": null, "reasoning_tokens": null, "total_tokens": null,
-            }))?;
+            put(
+                "run",
+                &run_id,
+                &thread.0,
+                &t.thread,
+                &run_id,
+                &t.requested,
+                updated,
+                json!({
+                    "duration_ms": duration, "provider": provider, "requested_model": model, "resolved_model": null, "status": status,
+                    "started_at": t.started, "completed_at": t.completed, "user_message_id": t.pending,
+                    "input_tokens": null, "cached_input_tokens": null, "output_tokens": null, "reasoning_tokens": null, "total_tokens": null,
+                }),
+            )?;
             let found = usage.get(&i);
             let mut data = json!({
                 "usage_scope": if found.is_some() { "main_agent" } else { "unavailable" },
@@ -270,9 +352,22 @@ pub fn import_v1(c: &crate::config::Config, s: Option<&Store>, path: &str) -> Re
                 data["reasoning_tokens"] = json!(u.reasoning);
                 data["total_tokens"] = json!(u.input + u.output);
                 let family = provider.as_str().unwrap_or("unknown").to_string();
-                *tokens.entry(month(&t.requested)).or_default().entry(family).or_default() += u.input + u.output;
+                *tokens
+                    .entry(month(&t.requested))
+                    .or_default()
+                    .entry(family)
+                    .or_default() += u.input + u.output;
             }
-            put("model_turn", &run_id, &thread.0, &t.thread, &run_id, started, updated, data)?;
+            put(
+                "model_turn",
+                &run_id,
+                &thread.0,
+                &t.thread,
+                &run_id,
+                started,
+                updated,
+                data,
+            )?;
         }
 
         let mut first_prompt: HashSet<String> = HashSet::new();
@@ -281,23 +376,40 @@ pub fn import_v1(c: &crate::config::Config, s: Option<&Store>, path: &str) -> Re
         while let Some(r) = rows.next()? {
             let (id, thread_id): (String, String) = (r.get(0)?, r.get(1)?);
             let (turn_id, role): (Option<String>, String) = (r.get(2)?, r.get(3)?);
-            let (body, at, updated): (Option<String>, String, String) = (r.get(4)?, r.get(5)?, r.get(6)?);
+            let (body, at, updated): (Option<String>, String, String) =
+                (r.get(4)?, r.get(5)?, r.get(6)?);
             if at >= cutoff {
                 continue;
             }
-            let Some(thread) = threads.get(&thread_id) else { continue };
+            let Some(thread) = threads.get(&thread_id) else {
+                continue;
+            };
             let policy = policy_of(&thread.0);
             if policy == "disabled" {
                 continue;
             }
-            let i = by_prompt.get(id.as_str()).copied()
+            let i = by_prompt
+                .get(id.as_str())
+                .copied()
                 .or_else(|| turn_id.as_deref().and_then(|x| by_id.get(x).copied()))
                 .or_else(|| turn_at(&thread_id, &at));
             let turn = i.map(|i| &turns[i]);
-            let mut data = serde_json::to_value(privacy::protect(body.as_deref().unwrap_or(""), &policy, key.as_ref())?)?;
+            let mut data = serde_json::to_value(privacy::protect(
+                body.as_deref().unwrap_or(""),
+                &policy,
+                key.as_ref(),
+            )?)?;
             data["source_message_id"] = json!(id);
             data["model"] = turn.map(|t| model_of(t).0).unwrap_or(Value::Null);
-            data["status"] = turn.map(|t| json!(if t.state == "error" { "failed" } else { t.state.as_str() })).unwrap_or(Value::Null);
+            data["status"] = turn
+                .map(|t| {
+                    json!(if t.state == "error" {
+                        "failed"
+                    } else {
+                        t.state.as_str()
+                    })
+                })
+                .unwrap_or(Value::Null);
             data["prompt_id"] = turn.map(|t| json!(t.pending)).unwrap_or(Value::Null);
             data["prompt_type"] = json!(if role != "user" {
                 "unknown"
@@ -307,7 +419,16 @@ pub fn import_v1(c: &crate::config::Config, s: Option<&Store>, path: &str) -> Re
                 "follow_up"
             });
             let run = turn.map(|t| format!("v1:{}", t.id)).unwrap_or_default();
-            put(if role == "user" { "prompt" } else { "answer" }, &id, &thread.0, &thread_id, &run, &at, &updated, data)?;
+            put(
+                if role == "user" { "prompt" } else { "answer" },
+                &id,
+                &thread.0,
+                &thread_id,
+                &run,
+                &at,
+                &updated,
+                data,
+            )?;
         }
 
         // A call reports several times as it runs, so only its last completion counts, timed from its first start.
@@ -326,17 +447,23 @@ pub fn import_v1(c: &crate::config::Config, s: Option<&Store>, path: &str) -> Re
         let mut rows = stmt.query([])?;
         while let Some(r) = rows.next()? {
             let (activity, thread_id): (String, String) = (r.get(0)?, r.get(1)?);
-            let (turn_id, at, raw): (Option<String>, String, String) = (r.get(2)?, r.get(3)?, r.get(4)?);
+            let (turn_id, at, raw): (Option<String>, String, String) =
+                (r.get(2)?, r.get(3)?, r.get(4)?);
             if at >= cutoff {
                 continue;
             }
-            let Some(thread) = threads.get(&thread_id) else { continue };
+            let Some(thread) = threads.get(&thread_id) else {
+                continue;
+            };
             let policy = policy_of(&thread.0);
             if policy == "disabled" {
                 continue;
             }
             let v: Value = serde_json::from_str(&raw)?;
-            let call = v.get("toolCallId").and_then(Value::as_str).map(str::to_string);
+            let call = v
+                .get("toolCallId")
+                .and_then(Value::as_str)
+                .map(str::to_string);
             let id = format!("v1:{}", call.clone().unwrap_or(activity));
             if !seen.insert(id.clone()) {
                 continue;
@@ -349,8 +476,12 @@ pub fn import_v1(c: &crate::config::Config, s: Option<&Store>, path: &str) -> Re
                 "file": d.get("file").or_else(|| d.get("path")),
                 "detail": v.get("detail"),
             });
-            let mut data = serde_json::to_value(privacy::protect_json(&content, &policy, key.as_ref())?)?;
-            let i = turn_id.as_deref().and_then(|x| by_id.get(x).copied()).or_else(|| turn_at(&thread_id, &at));
+            let mut data =
+                serde_json::to_value(privacy::protect_json(&content, &policy, key.as_ref())?)?;
+            let i = turn_id
+                .as_deref()
+                .and_then(|x| by_id.get(x).copied())
+                .or_else(|| turn_at(&thread_id, &at));
             let turn = i.map(|i| &turns[i]);
             let start = call.as_ref().and_then(|c| starts.get(c));
             let item = text(&v, "itemType");
@@ -359,7 +490,11 @@ pub fn import_v1(c: &crate::config::Config, s: Option<&Store>, path: &str) -> Re
             data["model"] = turn.map(|t| model_of(t).0).unwrap_or(Value::Null);
             data["started_at"] = start.map(|x| json!(x)).unwrap_or(Value::Null);
             data["completed_at"] = json!(at);
-            data["tool_name"] = d.get("toolName").filter(|x| !x.is_null()).cloned().unwrap_or_else(|| json!(item));
+            data["tool_name"] = d
+                .get("toolName")
+                .filter(|x| !x.is_null())
+                .cloned()
+                .unwrap_or_else(|| json!(item));
             data["tool_category"] = json!(match item {
                 "command_execution" => "shell",
                 "file_change" => "file_write",
@@ -369,7 +504,16 @@ pub fn import_v1(c: &crate::config::Config, s: Option<&Store>, path: &str) -> Re
             data["exit_code"] = d.get("exitCode").cloned().unwrap_or(Value::Null);
             data["parent_tool_call_id"] = Value::Null;
             let run = turn.map(|t| format!("v1:{}", t.id)).unwrap_or_default();
-            put("tool", &id, &thread.0, &thread_id, &run, start.unwrap_or(&at), &at, data)?;
+            put(
+                "tool",
+                &id,
+                &thread.0,
+                &thread_id,
+                &run,
+                start.unwrap_or(&at),
+                &at,
+                data,
+            )?;
         }
         Ok(())
     })();
@@ -406,7 +550,16 @@ mod tests {
         add_usage(&mut total, &mut cursor, &call(110, 100));
         add_usage(&mut total, &mut cursor, &call(110, 100));
         add_usage(&mut total, &mut cursor, &call(330, 200));
-        assert_eq!(total, Usage { calls: 2, input: 300, cached: Some(150), output: 20, reasoning: Some(2) });
+        assert_eq!(
+            total,
+            Usage {
+                calls: 2,
+                input: 300,
+                cached: Some(150),
+                output: 20,
+                reasoning: Some(2)
+            }
+        );
     }
 
     #[test]
@@ -416,13 +569,26 @@ mod tests {
         add_usage(&mut total, &mut cursor, &call(100, 5));
         add_usage(&mut total, &mut cursor, &call(100, 5));
         add_usage(&mut total, &mut cursor, &call(200, 7));
-        assert_eq!(total, Usage { calls: 2, input: 300, cached: None, output: 12, reasoning: None });
+        assert_eq!(
+            total,
+            Usage {
+                calls: 2,
+                input: 300,
+                cached: None,
+                output: 12,
+                reasoning: None
+            }
+        );
     }
 
     #[test]
     fn a_report_with_only_a_size_still_counts_that_size() {
         let (mut total, mut cursor) = (Usage::default(), UsageCursor::default());
-        add_usage(&mut total, &mut cursor, &json!({"lastUsedTokens":40,"usedTokens":40}));
+        add_usage(
+            &mut total,
+            &mut cursor,
+            &json!({"lastUsedTokens":40,"usedTokens":40}),
+        );
         assert_eq!(total.input, 40);
         assert_eq!(total.calls, 1);
     }

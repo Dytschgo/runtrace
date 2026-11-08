@@ -1,108 +1,104 @@
-# T3 Usage Intelligence
+# Runtrace
 
-A local Rust sidecar for examining personal T3 Code history. This repository contains a working first version with real imported history, a React dashboard, DuckDB storage, redaction/encryption primitives and a read-only MCP server. The full original product scope remains incomplete; current operational and telemetry limits are documented explicitly. See [known limitations](docs/known-limitations.md) and [self-review](docs/self-review.md).
+See where your coding agents' work goes. Runtrace reads your [T3 Code](https://github.com/pingdotgg/t3code) history on your own computer and shows tokens over time by model, provider and project, provider turns, tool calls, sub-agent trees, quota and what each number can and cannot support. Nothing leaves your computer.
 
-![Dashboard displaying imported local T3 history](docs/screenshots/overview.png)
+![Runtrace dashboard: tokens over time by provider](docs/screenshots/overview.png)
 
-## Prerequisites
+## Install
 
-- Rust stable and a working native compiler/linker; verified here with Rust 1.95 on Windows x64.
-- Node.js 24 and npm.
-- T3 Code with the inspected v2 SQLite projections. Verified installation: `0.1.8-nightly.20261105.4234`.
-- Initial network access for Cargo/npm dependencies and DuckDB runtime download. The built dashboard runs without external services.
+You need T3 Code installed and used on the same computer. Runtrace finds its history by itself.
 
-## Production installation (PowerShell)
+**Windows** (PowerShell):
 
 ```powershell
-# From the source checkout:
-./scripts/install.ps1
-Set-Location D:/Code/Runtrace
-./start.ps1
+irm https://github.com/Dytschgo/runtrace/releases/latest/download/install.ps1 | iex
 ```
 
-Open **http://127.0.0.1:4310**. The release binary, DuckDB runtime, dashboard, configuration, database, archives and logs live under `D:/Code/Runtrace`. The source checkout stays in its original project folder. Its data directory is a Windows junction to D:/Code/Runtrace/data; the earlier prototype is preserved in D:/Code/Runtrace/backups/source-checkout-data. `serve` now collects in the background using a separate DuckDB connection while serving queries. The launcher checks the owned process ID in the HTTP readiness response.
+**macOS and Linux**:
 
-Use `./stop.ps1` before upgrading binaries or running offline maintenance. The installer preserves existing data/configuration and refuses to replace a running production binary. `./t3ui.cmd capture pause` works while the service is running; resume re-enables capture. The pause file is independent of DuckDB's writer lock.
-
-For source development, `./scripts/build.ps1` retains the debug workflow. Production uses an optimized release build with thin LTO.
-
-## T3 connection and history
-
-By default the importer resolves the current user's `.t3/userdata/statev2.sqlite`, opens it read-only, checks the expected schema through prepared queries and reads one consistent snapshot. It never extracts T3 authentication credentials. Inspected HTTP/MCP interfaces and reasons for choosing the local persistence fallback are in [integration evidence](docs/integration-evidence.md).
-
-```powershell
-./t3ui.cmd import --all
-./t3ui.cmd import --instance local
-./t3ui.cmd import --project 53a8a553-5b8b-4c8d-8496-846d81ec0150
-./t3ui.cmd import --since 2026-11-01T00:00:00Z
-./t3ui.cmd import --dry-run
-./t3ui.cmd import --verify
-./t3ui.cmd import --repair
+```sh
+curl -fsSL https://github.com/Dytschgo/runtrace/releases/latest/download/install.sh | sh
 ```
 
-Output is JSON with changed records, discovered threads, skipped incomplete/purged messages and checkpoint. An unchanged repeat returns `"changed":0`; this was verified with real history and synthetic acceptance tests. `--verify` currently reports capture-quality counts, not the full requested relationship repair audit. `--repair` rescans retained history; it cannot reconstruct telemetry the source lacks.
+The installer downloads the program for your system, checks it against the release's published checksums, starts Runtrace and opens the dashboard at **http://127.0.0.1:4310**. The first start reads your whole T3 history, which can take a few minutes; the dashboard fills in as it goes.
 
-## Continuous collection
+Prefer to do it by hand? Download the file for your system from the [latest release](https://github.com/Dytschgo/runtrace/releases/latest), check it against `SHA256SUMS`, and run `runtrace start --open`.
 
-```powershell
-./t3ui.cmd collect
+| System | File |
+|---|---|
+| Windows (x64) | `runtrace-x86_64-pc-windows-msvc.exe` |
+| macOS (Apple silicon) | `runtrace-aarch64-apple-darwin` |
+| macOS (Intel) | `runtrace-x86_64-apple-darwin` |
+| Linux (x64, glibc 2.35+) | `runtrace-x86_64-unknown-linux-gnu` |
+
+## Use
+
+```sh
+runtrace start           # start in the background; add --open to open the dashboard
+runtrace open            # open the dashboard (starting it if needed)
+runtrace status          # running or not, version, and where settings, data and logs are
+runtrace stop
+runtrace autostart on    # start when you log in (off to undo)
 ```
 
-Polls completed source messages every 60 seconds, with exponential retry backoff after failure and transactional checkpoints. Stop with Ctrl+C. `serve` already runs collection. Use standalone `collect` only when the service is stopped; DuckDB has one writer process, with separate concurrent reader/writer connections inside that process. MCP can query through the running HTTP service without taking a second writer lock.
+## Updates
 
-## Configuration
+Runtrace looks for a new release about once a day. When one exists, an **Update** button appears in the dashboard's top bar. One click backs up your database, installs the new version and restarts; the page reloads by itself. Nothing installs without you asking.
 
-Edit [config/default.toml](config/default.toml). Defaults: Europe/Zurich display, loopback port 4310, redacted-only capture, 90-day content retention. `T3UI_CONFIG`, `T3UI_DB` and `T3UI_SOURCE` override configuration location, analytics database path and source SQLite path. Source instance_id separates identities across explicitly configured offline snapshots; network remote collection is not implemented. Quota schedule values are reserved for the future live adapter.
+From a terminal: `runtrace update --check` reports, `runtrace update` installs. To turn the daily check off, set `check = false` under `[update]` in the settings file.
 
-## MCP
+## Where things live
 
-Configure a client that supports stdio MCP:
+| | Windows | macOS | Linux |
+|---|---|---|---|
+| Settings, data, logs | `%LOCALAPPDATA%\Runtrace` | `~/Library/Application Support/Runtrace` | `~/.local/share/runtrace` |
+| Program | `%LOCALAPPDATA%\Runtrace\bin` | `~/.local/bin` | `~/.local/bin` |
+
+`runtrace status` prints the exact paths. Settings are in `config.toml` there, with comments; restart after a change.
+
+## Privacy
+
+- Runtrace opens T3's database read-only and never changes it. It never reads T3 credentials.
+- The dashboard listens on 127.0.0.1 only, so other computers cannot reach it.
+- Conversation text is stored with secrets removed (`redacted_only`). Set `default_policy = "metadata_only"` to keep no text at all, or `full_encrypted` to keep it encrypted with a key in your system's keychain.
+- The only network request Runtrace makes is the daily release check to GitHub, which sends nothing about you or your data. Turn it off as above.
+- Pause capture at any time with `runtrace capture pause`; purge a thread or project with `runtrace purge thread <id>` / `runtrace purge project <id>`.
+
+Details: [security](docs/security.md), [threat model](docs/threat-model.md).
+
+## Uninstall
+
+Run `runtrace autostart off` and `runtrace stop`, then delete the program and the folder `runtrace status` names. Your T3 history is not affected.
+
+## Ask your agents about it (MCP)
+
+Runtrace includes a read-only MCP server with twenty tools and eight analysis prompts, for clients that support stdio MCP:
 
 ```json
-{
-  "mcpServers": {
-    "t3-usage-intelligence": {
-      "command": "D:\\Code\\Runtrace\\bin\\t3ui.exe",
-      "args": ["mcp", "serve"],
-      "cwd": "D:\\Code\\Runtrace",
-      "env": {"T3UI_CONFIG": "D:\\Code\\Runtrace\\config\\default.toml"}
-    }
-  }
-}
+{ "mcpServers": { "runtrace": { "command": "runtrace", "args": ["mcp", "serve"] } } }
 ```
 
-Registered: twenty read-only tools, resources and eight reusable analysis prompts. Some advanced tool names expose partial underlying lists rather than full derived analytics. Full content is never available through MCP. See [MCP details](docs/mcp.md).
+Full conversation content is never available through MCP. See [MCP details](docs/mcp.md).
 
-## Privacy and operations
+## Build from source
 
-Secret-pattern and entropy redaction runs before storage. Default redacted_only stores no full original text. Set default_policy to full_encrypted and run init to create an OS-keychain key for XChaCha20-Poly1305 encryption. Keychain errors fail closed. Metadata_only and disabled reduce capture further. This release has no API/MCP full-content decryption endpoint.
+You need Rust (stable) and Node.js 24.
 
-```powershell
-./t3ui.cmd capture pause
-./t3ui.cmd capture resume
-./t3ui.cmd project privacy <t3-project-id> metadata_only
-./t3ui.cmd purge thread <t3-thread-id>
-./t3ui.cmd purge project <t3-project-id>
-./t3ui.cmd purge before 2026-01-01
-./t3ui.cmd archive run
-./t3ui.cmd archive verify
-./t3ui.cmd retention run
-./t3ui.cmd storage stats
-./t3ui.cmd export --output data/redacted-export.json
+```sh
+cd dashboard && npm ci && npm run build && cd ..   # the program embeds the built dashboard
+cargo build --release                              # target/release/runtrace
 ```
 
-Purges are logical deletes with reimport tombstones. Archive bytes and exports/backups require separate removal. Preserve the current installation purge ledger with every restore. Archive now backs up normalized records, events, checkpoints, capture settings, tombstones and revision state into lossless Zstandard Parquet bundles with exact round-trip comparison and SHA-256 manifests. Hot rows remain in native DuckDB for retrieval speed. Restore is supported into an empty target database with `archive restore --path <snapshot-directory>`; automatic hot eviction/union queries remain unimplemented. Export is a bounded page of at most 500 redacted records.
+Tests: `cargo test --workspace`, and in `dashboard/`: `npm test` (unit) and `npx playwright test` (browser, against a synthetic database with a pinned clock). See [development](docs/development.md).
 
-For backup/restore, stop all processes and copy data plus config; encrypted content requires the original OS keychain. Upgrade by backing up, rebuilding and running doctor/import verification. Uninstall by stopping processes, deleting the analytics data/archives/exports/backups and removing the keychain entry if created. Original T3 data remains untouched. Details: [operations](docs/operations.md), [security](docs/security.md), [threat model](docs/threat-model.md).
+### Publishing a release
 
-## Development and status
+Bump `version` in `Cargo.toml`, commit, then tag and push: `git tag v0.3.0 && git push origin v0.3.0`. The release workflow builds every platform, runs each build once, writes `SHA256SUMS`, and publishes the release that installers and `runtrace update` read.
 
-See [development](docs/development.md), [architecture decisions](docs/architecture.md), [data model](docs/data-model.md), [dictionary](docs/data-dictionary.md), [metrics](docs/metrics.md), [remote machines](docs/remote-machines.md), [quota tracking](docs/quota-tracking.md), [measurements](docs/verification.md) and [roadmap](docs/roadmap.md).
+## What the numbers mean
 
-The UI screenshot uses imported local data, not seeded chart totals. Verified per-turn token data is imported where T3 exposes it; unknown token fields, resolved models, costs and quota remain unavailable. Counts of run lifecycle records are not substituted for proven model-call counts. Historical messages without a provably terminal run are withheld. These limitations constrain interpretation of every chart.
+Runtrace never shows a guess as a fact. Unknown values are hatched, not zero; sums that are missing some turns are marked as lower bounds (≥); token usage from agents' session logs counts toward tokens but never as turns. See [metrics](docs/metrics.md), [data model](docs/data-model.md) and [known limitations](docs/known-limitations.md).
 
-## Performance and compression work
+## License
 
-On the same frozen 112-thread source, unchanged imports fell from 55.8–57.9 seconds in the original debug build to 0.329 seconds in the optimized release build. The importer uses indexed source metadata, durable revision caching and prepared writes, with bounded commits for recovery. A 5,950-record Parquet benchmark compared thirteen codec/row-group combinations and verified every restored field. Zstandard level 8 / 2,048-row groups produced 4.02 MB versus 37.3 MB uncompressed, with 22.9 ms versus 31.2 ms measured full tool-page retrieval. These are dataset-specific measurements, not universal guarantees.
-
-See [current performance evidence](docs/performance-and-compression.md). The current [self-review](docs/self-review.md) is 7.13/10 against the full original scope; remote/quota and other gaps remain explicit. See [executed verification](docs/verification.md) and [known limitations](docs/known-limitations.md).
+MIT

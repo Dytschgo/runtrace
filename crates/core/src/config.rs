@@ -23,7 +23,11 @@ pub struct Update {
 }
 impl Default for Update {
     fn default() -> Self {
-        Self { check: true, repo: default_repo(), api_base: default_api() }
+        Self {
+            check: true,
+            repo: default_repo(),
+            api_base: default_api(),
+        }
     }
 }
 fn default_repo() -> String {
@@ -94,8 +98,13 @@ pub fn home_dir() -> Result<PathBuf> {
     if let Some(h) = env("HOME") {
         return Ok(PathBuf::from(h));
     }
-    let base = dirs::data_local_dir().ok_or_else(|| anyhow::anyhow!("No per-user data folder found; set RUNTRACE_HOME"))?;
-    Ok(base.join(if cfg!(target_os = "linux") { "runtrace" } else { "Runtrace" }))
+    let base = dirs::data_local_dir()
+        .ok_or_else(|| anyhow::anyhow!("No per-user data folder found; set RUNTRACE_HOME"))?;
+    Ok(base.join(if cfg!(target_os = "linux") {
+        "runtrace"
+    } else {
+        "Runtrace"
+    }))
 }
 
 /// The settings file in use: RUNTRACE_CONFIG, else a source checkout's config/default.toml, else the one in this person's
@@ -170,8 +179,10 @@ impl Config {
         Self::load_from(&config_path()?)
     }
     pub fn load_from(path: &std::path::Path) -> Result<Self> {
-        let text = std::fs::read_to_string(path).map_err(|e| anyhow::anyhow!("Cannot read settings at {}: {e}", path.display()))?;
-        let mut c: Self = toml::from_str(&text).map_err(|e| anyhow::anyhow!("Settings at {} are not valid: {e}", path.display()))?;
+        let text = std::fs::read_to_string(path)
+            .map_err(|e| anyhow::anyhow!("Cannot read settings at {}: {e}", path.display()))?;
+        let mut c: Self = toml::from_str(&text)
+            .map_err(|e| anyhow::anyhow!("Settings at {} are not valid: {e}", path.display()))?;
         // A temporary restore database must still obey this installation's purges.
         if c.storage.purge_ledger_path.is_none() {
             c.storage.purge_ledger_path = std::path::Path::new(&c.storage.duckdb_path)
@@ -188,7 +199,8 @@ impl Config {
             c.update.check = false;
         }
         if c.source.sqlite_path.is_empty() {
-            let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("No home folder found; set source.sqlite_path"))?;
+            let home = dirs::home_dir()
+                .ok_or_else(|| anyhow::anyhow!("No home folder found; set source.sqlite_path"))?;
             c.source.sqlite_path = home
                 .join(".t3/userdata/statev2.sqlite")
                 .to_string_lossy()

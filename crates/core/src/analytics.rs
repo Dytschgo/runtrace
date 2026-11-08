@@ -33,22 +33,33 @@ impl Filter {
         // A preview page is the same price at any size, see below.
         // Reading the stored records costs about the same for 500 rows as for 20,000, so pages of previews may be large.
         // Full content stays in small pages, because that is what can be big.
-        let most = if self.include_content == Some(true) { 500 } else { 20_000 };
+        let most = if self.include_content == Some(true) {
+            500
+        } else {
+            20_000
+        };
         ensure!(
             (1..=most).contains(&self.limit.unwrap_or(100)),
             "limit must be <= 500, or <= 20000 without full content"
         );
         ensure!(self.offset.unwrap_or(0) <= 1_000_000, "offset too large");
         ensure!(
-            self.kind.as_ref().is_none_or(|k| k.len() <= 32 && k.chars().all(|c| c.is_ascii_lowercase() || c == '_')),
+            self.kind.as_ref().is_none_or(
+                |k| k.len() <= 32 && k.chars().all(|c| c.is_ascii_lowercase() || c == '_')
+            ),
             "kind must be a record kind"
         );
         for d in [&self.since, &self.until].into_iter().flatten() {
             chrono::DateTime::parse_from_rfc3339(d)?;
         }
-        ensure!(self.shape.as_deref().is_none_or(|s| s == "lean"), "shape must be lean");
         ensure!(
-            self.provider.as_ref().is_none_or(|p| p.len() <= 32 && p.chars().all(|c| c.is_ascii_lowercase())),
+            self.shape.as_deref().is_none_or(|s| s == "lean"),
+            "shape must be lean"
+        );
+        ensure!(
+            self.provider
+                .as_ref()
+                .is_none_or(|p| p.len() <= 32 && p.chars().all(|c| c.is_ascii_lowercase())),
             "provider must be a provider family"
         );
         ensure!(
@@ -72,7 +83,10 @@ pub fn provider_sql() -> String {
 
 pub fn query(s: &Store, name: &str, f: &Filter) -> Result<Value> {
     f.validate()?;
-    let filter = format!("(? IS NULL OR project_id=?) AND (? IS NULL OR instance_id=?) AND (? IS NULL OR try_cast(occurred_at AS TIMESTAMPTZ)>=try_cast(? AS TIMESTAMPTZ)) AND (? IS NULL OR try_cast(occurred_at AS TIMESTAMPTZ)<=try_cast(? AS TIMESTAMPTZ)) AND (? IS NULL OR model=?) AND (? IS NULL OR ({})=?)", provider_sql());
+    let filter = format!(
+        "(? IS NULL OR project_id=?) AND (? IS NULL OR instance_id=?) AND (? IS NULL OR try_cast(occurred_at AS TIMESTAMPTZ)>=try_cast(? AS TIMESTAMPTZ)) AND (? IS NULL OR try_cast(occurred_at AS TIMESTAMPTZ)<=try_cast(? AS TIMESTAMPTZ)) AND (? IS NULL OR model=?) AND (? IS NULL OR ({})=?)",
+        provider_sql()
+    );
     let filter = filter.as_str();
     let args: Vec<&dyn duckdb::ToSql> = vec![
         &f.project,
@@ -89,7 +103,7 @@ pub fn query(s: &Store, name: &str, f: &Filter) -> Result<Value> {
         &f.provider,
     ];
     // Quota compares resets with now, which T3UI_NOW can pin for repeatable tests.
-    let now=crate::storage::now_sql();
+    let now = crate::storage::now_sql();
     let rows=match name{
  // Session-log hours are not provider turns, so they are never counted as records here.
  "overview"=>s.rows(&format!("SELECT json_object('kind',kind,'count',count(*))::VARCHAR FROM records WHERE {filter} AND NOT (kind='model_turn' AND capture_source IS NOT DISTINCT FROM 'session_logs') GROUP BY kind ORDER BY kind"),&args)?,

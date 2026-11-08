@@ -24,12 +24,22 @@ pub async fn serve(uri: Uri) -> Response {
         Some(f) => (f, path),
         None => match Dashboard::get("index.html") {
             Some(f) => (f, "index.html"),
-            None => return (StatusCode::NOT_FOUND, "This build has no dashboard. Build it with `npm run build` in dashboard/.").into_response(),
+            None => {
+                return (
+                    StatusCode::NOT_FOUND,
+                    "This build has no dashboard. Build it with `npm run build` in dashboard/.",
+                )
+                    .into_response();
+            }
         },
     };
     let mime = file.metadata.mimetype().to_owned();
     // Hashed asset names never change content, so they can be kept; index.html must be fetched fresh after an update.
-    let cache = if name.starts_with("assets/") { "public, max-age=31536000, immutable" } else { "no-cache" };
+    let cache = if name.starts_with("assets/") {
+        "public, max-age=31536000, immutable"
+    } else {
+        "no-cache"
+    };
     let mut res = Response::new(Body::from(file.data.into_owned()));
     let h = res.headers_mut();
     if let Ok(v) = HeaderValue::from_str(&mime) {
