@@ -3,8 +3,35 @@ on:
   push:
     branches: [runtrace-dashboard, master]
   pull_request:
+# A newer push to the same branch replaces a run still going for an older one.
+concurrency:
+  group: checks-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      rust: ${{ steps.filter.outputs.rust }}
+      dashboard: ${{ steps.filter.outputs.dashboard }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            rust:
+              - 'crates/**'
+              - 'migrations/**'
+              - 'config/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - '.github/workflows/ci.yml'
+            dashboard:
+              - 'dashboard/**'
+              - '.github/workflows/ci.yml'
   rust:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     # Every platform a release ships for builds and passes the tests, so a release never carries untested code.
     strategy:
       fail-fast: false
@@ -22,6 +49,8 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo test --workspace --locked
   dashboard:
+    needs: changes
+    if: needs.changes.outputs.dashboard == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -31,6 +60,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
       - run: npm ci
       - run: npm run build
       - run: npm test

@@ -1482,10 +1482,18 @@ mod tests {
     #[test]
     fn the_same_instant_builds_the_same_history() {
         let (a, b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
-        let (sa, sb) = (store(a.path()), store(b.path()));
         let now = "2026-11-08T13:37:00.000Z";
-        build(&sa, "local", now).unwrap();
-        build(&sb, "local", now).unwrap();
+        // The two builds are independent databases, so they run side by side; one after the other doubled the test's time.
+        let (sa, sb) = std::thread::scope(|scope| {
+            let one = scope.spawn(|| {
+                let s = store(a.path());
+                build(&s, "local", now).unwrap();
+                s
+            });
+            let s = store(b.path());
+            build(&s, "local", now).unwrap();
+            (one.join().unwrap(), s)
+        });
         let digest = |s: &Store| -> Vec<(String, String)> {
             s.conn
                 .prepare("SELECT id,payload_hash FROM records ORDER BY id")

@@ -18,3 +18,11 @@ tokio = { version = "1", features = ["full"] }
 lto = "thin"
 codegen-units = 1
 strip = "debuginfo"
+
+# DuckDB is a large C++ engine, compiled into the program. In a debug build its build script turns on DuckDB's own
+# assertions and verification paths (whenever debug info is on), which made the tests over ten times slower in CI.
+# Built like a release, without debug info and optimized, it compiles once, is cached, and the tests run in minutes.
+# Runtrace's own code stays a quick-to-compile debug build with its checks.
+[profile.dev.package.libduckdb-sys]
+opt-level = 3
+debug = false
