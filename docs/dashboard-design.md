@@ -53,6 +53,10 @@ These rules hold on every view, table and download of the Overview.
 - The Quota page opens with one line: the windows that are nearly full or on pace to fill before their reset, marked as projections, or a plain statement that none are.
 - The Delegation panel lists the busiest delegating threads in the window, each a link straight to its tree.
 - Provider turns come from the service lean: only the fields a chart or list reads. The fields every chart needs are stored as columns, so no aggregate reads the JSON document.
+- Every list page reads a stored list view of each record (the document without its full text, plus a 512-character preview) instead of the whole document. A page of 1,000 tool calls went from about 740 ms to about 100 ms on the service. Full text is still fetched on demand.
+- The Models page gets threads and sub-agents per model with the model list, in one query, instead of a query per model.
+- Data Quality's tool field coverage and redaction counts come from the service over every record, not a sample of the latest 1,000 calls.
+- The Projects list shows each project in the colour it has on the Overview chart, which comes from its id alone.
 - Tokens by type are summed from turns that reported a total, so the parts add up to the headline. Turns that reported parts but no total are counted and named beside them.
 - Quota pace is a projection from a window's own readings over the last fifth of its length, at least an hour and at most a day, and is always labelled as one. Readings from another reset are never mixed in. A window at 80% or more is marked.
 
@@ -138,7 +142,6 @@ RUNTRACE_BASE_URL=http://127.0.0.1:4310 npx playwright test
 ## Remaining API needs
 
 - `kind` filter on `timeline`: the Activity feed can only filter kinds within a loaded page.
-- Aggregates for tools by name, status and day: tool analysis reads rows client-side, and 34,000+ calls are too many to read by default.
 - Per-day token and turn aggregates by model: the chart reads every turn, which will not scale forever.
 - Total row count in list envelopes: paging totals come from the overview today.
 - Thread filters for title and type, so filtering need not read all threads.

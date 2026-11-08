@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { Async, CoverageBar, ErrorState, NoRecords, PageHeader, Panel, QualityBadge, RankedBars, Skeleton, SkeletonRows, Stat, StatRow, Tokens, Unknown } from '../components/ui';
+import { Async, CoverageBar, ErrorState, NoRecords, NotLoaded, PageHeader, Panel, QualityBadge, RankedBars, Skeleton, SkeletonRows, Stat, StatRow, Tokens, Unknown } from '../components/ui';
 import { coverageRows, usageByProvider } from '../lib/analytics';
 import { useAgents, useCollectorReadiness, useFieldReport, useModels, useModelTurns, useQuality, useQualityReport, useQuota, useThreads } from '../lib/data';
 import { fmtInt, fmtPct, isKnown } from '../lib/format';
@@ -48,6 +48,7 @@ export default function DataQuality() {
   const redactions = fields.data?.redactions ?? [];
   const providers = useMemo(() => usageByProvider(turns.data?.rows ?? []), [turns.data]);
   const measured = coverage?.filter((c) => c.total > 0) ?? [];
+  const coverageFailed = !coverage && !!(threads.error ?? agents.error ?? fields.error ?? turns.error);
   const full = measured.filter((c) => c.known === c.total).length;
   const none = measured.filter((c) => c.known === 0).length;
   const callsKnown = (models.data ?? []).filter((m) => isKnown(m.calls)).length;
@@ -75,9 +76,9 @@ export default function DataQuality() {
       )}
 
       <StatRow label="Quality summary">
-        <Stat label="Records" value={quality.isPending ? '…' : fmtInt(total)} sub="Across all kinds" />
-        <Stat label="Marked complete" value={quality.isPending ? '…' : fmtPct(total ? complete / total : 0)} sub={`${fmtInt(partial)} marked partial`} />
-        <Stat label="Fields fully known" value={coverage ? `${fmtInt(full)} of ${fmtInt(measured.length)}` : '…'} sub={`${fmtInt(none)} never captured`} />
+        <Stat label="Records" value={quality.isError ? <NotLoaded /> : quality.isPending ? '…' : fmtInt(total)} sub="Across all kinds" />
+        <Stat label="Marked complete" value={quality.isError ? <NotLoaded /> : quality.isPending ? '…' : fmtPct(total ? complete / total : 0)} sub={quality.data ? `${fmtInt(partial)} marked partial` : undefined} />
+        <Stat label="Fields fully known" value={coverageFailed ? <NotLoaded /> : coverage ? `${fmtInt(full)} of ${fmtInt(measured.length)}` : '…'} sub={coverage ? `${fmtInt(none)} never captured` : undefined} />
         <Stat label="Quota status" value={quota.data?.data?.length ? 'Sampling' : quota.isPending ? '…' : <Unknown label="Unavailable" why={quota.data?.reason} />} sub={quota.data?.window_status === 'historical_without_snapshots' ? 'History without snapshots' : undefined} />
       </StatRow>
 

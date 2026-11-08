@@ -3,7 +3,7 @@ import { ModelName } from '../components/model';
 import { useInfiniteQuery } from '@tanstack/react-query';
 import { ArrowLeft, ChevronRight, CornerDownRight, GitBranch, History, Network, Play } from 'lucide-react';
 import { DataTable, type Column } from '../components/DataTable';
-import { AppLink, Async, DisclosurePanel, EmptyState, ErrorState, Tokens, NoRecords, PageHeader, Panel, plural, QualityBadge, ScanNote, Segmented, SkeletonRows, Stat, StatRow, StatusBadge, Tag, Unknown, NotYetPage } from '../components/ui';
+import { AppLink, Async, DisclosurePanel, EmptyState, ErrorState, Tokens, NoRecords, NotLoaded, PageHeader, Panel, plural, QualityBadge, ScanNote, Segmented, SkeletonRows, Stat, StatRow, StatusBadge, Tag, Unknown, NotYetPage } from '../components/ui';
 import { getJson } from '../lib/api';
 import { useAgents, useFilters, useLiveTurns, useProjects, useThreads, useThreadTokens } from '../lib/data';
 import { windowTokens } from '../lib/analytics';
@@ -40,6 +40,8 @@ function ThreadList() {
   const live = useLiveTurns(f);
   const windowStart = f.since ? Date.parse(f.since) : -Infinity;
   const turnsReady = windowStart >= live.coversFrom ? !!(live.recent.data || live.all.data) : !!live.all.data;
+  // A failed read is said as such, so the counts never wait on it for ever.
+  const turnsFailed = !turnsReady && (windowStart >= live.coversFrom ? live.recent.isError && !live.all.data : live.all.isError);
   const win = useMemo(() => windowTokens(live.rows, f), [live.rows, f]);
   const type = params.get('type') ?? 'all';
   const tq = params.get('tq') ?? '';
@@ -88,7 +90,7 @@ function ThreadList() {
     },
     {
       key: 'tokens', header: 'Tokens', align: 'end', className: 'cell-tokens', sort: (t) => t.tokenTotal,
-      render: (t) => (!turnsReady ? <span className="fine" aria-label="Loading">…</span> : t.tokenTotal === null && !t.turns ? <span className="fine">None here</span> : t.short && t.tokenTotal === 0 ? <Unknown label="No complete total" why="The turns with a total summed to 0, and others reported only parts or nothing." /> : <>{t.short && !!t.tokenTotal && <span className="lower-bound" title="Some turns in this thread reported no total"><span aria-hidden="true">≥</span><span className="sr-only">at least </span></span>}<Tokens v={t.tokenTotal} why={TOKEN_WHY} /></>),
+      render: (t) => (turnsFailed ? <NotLoaded /> : !turnsReady ? <span className="fine" aria-label="Loading">…</span> : t.tokenTotal === null && !t.turns ? <span className="fine">None here</span> : t.short && t.tokenTotal === 0 ? <Unknown label="No complete total" why="The turns with a total summed to 0, and others reported only parts or nothing." /> : <>{t.short && !!t.tokenTotal && <span className="lower-bound" title="Some turns in this thread reported no total"><span aria-hidden="true">≥</span><span className="sr-only">at least </span></span>}<Tokens v={t.tokenTotal} why={TOKEN_WHY} /></>),
     },
     { key: 'story', header: 'Play', render: (t) => <AppLink className="icon-btn" href={hrefPage('Threads', { id: t.source_id, story: '1' })} ariaLabel={`Play the story of ${t.title}`} title="Play the story"><Play size={14} aria-hidden="true" /></AppLink> },
     { key: 'type', header: 'Type', sort: (t) => t.type, render: (t) => <span className={`type type-${t.type}`}>{t.type === 'child' ? `Child · depth ${t.depth ?? '?'}` : t.type === 'primary' ? 'Primary' : 'Unknown'}</span> },
@@ -107,13 +109,13 @@ function ThreadList() {
     <>
       <PageHeader title="Threads" lead="Open one to read it." />
       <StatRow label="Thread summary">
-        <Stat label="In view" value={threads.isPending || !turnsReady ? '…' : fmtInt(inScope.length)} sub={threads.data ? <>{startedHere < inScope.length && <>{fmtInt(startedHere)} started here · </>}<ScanNote scanned={threads.data.scanned} complete={threads.data.complete} noun="threads" /></> : undefined} />
-        <Stat label="Primary" value={threads.isPending ? '…' : fmtInt(primary)} sub="Started directly" />
-        <Stat label="Child" value={threads.isPending ? '…' : fmtInt(child)} sub={`Deepest level ${fmtInt(deepest)}`} />
+        <Stat label="In view" value={threads.isError || turnsFailed ? <NotLoaded /> : threads.isPending || !turnsReady ? '…' : fmtInt(inScope.length)} sub={threads.data ? <>{startedHere < inScope.length && <>{fmtInt(startedHere)} started here · </>}<ScanNote scanned={threads.data.scanned} complete={threads.data.complete} noun="threads" /></> : undefined} />
+        <Stat label="Primary" value={threads.isError ? <NotLoaded /> : threads.isPending ? '…' : fmtInt(primary)} sub="Started directly" />
+        <Stat label="Child" value={threads.isError ? <NotLoaded /> : threads.isPending ? '…' : fmtInt(child)} sub={threads.data ? `Deepest level ${fmtInt(deepest)}` : undefined} />
         <Stat
           label="Tokens"
-          value={!turnsReady ? <span role="status" aria-label="Loading tokens">…</span> : win.total === null ? <Unknown why={TOKEN_WHY} /> : <>{atLeast && <span className="lower-bound" title="Some turns reported no total"><span aria-hidden="true">≥</span><span className="sr-only">at least </span></span>}<Tokens v={win.total} /></>}
-          sub={!turnsReady ? 'Reading turns' : outsideThreads ? `Used in this window · ${outsideThreads}` : 'Used in this window'}
+          value={turnsFailed ? <NotLoaded /> : !turnsReady ? <span role="status" aria-label="Loading tokens">…</span> : win.total === null ? <Unknown why={TOKEN_WHY} /> : <>{atLeast && <span className="lower-bound" title="Some turns reported no total"><span aria-hidden="true">≥</span><span className="sr-only">at least </span></span>}<Tokens v={win.total} /></>}
+          sub={turnsFailed ? 'Turns could not be read' : !turnsReady ? 'Reading turns' : outsideThreads ? `Used in this window · ${outsideThreads}` : 'Used in this window'}
         />
       </StatRow>
       <Panel

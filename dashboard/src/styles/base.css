@@ -40,7 +40,14 @@ mark { background: var(--accent-wash); color: var(--ink-1); border-radius: 3px; 
 time, td.num, th.num { font-variant-numeric: tabular-nums; }
 
 :focus-visible { outline: 2px solid var(--accent-ink); outline-offset: 2px; border-radius: 3px; }
-[tabindex='-1']:focus { outline: none; }
+/* A target that only scripts focus shows no ring after a click, but does after a key, so keyboard users can see where they landed. */
+[tabindex='-1']:focus:not(:focus-visible) { outline: none; }
+h1[data-page-title]:focus-visible { outline-offset: 4px; }
+/* The Overview's heading is visually hidden. When the keyboard lands on it, it shows itself where it sits, over the page, without moving anything. */
+h1.sr-only[data-page-title]:focus-visible {
+  inline-size: auto; block-size: auto; margin: 0; padding: 0.3rem 0.7rem; clip-path: none; overflow: visible; z-index: 20;
+  background: var(--surface-1); color: var(--ink-1); font-size: 0.95rem; border-radius: 6px;
+}
 ::selection { background: color-mix(in oklch, var(--accent) 40%, transparent); color: var(--ink-1); }
 
 .sr-only {

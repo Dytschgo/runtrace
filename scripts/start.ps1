@@ -12,8 +12,12 @@ $previousPreference = $ErrorActionPreference
 $ErrorActionPreference = 'Continue'
 $migrateLog = "$runtimeRoot/logs/migrate-$stamp.log"
 & "$runtimeRoot/bin/t3ui.exe" migrate 2>&1 | ForEach-Object {
-  # Windows PowerShell wraps the program's stderr lines (its progress) as error records; keep them as plain text.
-  $line = if ($_ -is [System.Management.Automation.ErrorRecord]) { "$($_.TargetObject)" } else { "$_" }
+  # PowerShell wraps the program's stderr lines (its progress) as error records; keep them as plain text.
+  # Windows PowerShell keeps the text in TargetObject, PowerShell 7 in the exception message, and an empty line in neither.
+  $line = if ($_ -isnot [System.Management.Automation.ErrorRecord]) { "$_" }
+    elseif ($_.TargetObject) { "$($_.TargetObject)" }
+    elseif ($_.Exception.Message -ne 'System.Management.Automation.RemoteException') { $_.Exception.Message }
+    else { '' }
   Add-Content -LiteralPath $migrateLog -Value $line -Encoding utf8
   $line
 }

@@ -18,6 +18,20 @@ export function readDate(value: string | null | undefined) {
   return Number.isNaN(ms) ? undefined : new Date(ms).toISOString();
 }
 
+/** The address with any value the dashboard ignores taken out: an unknown page, range or date. Null when nothing needs taking out.
+ *  What is shown and what the address says then agree, and no Clear button offers to clear a filter that does nothing. */
+export function cleanSearch(search: string, pages: readonly string[]): string | null {
+  const params = new URLSearchParams(search);
+  let changed = false;
+  const drop = (key: string) => { params.delete(key); changed = true; };
+  const page = params.get('page');
+  if (page !== null && !pages.includes(page)) drop('page');
+  const range = params.get('range');
+  if (range !== null && range !== 'all' && !Object.hasOwn(RANGES, range)) drop('range');
+  for (const key of ['since', 'until']) { const v = params.get(key); if (v !== null && !readDate(v)) drop(key); }
+  return changed ? params.toString() : null;
+}
+
 /**
  * A preset is anchored to the minute, so "the last 24h" is exactly 24 hours and its query key still only changes once a minute.
  * A window ending in the future reaches now and stays live until that end has passed, so time that has not happened is never counted or compared.

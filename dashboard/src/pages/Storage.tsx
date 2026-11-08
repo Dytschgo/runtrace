@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { Command, ErrorState, PageHeader, Panel, RankedBars, Skeleton, Stat, StatRow, Unknown } from '../components/ui';
+import { Command, ErrorState, NotLoaded, PageHeader, Panel, RankedBars, Skeleton, Stat, StatRow, Unknown } from '../components/ui';
 import { useLatestRecord, useOverview, useStorage } from '../lib/data';
 import { fmtBytes, fmtCompact, fmtDateTime, fmtInt, isKnown } from '../lib/format';
 import { useSettings } from '../lib/settings';
@@ -20,6 +20,9 @@ export default function Storage() {
     return [...list].sort((a, b) => b.rows - a.rows);
   }, [storage.data, counts.data]);
   const records = rows.reduce((s, r) => s + r.rows, 0);
+  // With both queries failed nothing is known about the records, which is not the same as having none.
+  const countsKnown = !!storage.data || !!counts.data;
+  const countsFailed = !countsKnown && storage.isError && counts.isError;
   const s = storage.data;
   const events = s?.events;
   const redacted = s?.redacted_content_characters;
@@ -31,12 +34,12 @@ export default function Storage() {
       {storage.isError && (
         <Panel>
           <ErrorState compact error={storage.error} onRetry={() => storage.refetch()} />
-          <p className="fine">Sizes are unavailable until this query succeeds. Record counts below come from a lighter query.</p>
+          <p className="fine">{countsFailed ? 'Sizes and record counts are unavailable until the service answers.' : 'Sizes are unavailable until this query succeeds. Record counts below come from a lighter query.'}</p>
         </Panel>
       )}
       {storage.isPending ? <Skeleton height="6rem" label="Loading storage" /> : (
         <StatRow label="Storage summary">
-          <Stat label="Current records" value={fmtInt(records)} sub={`${fmtInt(rows.length)} record kinds`} />
+          <Stat label="Current records" value={countsFailed ? <NotLoaded /> : countsKnown ? fmtInt(records) : '…'} sub={countsKnown ? `${fmtInt(rows.length)} record kinds` : undefined} />
           <Stat label="Event revisions" value={isKnown(events) ? fmtInt(events) : <Unknown label="Unknown" why={SIZE_WHY} />} sub={isKnown(events) && records ? `${(events / records).toFixed(2)} per record` : undefined} />
           <Stat label="Database size" value={isKnown(s?.duckdb_bytes) ? fmtBytes(s.duckdb_bytes) : <Unknown why={SIZE_WHY} />} sub={s?.capture_source ? `Source ${s.capture_source}` : undefined} />
           <Stat label="Redacted text" value={isKnown(redacted) ? `${fmtCompact(redacted)} chars` : <Unknown why={SIZE_WHY} />} sub={isKnown(normalized) ? `${fmtCompact(normalized)} chars of normalized JSON` : undefined} />
@@ -44,7 +47,9 @@ export default function Storage() {
       )}
       <div className="split">
         <Panel className="grow-2" title="Records by kind" sub="Current row per entity">
-          {rows.length ? <RankedBars label="Records by kind" total={records} items={rows.map((r) => ({ key: r.table, label: LABEL[r.table] ?? r.table, value: r.rows }))} /> : <Skeleton height="12rem" label="Loading records" />}
+          {rows.length ? <RankedBars label="Records by kind" total={records} items={rows.map((r) => ({ key: r.table, label: LABEL[r.table] ?? r.table, value: r.rows }))} />
+            : countsFailed ? <ErrorState compact error={counts.error} onRetry={() => { storage.refetch(); counts.refetch(); }} />
+              : countsKnown ? <p className="fine">No records yet.</p> : <Skeleton height="12rem" label="Loading records" />}
         </Panel>
         <Panel className="grow-1" title="Freshness and span">
           <dl className="facts">

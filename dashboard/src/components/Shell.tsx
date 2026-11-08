@@ -7,11 +7,11 @@ import {
   Network, RefreshCw, Search, Settings as SettingsIcon, ShieldCheck, Wrench, X, Folder } from 'lucide-react';
 import { useFilters, useHealth, useLatestRecord, useModels, useProjects, useQuota, useThreads, useUsage } from '../lib/data';
 import { QUOTA_HIGH } from '../lib/quota';
-import { PAGE_SCOPE, readDate, zoomOutPatch } from '../lib/filters';
+import { cleanSearch, PAGE_SCOPE, readDate, zoomOutPatch } from '../lib/filters';
 import { fmtDateTime, fmtRelative, localParts, repairText, zonedDayStart } from '../lib/format';
 import { nextDay } from '../lib/timeWindow';
 import { useSettings } from '../lib/settings';
-import { applyPatch, CHORDS, focusRequest, pushSearch, useUrl, type PageName } from '../lib/url';
+import { applyPatch, CHORDS, focusRequest, PAGES, pushSearch, useUrl, type PageName } from '../lib/url';
 import { Logo } from './Logo';
 import { TimeSlider } from './TimeSlider';
 import { AppLink, Segmented, SelectField } from './ui';
@@ -300,16 +300,23 @@ export function Shell({ children }: { children: ReactNode }) {
     return () => { removeEventListener('keydown', onKey); window.clearTimeout(timer); };
   }, [go, params, page]);
 
+  // A value the dashboard ignores is taken out of the address, so the address says what is shown.
+  useEffect(() => {
+    const clean = cleanSearch(location.search, [...PAGES, 'Search']);
+    if (clean !== null) pushSearch(clean ? `?${clean}` : '', true);
+  }, [params]);
+
   // A page change moves focus to the new heading, so keyboard and screen reader users land on the content.
+  // The request is made while rendering, before the new page's heading mounts, so a page that renders at once (the Overview, a thread opened from the list) claims it as surely as one that loads later.
+  const place = `${page}|${threadId}`;
+  if (prevPlace.current !== place) { prevPlace.current = place; focusRequest.pending = true; }
   useEffect(() => {
     document.title = `${page} · Runtrace`;
     if (firstRender.current) { firstRender.current = false; return; }
-    const place = `${page}|${threadId}`;
-    if (prevPlace.current !== place) {
-      prevPlace.current = place;
-      window.scrollTo({ top: 0 });
-      focusRequest.pending = true;
-    }
+    window.scrollTo({ top: 0 });
+    // A page with no heading must not leave the request for whatever mounts next.
+    const expire = window.setTimeout(() => { focusRequest.pending = false; }, 10_000);
+    return () => window.clearTimeout(expire);
   }, [page, threadId]);
 
   return (
@@ -327,12 +334,13 @@ export function Shell({ children }: { children: ReactNode }) {
           </div>
         )}
         <div className="page" key={page}>{children}</div>
-        <footer className="foot">
-          <span>Solid is measured. <span className="unknown unknown-inline">Hatched</span> is missing.</span>
-          <button type="button" className="link-btn" onClick={() => setHelp(true)}>Shortcuts <kbd>?</kbd></button>
-          <span>Local only</span>
-        </footer>
       </main>
+      {/* Outside main, so it is the page's footer landmark rather than part of the content. */}
+      <footer className="foot">
+        <span>Solid is measured. <span className="unknown unknown-inline">Hatched</span> is missing.</span>
+        <button type="button" className="link-btn" onClick={() => setHelp(true)}>Shortcuts <kbd>?</kbd></button>
+        <span>Local only</span>
+      </footer>
       <ShortcutsDialog open={help} onClose={() => setHelp(false)} />
     </div>
   );

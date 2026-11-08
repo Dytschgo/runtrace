@@ -1,16 +1,17 @@
 import { hasTurnUsage } from '../lib/entities';
 import { ModelName } from '../components/model';
 import { useMemo } from 'react';
-import { ChevronRight } from 'lucide-react';
+import { ChevronRight, Folder } from 'lucide-react';
 import { ActivityChart } from '../components/charts';
 import { DataTable, type Column } from '../components/DataTable';
 import { TokenFacts } from '../components/tokens';
-import { AppLink, Async, ChartPanel, NoRecords, PageHeader, Panel, plural, RankedBars, Skeleton, SkeletonRows, Stat, StatRow, Tag, Tokens, Unknown, NotYetPage } from '../components/ui';
+import { AppLink, Async, ChartPanel, EmptyState, NoRecords, PageHeader, Panel, plural, RankedBars, Skeleton, SkeletonRows, Stat, StatRow, Tag, Tokens, Unknown, NotYetPage } from '../components/ui';
 import { bucketActivity, tokensByKey, tokenSummary } from '../lib/analytics';
 import { useAgents, useFilters, useHourly, useModels, useModelTurns, useOverview, useOverviews, useProjects, useThreads, useUsage } from '../lib/data';
 import type { Filters } from '../lib/filters';
 import { inTimeRange, isFuture } from '../lib/filters';
 import { fmtCompact, fmtDateTime, fmtInt, fmtRelative, fmtShortDateTime, repairText } from '../lib/format';
+import { projectColor } from '../lib/series';
 import { useSettings } from '../lib/settings';
 import { useUrl } from '../lib/url';
 
@@ -67,7 +68,8 @@ export default function Projects() {
       key: 'name', header: 'Project', sort: (r) => r.name, className: 'cell-title',
       render: (r) => (
         <>
-          <AppLink className="row-link" href={hrefPage('Threads', { project: r.id })} title="Open this project's threads">{r.name}<ChevronRight size={14} aria-hidden="true" /></AppLink>
+          {/* The same colour the project has on the Overview chart, which comes from its id alone. */}
+          <AppLink className="row-link" href={hrefPage('Threads', { project: r.id })} title="Open this project's threads"><Folder className="project-swatch" size={14} aria-hidden="true" style={{ color: projectColor(r.id) }} />{r.name}<ChevronRight size={14} aria-hidden="true" /></AppLink>
           {r.alias && r.alias !== r.name && <span className="project-sub mono">{r.alias}</span>}
         </>
       ),
@@ -100,6 +102,14 @@ export default function Projects() {
     <>
       <PageHeader title="Projects" lead="Where the work went." />
       {focus && <ProjectDetail projectId={focus.source_id} name={repairText(String(focus.data?.name ?? focus.source_id))} base={base} />}
+      {f.project && projects.data && !focus && (
+        // A project id from an old link or a typo matches nothing, which is said instead of looking like an ordinary full list.
+        <Panel>
+          <EmptyState title="No such project" compact>
+            <p>No imported project has the id <code>{f.project}</code>. Every project is listed below. <AppLink className="link" href={hrefPatch({ project: null })}>Clear the project filter</AppLink></p>
+          </EmptyState>
+        </Panel>
+      )}
       <Panel title="All projects" sub="Identified by T3 project id. Names come from the source and are redacted." flush>
         <Async query={projects} skeleton={<div className="pad"><SkeletonRows label="Loading projects" /></div>} isEmpty={() => !list.length} empty={<NoRecords />}>
           {() => <DataTable rows={rows} columns={columns} rowKey={(r) => r.id} caption="Projects" defaultSort={hasTokens ? { key: 'tokens', dir: 'desc' } : { key: 'prompts', dir: 'desc' }} exportName="runtrace-projects" />}

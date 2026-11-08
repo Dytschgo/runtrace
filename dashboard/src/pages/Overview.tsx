@@ -1,49 +1,26 @@
-import { useDeferredValue, useEffect, useMemo, useState, type ComponentType, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
-import { ArrowDownRight, ArrowUpRight, Bot, Cpu, Folder, Download, GitCompareArrows, MessageSquare, Minus, MessageSquareReply, MessagesSquare, Play, Repeat2, Terminal, XCircle, ZoomOut } from 'lucide-react';
+import { useDeferredValue, useEffect, useMemo, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { ArrowUpRight, Download, GitCompareArrows, ZoomOut } from 'lucide-react';
 import { ActivityHeatmap } from '../components/heatmap';
 import { Counter } from '../components/motion';
-import { ToolName } from '../components/model';
 import { TraceChart } from '../components/TraceChart';
-import { AppLink, Async, ChartPanel, CoverageBar, EmptyState, ErrorState, NoRecords, PageHeader, Panel, plural, RankedBars, Segmented, SelectField, Skeleton, SkeletonRows, Sparkline, Tag, Tokens, Unknown } from '../components/ui';
-import { buildHeatmap, captureGaps, delta, summaryFromTurns, tokenSummary, toolStats, type TokenSummary } from '../lib/analytics';
+import { AppLink, Async, ChartPanel, EmptyState, ErrorState, NotLoaded, PageHeader, Panel, plural, Segmented, SelectField, Skeleton, SkeletonRows, Unknown } from '../components/ui';
+import { buildHeatmap, captureGaps, delta, summaryFromTurns, tokenSummary } from '../lib/analytics';
 import { toCsv } from '../lib/api';
 import { hasTurnUsage, turnMs } from '../lib/entities';
 import { useAgents, useCollectorReadiness, useFilters, useHourly, useHourlyMany, useLiveTurns, useModels, useModelSlots, useOverview, useOverviews, useProjects, useQuota, useThreads, useToolAggregates, useToolAggregatesMany, useToolScan } from '../lib/data';
 import { inTimeRange, previousWindow, windowTest, zoomInTrail, zoomOutPatch } from '../lib/filters';
-import { fmtCompact, fmtDuration, fmtInt, fmtPct, fmtRelative, isKnown, repairText } from '../lib/format';
-import { modelIcon, providerIcon } from '../lib/icons';
-import { modelProvider, OTHER_COLOR, seriesColor } from '../lib/modelColors';
-import { buildTrace, effectiveResolution, idleGroup, METRICS, RESOLUTION_MS, turnGroupKey, type GroupBy, type LineTotal, type Metric, type Resolution, type Trace } from '../lib/series';
+import { fmtInt, isKnown, repairText } from '../lib/format';
+import { modelProvider, OTHER_COLOR } from '../lib/modelColors';
+import { buildTrace, effectiveResolution, idleGroup, METRICS, RESOLUTION_MS, turnGroupKey, type GroupBy, type LineTotal, type Metric, type Resolution } from '../lib/series';
 import { useSettings } from '../lib/settings';
 import { useWindowDraft, withDraft, zoomRange } from '../lib/timeWindow';
-import { buildForest, forestInView, treeStats } from '../lib/tree';
-import { useUrl, type PageName } from '../lib/url';
+import { buildForest } from '../lib/tree';
+import { useUrl } from '../lib/url';
+import { ChangeArrow, GapCell, GroupLine, signedPct, TokenTypes } from './overview/parts';
+import { DelegationPanel, KeyTotals, RecentThreadsPanel, ToolsPanel, type ThreadActivity } from './overview/panels';
+import { GROUPS, isGroup, isMetric, isRes, periodBefore, RES_OPTIONS, RES_WORDS } from './overview/trace';
 
-interface Tile { label: string; kind: string; page: PageName; icon: ComponentType<{ size?: number; 'aria-hidden'?: boolean | 'true' }>; hint?: string }
-
-const GROUPS: { value: GroupBy; label: string }[] = [{ value: 'model', label: 'Models' }, { value: 'provider', label: 'Providers' }, { value: 'project', label: 'Projects' }];
-const RES_OPTIONS: { value: Resolution | 'auto'; label: string }[] = [{ value: 'auto', label: 'Auto' }, { value: '5m', label: '5m' }, { value: '15m', label: '15m' }, { value: '1h', label: '1h' }, { value: '6h', label: '6h' }, { value: '1d', label: '1d' }, { value: '1w', label: '1w' }];
-const RES_WORDS: Record<Resolution, string> = { '5m': '5 minutes', '15m': '15 minutes', '1h': 'hour', '6h': '6 hours', '1d': 'day', '1w': 'week' };
-const isGroup = (v: string | null): v is GroupBy => v === 'model' || v === 'provider' || v === 'project';
-const isMetric = (v: string | null): v is Metric => METRICS.some((m) => m.key === v);
-const isRes = (v: string | null): v is Resolution => v !== null && Object.hasOwn(RESOLUTION_MS, v);
-
-/** The period before, paired with this one by time. A value left out is null, and one that is only partly known is flagged. */
-function periodBefore(rows: Trace['rows'], before: Trace, offset: number, focus: string | null) {
-  const silent = new Set<number>();
-  const lower = new Set<number>();
-  const values = rows.map((row, here) => {
-    const at = row.t - offset;
-    const i = before.rows.findIndex((r) => at >= r.t && at < r.end);
-    if (i < 0) return null;
-    const r = before.rows[i];
-    if (focus ? before.silentGroups.get(i)?.has(focus) : before.unreported.has(i) && before.series.every((x) => !r[x.key])) { silent.add(here); return null; }
-    if (focus ? before.partials.get(i)?.has(focus) : before.partials.get(i)?.size || before.unreported.has(i)) lower.add(here);
-    return focus ? Number(r[focus] ?? 0) : before.series.reduce((s, x) => s + Number(r[x.key] ?? 0), 0);
-  });
-  return { values, silent, lower };
-}
-
+/** The landing page: tokens over time by model, provider or project, with the totals and panels that follow the same window. */
 export default function Overview() {
   const { hrefPage, params, set } = useUrl();
   const { timezone } = useSettings();
@@ -84,7 +61,6 @@ export default function Overview() {
   const view = params.get('view') === 'stacked' || params.get('view') === 'cumulative' ? (params.get('view') as 'stacked' | 'cumulative') : 'lines';
   const compare = params.get('compare') === '1';
   const metricInfo = METRICS.find((m) => m.key === metric)!;
-  const threadSort = params.get('threads') === 'tokens' ? 'tokens' : 'recent';
   // Rows are the filter. Any number can be chosen, and the whole page follows them.
   const picksParam = params.get('pick');
   const picks = useMemo(() => new Set((picksParam ?? '').split(',').filter(Boolean)), [picksParam]);
@@ -114,19 +90,6 @@ export default function Overview() {
   const captureStart = firstEver.data?.[0]?.hour;
   const comparable = !!prevWindow && !!prev && !!captureStart && Date.parse(captureStart) <= Date.parse(prevWindow.since);
 
-  const perPrompt = (kind: string) => (isKnown(c[kind]) && c.prompt ? `${(c[kind] / c.prompt).toFixed(1)} per prompt` : undefined);
-  const tiles: Tile[] = [
-    { label: 'Prompts', kind: 'prompt', page: 'Activity', icon: MessageSquare },
-    { label: 'Answers', kind: 'answer', page: 'Activity', icon: MessageSquareReply, hint: perPrompt('answer') },
-    { label: 'Runs', kind: 'run', page: 'Models', icon: Play },
-    { label: 'Provider turns', kind: 'model_turn', page: 'Models', icon: Repeat2 },
-    { label: f.since || f.until ? 'Threads started' : 'Threads', kind: 'thread', page: 'Threads', icon: MessagesSquare },
-    { label: 'Sub-agents', kind: 'agent', page: 'Agent Trees', icon: Bot, hint: isKnown(c.agent) && c.thread ? `${fmtPct(c.agent / c.thread)} of threads` : undefined },
-    { label: 'Tool calls', kind: 'tool', page: 'Tool Calls', icon: Terminal, hint: perPrompt('tool') },
-  ];
-  // An older service has no provider turns; a tile would read as zero work, so it is left out.
-  const visibleTiles = tiles.filter((t) => t.kind !== 'model_turn' || isKnown(c.model_turn) || turnRows.length > 0);
-
   const threadRows = threads.data?.rows;
   const agentRows = agents.data?.rows;
   const childCounts = useMemo(() => {
@@ -136,8 +99,6 @@ export default function Overview() {
   }, [agentRows]);
 
   const forest = useMemo(() => (threadRows && agentRows ? buildForest(threadRows, agentRows) : null), [threadRows, agentRows]);
-  const toolTop = useMemo(() => (picks.size ? pickedTools : toolAggregates.data ?? toolStats(tools.data?.rows ?? [])).slice(0, 6), [picks.size, pickedTools, toolAggregates.data, tools.data]);
-
   const modelRows = useMemo(() => (models.data ?? []).filter((m) => !f.model || m.model === f.model), [models.data, f.model]);
   const summary = useMemo(() => tokenSummary(modelRows), [modelRows]);
 
@@ -258,6 +219,8 @@ export default function Overview() {
   const turnsLoading = allTurns.isPending;
   const fromTurns = !!allTurns.data?.complete && scoped.length > 0;
   const empty = fromTurns ? head.records === 0 : allTurns.isSuccess && !summary.total && windowed;
+  // Neither the turns nor the model totals arrived, so the headline is not known, which is not the same as nothing reported.
+  const loadFailed = allTurns.isError && !models.data && (models.isError || !chartReady);
   const total = unknownWindow ? null : empty ? 0 : fromTurns || metric !== 'total' ? (turnsLoading ? null : head.total) : summary.total;
   // A percentage needs both sides to be nearly whole, or it mostly measures what went unreported.
   const wellReported = (t: { reported: number; turns: number }) => metric === 'turns' || t.turns === 0 || t.reported / t.turns >= 0.9;
@@ -331,7 +294,7 @@ export default function Overview() {
   const settled = useDeferredValue(live);
   // What each thread did inside the window. A thread started last week still counts if it ran today.
   const activity = useMemo(() => {
-    const m = new Map<string, { last: string; turns: number; tokens: number | null; missing: boolean }>();
+    const m = new Map<string, ThreadActivity>();
     const inLive = windowTest(settled);
     for (const t of picks.size ? chartTurns : scoped) {
       if (!inLive(turnMs(t))) continue;
@@ -347,46 +310,7 @@ export default function Overview() {
     () => (threadRows ?? []).filter((t) => activity.has(t.source_id) || (!picks.size && inTimeRange(t.occurred_at, settled) && (!f.model || t.model === f.model))),
     [threadRows, activity, settled, f.model, picks.size],
   );
-  const delegation = useMemo(() => {
-    if (!forest) return null;
-    // The same definition as the Agent Trees page: a tree in view that started at least one sub-agent inside the window.
-    const inView = forestInView(forest.roots, { since: settled.since, until: settled.until, model: f.model }).trees
-      .filter((r) => !picks.size || (!!r.thread && activity.has(r.thread.source_id)));
-    const scored = inView.map((r) => ({ root: r, s: treeStats(r, settled) })).filter((x) => x.s.delegated > 0);
-    const stats = scored.map((x) => x.s);
-    return {
-      // The busiest trees, so what the sub-agents did is one click away.
-      top: [...scored].sort((a, b) => b.s.delegated - a.s.delegated || b.s.busyMs - a.s.busyMs).slice(0, 3).map((x) => ({ key: x.root.key, title: x.root.title, delegated: x.s.delegated, busy: x.s.busyMs })),
-      trees: stats.length,
-      deepest: Math.max(0, ...stats.map((s) => s.maxDepth)),
-      fanout: Math.max(0, ...stats.map((s) => s.maxFanout)),
-      parallel: Math.max(0, ...stats.map((s) => s.peakParallel)),
-      busy: stats.reduce((sum, s) => sum + s.busyMs, 0),
-      returned: stats.reduce((sum, s) => sum + s.returned, 0),
-      known: stats.reduce((sum, s) => sum + s.returned + s.notReturned, 0),
-    };
-  }, [forest, f.model, settled, picks.size, activity]);
   const mainThreads = useMemo(() => inWindow.filter((t) => t.type !== 'child').length, [inWindow]);
-  const recent = useMemo(() => {
-    const lastSeen = (id: string, fallback: string) => activity.get(id)?.last ?? fallback;
-    if (threadSort === 'tokens') return [...inWindow].sort((a, b) => (activity.get(b.source_id)?.tokens ?? 0) - (activity.get(a.source_id)?.tokens ?? 0)).slice(0, 8);
-    return inWindow.filter((t) => t.type !== 'child').sort((a, b) => lastSeen(b.source_id, b.occurred_at).localeCompare(lastSeen(a.source_id, a.occurred_at))).slice(0, 6);
-  }, [inWindow, threadSort, activity]);
-
-  const sparks = useMemo(() => {
-    const wanted = new Set(recent.map((t) => t.source_id));
-    const byThread = new Map<string, { at: string; v: number }[]>();
-    for (const t of turnRows) {
-      // A sparkline only draws what was reported, so a thread with no totals has no line rather than a flat zero.
-      if (!wanted.has(t.thread_id) || t.total === null) continue;
-      const list = byThread.get(t.thread_id) ?? [];
-      list.push({ at: t.occurred_at, v: t.total });
-      byThread.set(t.thread_id, list);
-    }
-    const out = new Map<string, number[]>();
-    for (const [id, list] of byThread) out.set(id, list.sort((a, b) => a.at.localeCompare(b.at)).map((l) => l.v));
-    return out;
-  }, [recent, turnRows]);
 
   const heat = useMemo(() => buildHeatmap(picks.size ? pickedHourly : hourly.data ?? [], timezone), [picks.size, pickedHourly, hourly.data, timezone]);
   // The tokens by type follow the rows chosen too.
@@ -421,6 +345,7 @@ export default function Overview() {
                 {(models.isPending && !fromTurns) || (turnsLoading && metric !== 'total') ? <span className="skeleton hero-skeleton" role="status" aria-label="Loading tokens" />
                   : isKnown(total) ? <>{lowerBound && <span className="lower-bound"><span aria-hidden="true">≥</span><span className="sr-only">at least </span></span>}<Counter value={total} ms={draft ? 160 : 1100} /></>
                     : unknownWindow ? <Unknown label={unknownWindow.title} why={unknownWindow.text} />
+                    : loadFailed ? <NotLoaded />
                     : <Unknown label={metric === 'total' ? 'No complete total' : 'Not reported'} why="Nothing in this view reported this measure. Another measure may show what was reported." />}
               </strong>
               <span>
@@ -474,6 +399,7 @@ export default function Overview() {
             }
             chart={
               unknownWindow ? <div className="before-history"><b>{unknownWindow.title}</b><span>{unknownWindow.text}</span></div>
+                : loadFailed ? <ErrorState error={allTurns.error} onRetry={() => { allTurns.refetch(); models.refetch(); }} compact />
                 : !isKnown(total) && !empty && !turnsLoading && !models.isPending && metric === 'total' ? <p className="fine">No complete token totals here. Another measure may show what was reported.</p>
                 : <Async query={allTurns} skeleton={<Skeleton height="520px" label="Loading tokens" />} isEmpty={() => !trace.rows.length} compact>{() => (
                   <div className="trace-wrap">
@@ -500,28 +426,8 @@ export default function Overview() {
         </section>
       )}
 
-            {!overview.isError && (
-        <section className="stats" aria-label="Key totals" data-stale={draft || overview.isPlaceholderData ? 'true' : undefined}>
-          {visibleTiles.map((t) => {
-            // The service never counts session-log hours as provider turns.
-            const value = c[t.kind];
-            const before = prev?.[t.kind] ?? 0;
-            const d = comparable && prev && isKnown(value) ? delta(value, before) : null;
-            const Icon = t.icon;
-            return (
-              <article key={t.kind} className="tile" title={t.hint}>
-                <h2><AppLink className="tile-link" href={hrefPage(t.page)}><Icon size={14} aria-hidden="true" />{t.label}</AppLink></h2>
-                {overview.isPending ? <div className="skeleton tile-skeleton" role="status" aria-label={`Loading ${t.label}`} /> : <strong title={isKnown(value) ? fmtInt(value) : undefined}>{unscopable ? <Unknown label="Unknown" why="Records that name no model cannot be counted on their own." /> : unknownWindow && !value ? <Unknown label="Unknown" why={unknownWindow.text} /> : isKnown(value) ? <Counter value={value} /> : '0'}</strong>}
-                {d !== null && (
-                  <span className="delta" title="Compared with the same length of time just before">
-                    <ChangeArrow change={d} />
-                    {signedPct(d)} <span className="sr-only">compared with the previous period</span>
-                  </span>
-                )}
-              </article>
-            );
-          })}
-        </section>
+      {!overview.isError && (
+        <KeyTotals counts={c} previous={prev} comparable={comparable} overview={overview} windowed={!!(f.since || f.until)} turnsSeen={turnRows.length > 0} unscopable={unscopable} unknown={unknownWindow} stale={!!draft || overview.isPlaceholderData} />
       )}
 
       {unknownWindow ? (
@@ -544,93 +450,11 @@ export default function Overview() {
             </Panel>
           </div>
 
-          <Panel
-            title={threadSort === 'tokens' ? 'Biggest threads' : 'Recent threads'}
-            action={
-              <>
-                <Segmented label="Sort threads" value={threadSort} options={[{ value: 'recent', label: 'Recent' }, { value: 'tokens', label: 'Biggest' }]} onChange={(v) => set({ threads: v === 'recent' ? null : v })} />
-                <AppLink className="link" href={hrefPage('Threads')}>All threads</AppLink>
-              </>
-            }
-          >
-            <Async query={threads} skeleton={<SkeletonRows label="Loading threads" />} isEmpty={() => !recent.length} empty={<NoRecords compact />} compact>
-              {() => (
-                <ul className="trace-rows">
-                  {recent.map((t, i) => {
-                    const spark = sparks.get(t.source_id);
-                    const did = activity.get(t.source_id);
-                    const kids = childCounts.get(t.source_id) ?? 0;
-                    const Icon = modelIcon(t.model);
-                    const color = t.model ? seriesColor(slots.get(t.model)) : seriesColor(undefined);
-                    return (
-                      <li key={t.id} style={{ '--i': i, color } as React.CSSProperties}>
-                        <Icon size={15} aria-hidden="true" />
-                        <span className="trace-row-title">
-                          <AppLink className="list-title" href={hrefPage('Threads', { id: t.source_id })}>{t.title}</AppLink>
-                          <small>
-                            {projectName(t.project_id) ?? 'Project not imported'}
-                            {t.model && <span className="mono"> · {t.model}</span>}
-                            {kids > 0 && <> · <Tag>{plural(kids, 'sub-agent')}</Tag></>}
-                          </small>
-                        </span>
-                        <span className="trace-row-num" title="Provider turns in this window">{did ? fmtInt(did.turns) : <Unknown label="n/a" why="No provider turns were recorded for this thread in this window." />}</span>
-                        <span className="trace-row-num trace-row-tokens">{did?.missing && did.tokens !== null && <span title="Some turns reported no total">≥ </span>}<Tokens v={did?.tokens ?? null} why="No provider reported a token total for this thread in this window." /></span>
-                        <span className="trace-row-spark">{spark && <Sparkline values={spark} />}</span>
-                        <time className="trace-row-when" dateTime={did?.last ?? t.occurred_at}>{fmtRelative(did?.last ?? t.occurred_at)}</time>
-                      </li>
-                    );
-                  })}
-                </ul>
-              )}
-            </Async>
-          </Panel>
+          <RecentThreadsPanel threads={threads} inWindow={inWindow} activity={activity} turns={turnRows} agentsByThread={childCounts} slots={slots} projectName={projectName} />
 
           <div className="split split-even">
-            <Panel title="Most used tools" sub={toolAggregates.data ? 'All matching stored calls' : tools.data ? (tools.data.complete ? `All ${fmtInt(tools.data.scanned)} calls` : `Latest ${fmtInt(tools.data.scanned)} calls`) : 'Loading calls'} action={<AppLink className="link" href={hrefPage('Tool Calls')}>Tool Calls</AppLink>}>
-              <Async<unknown> query={toolAggregates.isError ? tools : toolAggregates} skeleton={<SkeletonRows label="Loading tools" />} isEmpty={() => !toolTop.length} compact>
-                {() => (
-                  <RankedBars
-                    label="Tool calls by tool"
-                    items={toolTop.map((t) => ({
-                      key: t.name, label: <ToolName name={t.name} />, value: t.calls,
-                      href: hrefPage('Tool Calls', { tool: t.name }),
-                      display: (
-                        <>
-                          {t.failed > 0 && <span className="ranked-failed" title={`${fmtInt(t.failed)} failed`}><XCircle size={12} aria-hidden="true" />{fmtPct(t.failed / t.calls, 1)}<span className="sr-only"> failed</span></span>}
-                          {fmtCompact(t.calls)}
-                        </>
-                      ),
-                    }))}
-                  />
-                )}
-              </Async>
-            </Panel>
-
-            <Panel title="Delegation" sub={threads.data?.complete === false || agents.data?.complete === false ? 'Latest records only, so these are lower bounds' : 'From recorded parent links only'} action={<AppLink className="link" href={hrefPage('Agent Trees')}>Agent Trees</AppLink>}>
-              {threads.error ?? agents.error ? <ErrorState error={threads.error ?? agents.error} onRetry={() => { threads.refetch(); agents.refetch(); }} compact />
-                : !delegation ? <SkeletonRows rows={5} label="Loading delegation" />
-                  : !delegation.trees ? <EmptyState title="No delegation recorded here" compact><p>No thread in this view has a recorded sub-agent.</p></EmptyState>
-                    : (
-                      <>
-                      <dl className="facts">
-                        <div><dt>Delegating threads</dt><dd>{fmtInt(delegation.trees)}</dd></div>
-                        <div><dt>Deepest level</dt><dd>{fmtInt(delegation.deepest)}</dd></div>
-                        <div><dt>Largest fan-out</dt><dd>{fmtInt(delegation.fanout)}</dd></div>
-                        <div><dt>Peak parallel</dt><dd>{fmtInt(delegation.parallel)}</dd></div>
-                        <div><dt>Sub-agent busy time</dt><dd>{fmtDuration(delegation.busy)}</dd></div>
-                        <div><dt>Results delivered</dt><dd>{delegation.known ? `${fmtInt(delegation.returned)} of ${fmtInt(delegation.known)} recorded` : <Unknown />}</dd></div>
-                      </dl>
-                      <ol className="busiest-trees" aria-label="Busiest delegating threads">
-                        {delegation.top.map((t) => (
-                          <li key={t.key}>
-                            <AppLink className="row-link" href={hrefPage('Agent Trees', { root: t.key, node: null })}><span>{t.title}</span></AppLink>
-                            <small>{plural(t.delegated, 'sub-agent')}{t.busy > 0 ? ` · ${fmtDuration(t.busy)} busy` : ''}</small>
-                          </li>
-                        ))}
-                      </ol>
-                      </>
-                    )}
-            </Panel>
+            <ToolsPanel aggregates={toolAggregates} sample={tools} picked={picks.size ? pickedTools : null} />
+            <DelegationPanel threads={threads} agents={agents} forest={forest} window={settled} model={f.model} picking={picks.size > 0} activity={activity} />
           </div>
         </>
       )}
@@ -646,87 +470,4 @@ export default function Overview() {
       </section>
     </>
   );
-}
-
-const isFlat = (change: number) => Math.abs(change) < 0.005;
-const signedPct = (change: number) => (isFlat(change) ? '0%' : `${change > 0 ? '+' : ''}${fmtPct(change)}`);
-function ChangeArrow({ change }: { change: number }) {
-  if (isFlat(change)) return <Minus size={13} aria-hidden="true" />;
-  return change > 0 ? <ArrowUpRight size={13} aria-hidden="true" /> : <ArrowDownRight size={13} aria-hidden="true" />;
-}
-
-/** One row of the list: a logo in its colour, its share of the window, and a line drawn to scale. */
-function GroupLine({ line, total, top, by, unit, draft, focused, seriesKey, onFocus, selected, onToggle, why, tabIndex, onRove, offChart, unknown }: {
-  line: LineTotal; total: number | null; top: number; by: GroupBy; unit: string; draft: boolean; focused: boolean; seriesKey: string; onFocus: (key: string | null) => void; selected: boolean; onToggle: (key: string) => void; why: string;
-  tabIndex: number; onRove: () => void; offChart: boolean; unknown?: { title: string; text: string } | null;
-}) {
-  const { info, value, turns, reported } = line;
-  const atLeast = unit !== 'provider turns' && reported < turns && value > 0;
-  // Only nothing measured at all is unknown. Tokens from session logs still count when its turns reported none.
-  const silent = turns > 0 && reported === 0 && value === 0;
-  // Tokens with no turns behind them come from session-log hours, which are never turns. The row says so instead of reading as tokens from nothing.
-  // When grouped by provider a row can hold turns that reported nothing next to session-log hours, so "nothing reported" is the test, not "no turns".
-  const logOnly = reported === 0 && value > 0;
-  const Icon = by === 'project' ? Folder : info.model ? modelIcon(info.model) : info.provider ? providerIcon(info.provider) : Cpu;
-  const share = isKnown(total) && total > 0 ? value / total : 0;
-  const body: ReactNode = (
-    <>
-      <Icon size={15} aria-hidden="true" style={{ color: info.color }} />
-      <span className={by === 'model' ? 'model-line-name mono' : 'model-line-name'}>{info.label}</span>
-      {unknown ? <b><Unknown label={unknown.title} why={unknown.text} /></b> : silent ? <b><Unknown label={line.partial ? 'Parts only' : 'Not reported'} why={why} /></b> : <b title={`${atLeast ? 'At least ' : ''}${fmtInt(value)} ${unit}`}>{atLeast && <span className="lower-bound"><span aria-hidden="true">≥</span><span className="sr-only">at least </span></span>}<Counter value={value} ms={draft ? 160 : 900} /></b>}
-      <small title={logOnly ? "These tokens come from the agents' session logs, kept per hour. Session-log hours are never counted as turns." : undefined}>{unknown ? 'Unknown' : silent ? 'Share unknown' : turns === 0 && value === 0 ? 'No turns here' : fmtPct(share, 1)}{unknown || (turns === 0 && value === 0) ? '' : unit !== 'provider turns' ? ` · ${logOnly ? (turns ? `session logs only · ${plural(turns, 'turn')} reported nothing` : 'session logs only') : reported < turns ? `${fmtInt(reported)} of ${plural(turns, 'turn')}` : plural(turns, 'turn')}` : ''}</small>
-      <span className="model-line-share" aria-hidden="true"><i style={{ '--share': value / top, background: info.dashArray ? `repeating-linear-gradient(90deg, ${info.color} 0 6px, transparent 6px 10px)` : info.color } as React.CSSProperties} /></span>
-    </>
-  );
-  return (
-    <li data-on={focused ? 'true' : undefined} data-selected={selected ? 'true' : undefined} data-idle={turns === 0 && value === 0 ? 'true' : undefined} data-unnamed={line.key === 'not-recorded' ? 'true' : undefined} onPointerEnter={() => onFocus(seriesKey || null)} onPointerLeave={() => onFocus(null)} onFocus={() => { onRove(); onFocus(seriesKey || null); }} onBlur={() => onFocus(null)}>
-      <button type="button" className="model-line" tabIndex={tabIndex} aria-pressed={selected} title={`${selected ? 'Take this out of the selection' : 'Add this to the selection'}${offChart ? '. Not drawn on the chart unless chosen.' : ''}`} onClick={() => onToggle(line.key)}>{body}</button>
-    </li>
-  );
-}
-
-const TYPE_TONES = ['oklch(0.55 0 none)', 'oklch(0.3 0 none)', 'oklch(0.75 0 none)', 'oklch(1 0 none)'];
-
-/** Where the tokens went. Cache reads and writes sit inside input, so the bar shows input without them. A missing field stays hatched. */
-function TokenTypes({ s, partsOnly = 0 }: { s: TokenSummary; partsOnly?: number }) {
-  // Turns that reported nothing are not in these sums, so each is at least this much.
-  const shortOf = (field: keyof NonNullable<TokenSummary['short']>) => (s.short ? !!s.short[field] : s.turns !== null && s.withUsage !== null && s.withUsage < s.turns);
-  const atLeast = (field: keyof NonNullable<TokenSummary['short']>) => (shortOf(field) ? <span className="lower-bound" title="Some turns reported no value here"><span aria-hidden="true">≥</span><span className="sr-only">at least </span></span> : null);
-  const known = [s.input, s.cached, s.output].every(isKnown);
-  if (!known && s.total === null) return <Unknown why="No token fields are recorded in this view." />;
-  const cached = s.cached ?? 0;
-  const writes = s.cacheWrite ?? 0;
-  const parts = [
-    { field: 'input' as const, label: 'Input', value: s.input === null ? null : Math.max(0, s.input - cached - writes), why: 'Input not read from cache.' },
-    { field: 'cached' as const, label: 'Cache read', value: s.cached, why: 'Input served from cache.' },
-    { field: 'cacheWrite' as const, label: 'Cache write', value: s.cacheWrite ?? null, why: 'Input written to cache. Some providers report no writes.' },
-    { field: 'output' as const, label: 'Output', value: s.output, why: 'Text and reasoning the model produced.' },
-  ];
-  const sum = parts.reduce((t, p) => t + (p.value ?? 0), 0);
-  return (
-    <>
-      <div className="type-bar" role="img" aria-label={parts.map((p) => `${p.label} ${p.value === null ? 'not reported' : fmtInt(p.value)}`).join(', ')}>
-        {parts.map((p, i) => <i key={p.label} style={{ flexGrow: sum ? (p.value ?? 0) / sum : 0, background: p.value === null ? undefined : TYPE_TONES[i] }} data-missing={p.value === null ? 'true' : undefined} />)}
-      </div>
-      <ul className="type-legend">
-        {parts.map((p, i) => (
-          <li key={p.label} title={p.why}>
-            <i style={{ background: TYPE_TONES[i] }} aria-hidden="true" />
-            {p.label} <b>{p.value === null ? <Unknown label="Not reported" /> : <>{atLeast(p.field)}<Tokens v={p.value} /></>}</b>
-          </li>
-        ))}
-        {isKnown(s.reasoning) && <li title="Reasoning is included in output.">Reasoning <b>{atLeast('reasoning')}<Tokens v={s.reasoning} /></b></li>}
-      </ul>
-      {s.turns !== null && s.withUsage !== null && (
-        <div className="type-coverage">
-          <CoverageBar known={s.withUsage} total={s.turns} label="Provider turns reporting usage" />
-          <small>{fmtInt(s.withUsage)} of {fmtInt(s.turns)} turns reported usage{partsOnly > 0 && <span title="These turns reported token fields but no total, so they are left out of the parts above, which add up to the total."> · {plural(partsOnly, 'turn')} with parts but no total left out</span>}</small>
-        </div>
-      )}
-    </>
-  );
-}
-
-function GapCell({ label, why }: { label: string; why: string }) {
-  return <span className="unknown gap-cell" title={why}>{label}<span className="sr-only">. {why}</span></span>;
 }

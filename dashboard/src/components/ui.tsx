@@ -47,6 +47,11 @@ export function Unknown({ label = 'Not captured', why }: { label?: string; why?:
   );
 }
 
+/** A number whose request failed. It is not known, which is never the same as zero. */
+export function NotLoaded() {
+  return <Unknown label="Not loaded" why="The request for this failed, so it is not known. Use Retry." />;
+}
+
 /** A token count: compact to read, exact on hover. A null is shown as a gap, never zero. */
 export function Tokens({ v, why = 'This token field was not recorded.' }: { v: number | null | undefined; why?: string }) {
   return isKnown(v) ? <span title={`${fmtInt(v)} tokens`}>{fmtCompact(v)}</span> : <Unknown why={why} />;
@@ -290,11 +295,12 @@ export function ChartPanel({ title, sub, chart, table, className, action }: {
 export function PageHeader({ title, lead, action, quiet }: { title: string; lead?: ReactNode; action?: ReactNode; quiet?: boolean }) {
   const heading = useRef<HTMLHeadingElement>(null);
   // Pages load lazily, so a heading claims the focus that navigation asked for once it exists.
+  // The title is a dependency because a thread's page keeps its header and only changes the title.
   useEffect(() => {
     if (!focusRequest.pending) return;
     focusRequest.pending = false;
     heading.current?.focus({ preventScroll: true });
-  }, []);
+  }, [title]);
   return (
     <div className={quiet ? 'page-head page-head-quiet' : 'page-head'}>
       <div>
