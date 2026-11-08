@@ -525,6 +525,8 @@ async fn serve(c: Config, s: Store, config_path: std::path::PathBuf) -> Result<(
             loop {
                 let cfg2 = cfg.clone();
                 let result = tokio::task::spawn_blocking(move || update::check(&cfg2)).await;
+                // A failed check (offline, or GitHub unreachable) is tried again within the hour, not the next day.
+                let ok = matches!(result, Ok(Ok(_)));
                 {
                     let mut s = status.lock().unwrap();
                     match result {
@@ -536,7 +538,8 @@ async fn serve(c: Config, s: Store, config_path: std::path::PathBuf) -> Result<(
                         }
                     }
                 }
-                tokio::time::sleep(std::time::Duration::from_secs(24 * 3600)).await;
+                let wait = if ok { 24 * 3600 } else { 3600 };
+                tokio::time::sleep(std::time::Duration::from_secs(wait)).await;
             }
         });
     }
