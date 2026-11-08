@@ -278,9 +278,20 @@ export function usageByProvider(turns: TurnRow[]): ProviderUsage[] {
   return [...m.values()].sort((a, b) => b.turns - a.turns);
 }
 
-export function coverageRows(threads: ThreadRow[], agents: AgentRow[], tools: ToolRow[], turns: TurnRow[] = []): Coverage[] {
-  const count = <T,>(rows: T[], f: (r: T) => boolean) => rows.filter(f).length;
+/** How many tool calls hold each field. The service counts every call; toolCoverage counts loaded rows the same way. */
+export interface ToolCoverage { calls: number; duration: number; status: number; category: number; shell: number; exit: number }
+
+export function toolCoverage(tools: ToolRow[]): ToolCoverage {
   const shell = tools.filter((t) => t.category === 'shell');
+  return {
+    calls: tools.length, duration: tools.filter((t) => t.duration !== null).length, status: tools.filter((t) => t.status !== null).length,
+    category: tools.filter((t) => t.category !== 'unknown').length, shell: shell.length, exit: shell.filter((t) => t.exit !== null).length,
+  };
+}
+
+export function coverageRows(threads: ThreadRow[], agents: AgentRow[], tools: ToolRow[] | ToolCoverage, turns: TurnRow[] = []): Coverage[] {
+  const count = <T,>(rows: T[], f: (r: T) => boolean) => rows.filter(f).length;
+  const tc = Array.isArray(tools) ? toolCoverage(tools) : tools;
   turns = turns.filter((t) => !t.log);
   return [
     { id: 'thread-lineage', entity: 'Threads', field: 'Lineage resolved', known: count(threads, (t) => t.resolved === true), total: threads.length, note: 'Parent links followed to a root without a break or cycle.' },
@@ -293,10 +304,10 @@ export function coverageRows(threads: ThreadRow[], agents: AgentRow[], tools: To
     { id: 'agent-child', entity: 'Agents', field: 'Child thread link', known: count(agents, (a) => a.child !== null), total: agents.length, note: 'The explicit child_thread_id that Agent Trees draws as an edge.' },
     { id: 'agent-end', entity: 'Agents', field: 'Completion time', known: count(agents, (a) => a.completed !== null), total: agents.length, note: 'Needed for a sub-agent duration.' },
     { id: 'agent-return', entity: 'Agents', field: 'Result delivery state', known: count(agents, (a) => a.returned !== null), total: agents.length, note: 'Only explicit delivery records count. Missing means not recorded, not failed.' },
-    { id: 'tool-duration', entity: 'Tool calls', field: 'Duration', known: count(tools, (t) => t.duration !== null), total: tools.length, note: 'Derived from started and completed times.' },
-    { id: 'tool-status', entity: 'Tool calls', field: 'Status', known: count(tools, (t) => t.status !== null), total: tools.length, note: 'Source projection status.' },
-    { id: 'tool-category', entity: 'Tool calls', field: 'Category', known: count(tools, (t) => t.category !== 'unknown'), total: tools.length, note: 'Only built-in item types are classified. MCP and provider tools stay uncategorised.' },
-    { id: 'tool-exit', entity: 'Shell calls', field: 'Exit code', known: count(shell, (t) => t.exit !== null), total: shell.length, note: 'Applies to shell commands only.' },
+    { id: 'tool-duration', entity: 'Tool calls', field: 'Duration', known: tc.duration, total: tc.calls, note: 'Derived from started and completed times.' },
+    { id: 'tool-status', entity: 'Tool calls', field: 'Status', known: tc.status, total: tc.calls, note: 'Source projection status.' },
+    { id: 'tool-category', entity: 'Tool calls', field: 'Category', known: tc.category, total: tc.calls, note: 'Only built-in item types are classified. MCP and provider tools stay uncategorised.' },
+    { id: 'tool-exit', entity: 'Shell calls', field: 'Exit code', known: tc.exit, total: tc.shell, note: 'Applies to shell commands only.' },
   ];
 }
 

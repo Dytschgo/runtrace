@@ -41,6 +41,9 @@ export interface ModelRow {
   capture_quality?: string;
   /** Present from the provider-turn backend onward. Null means the provider did not report it. */
   observed_provider_turns?: number | null;
+  /** Threads and sub-agents that name this model, counted by the service in the same pass. */
+  observed_threads?: number;
+  observed_agents?: number;
   cached_input_tokens?: number | null;
   cache_write_tokens?: number | null;
   cache_write_observed_turns?: number | null;

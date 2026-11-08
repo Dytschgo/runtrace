@@ -19,6 +19,8 @@ struct Cli {
 enum Command {
     Init,
     Doctor,
+    /// Bring the database up to date, with progress, before the service starts. start.ps1 runs this first.
+    Migrate,
     /// One-time import of T3's previous database, for the history from before it moved.
     /// One-time import of token usage that exists only in the agents' session logs, from before T3's current database.
     ImportSessionLogs {
@@ -97,6 +99,7 @@ enum Command {
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
+        .with_ansi(std::io::IsTerminal::is_terminal(&std::io::stderr()))
         .with_writer(std::io::stderr)
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
@@ -137,8 +140,13 @@ async fn main() -> Result<()> {
     if matches!(cli.command, Command::Mcp { .. }) {
         return tokio::task::spawn_blocking(move || mcp::serve_remote(&c)).await?;
     }
+    let opened = std::time::Instant::now();
     let s = Store::open(&c)?;
     match cli.command {
+        Command::Migrate => println!(
+            "Database is up to date ({:.1} s)",
+            opened.elapsed().as_secs_f64()
+        ),
         Command::Init => {
             std::fs::create_dir_all(&c.storage.archive_path)?;
             if c.capture.default_policy == "full_encrypted" {

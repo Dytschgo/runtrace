@@ -38,7 +38,7 @@ The source checkout data directory is a Windows junction to the installed D: dat
 
 The explicit maintenance configuration at D:/Code/Runtrace/config/maintenance.toml uses a 4,096 MB DuckDB budget for full snapshot verification; the normal service retains 512 MB. Run expensive maintenance offline. Live queries use the normal configuration again after start.ps1.
 
-For migration 004, stop and back up the database, run `t3ui init` offline, then start the service. Full-history search-cache hydration can take minutes and is resumable; it must finish before the launcher's 20-second readiness window. Older snapshot restores rebuild missing search cache versions. Retention clears the cache and captured content together.
+start.ps1 first runs `t3ui migrate` in the foreground with no time limit, prints its progress and saves it to logs/migrate-*.log. One-time updates such as filling new analytic columns (migration 006 takes about 20 s on the full history) or the search cache therefore never count against the 20-second readiness wait. If the update fails the service is not started. Back up the database before deploying a release with a new migration. Older snapshot restores rebuild missing search cache versions. Retention clears the cache and captured content together.
 
 Full snapshots stream native row order with insertion-order preservation and verify every column in bounded ranges before publication. Unexpected ordering/schema/value differences fail closed. Replay of the current purge ledger precedes cache hydration. The completed-dataset snapshot and restore are qualified using the existing offline 4 GB maintenance budget; normal serving stays at 512 MB. See hill-climb-20261106.md for measured durations.
 

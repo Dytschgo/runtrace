@@ -1099,7 +1099,10 @@ fn search_cache_resumes_and_retention_removes_every_content_copy() {
 fn bulk_tools_bound_topn_memory_and_recover_after_failed_query() {
     let (_tmp, c) = fixture();
     let s = Store::open(&c).unwrap();
-    s.conn.execute_batch("SET memory_limit='2GB'; INSERT INTO records(id,kind,instance_id,source_id,project_id,thread_id,run_id,occurred_at,source_updated_at,capture_quality,capture_source,source_version,captured_at,payload_hash,data) SELECT md5(i::VARCHAR),'tool','local',i::VARCHAR,'p','t','r','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z','partial','synthetic','v','2026-01-01T00:00:00Z',md5(i::VARCHAR),json_object('content_redacted',repeat(md5(i::VARCHAR),256),'content_ciphertext','excluded') FROM range(3000) t(i); CHECKPOINT; SET memory_limit='128MB'").unwrap();
+    s.conn.execute_batch("SET memory_limit='2GB'; INSERT INTO records(id,kind,instance_id,source_id,project_id,thread_id,run_id,occurred_at,source_updated_at,capture_quality,capture_source,source_version,captured_at,payload_hash,data) SELECT md5(i::VARCHAR),'tool','local',i::VARCHAR,'p','t','r','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z','partial','synthetic','v','2026-01-01T00:00:00Z',md5(i::VARCHAR),json_object('content_redacted',repeat(md5(i::VARCHAR),256),'content_ciphertext','excluded') FROM range(3000) t(i); CHECKPOINT").unwrap();
+    // Rows written by SQL skip put(), so they get their analytic columns and list view the way opening the database gives them.
+    t3ui_core::storage::hydrate_facts(&s.conn).unwrap();
+    s.conn.execute_batch("CHECKPOINT; SET memory_limit='128MB'").unwrap();
     let f = Filter {
         limit: Some(500),
         offset: Some(1500),
@@ -1575,9 +1578,67 @@ fn older_rows_get_the_new_analytic_columns() {
     s.conn.execute_batch("UPDATE records SET cache_write_tokens=NULL,exit_code=NULL,agent_provider=NULL,has_subagents=NULL,elapsed_ms=NULL,facts_version=1").unwrap();
     t3ui_core::storage::hydrate_more_facts(&s.conn).unwrap();
     let row: (i64, String, i64, bool, i32) = s.conn.query_row("SELECT cache_write_tokens,agent_provider,elapsed_ms,has_subagents,facts_version FROM records WHERE kind='model_turn'", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))).unwrap();
-    assert_eq!(row, (7, "codex".into(), 3000, false, 2));
+    assert_eq!(row, (7, "codex".into(), 3000, false, 3));
     let exit: i64 = s.conn.query_row("SELECT exit_code FROM records WHERE kind='tool'", [], |r| r.get(0)).unwrap();
     assert_eq!(exit, 2);
     let summary = analytics::query(&s, "usage/tool-summary", &Filter::default()).unwrap();
     assert_eq!(summary["data"][0]["nonZero"], 1);
+}
+
+// List pages read a stored list view. What a write stores and what the backfill computes must be the same document.
+#[test]
+fn stored_list_view_matches_the_backfill() {
+    let (_tmp, c) = fixture();
+    let s = Store::open(&c).unwrap();
+    let long = format!("{{\"arguments\":\"{}\"}}", "é🙂x".repeat(400));
+    s.put("local","tool","long","p","t","r","2026-01-01T00:00:02Z","2026-01-01T00:00:02Z","partial","synthetic",json!({"tool_name":"shell","tool_category":"shell","exit_code":1,"character_count":1200,"redaction_count":2,"redaction_categories":["path"],"parent_tool_call_id":"pt","content_redacted":long,"content_ciphertext":"secret","repository_path_encrypted":"secret"})).unwrap();
+    s.put("local","tool","short","p","t","r","2026-01-01T00:00:01Z","2026-01-01T00:00:01Z","partial","synthetic",json!({"tool_name":"read","content_redacted":"{\"arguments\":\"a.txt\"}"})).unwrap();
+    s.put("local","tool","none","p","t","r","2026-01-01T00:00:00Z","2026-01-01T00:00:00Z","partial","synthetic",json!({"tool_name":"read"})).unwrap();
+    let read = || analytics::query(&s, "tool-calls", &Filter::default()).unwrap()["data"].as_array().unwrap().clone();
+    let written = read();
+    assert_eq!(written.len(), 3);
+    let first = &written[0]["data"];
+    assert_eq!(first["content_redacted"].as_str().unwrap().chars().count(), 512);
+    assert_eq!(first["content_truncated"], true);
+    assert!(first.get("content_ciphertext").is_none() && first.get("repository_path_encrypted").is_none());
+    assert_eq!(first["redaction_categories"], json!(["path"]));
+    assert_eq!(first["parent_tool_call_id"], "pt");
+    assert_eq!(written[1]["data"]["content_truncated"], false);
+    assert!(written[2]["data"].get("content_redacted").is_none());
+    s.conn.execute_batch("UPDATE records SET preview_doc=NULL,facts_version=2").unwrap();
+    t3ui_core::storage::hydrate_more_facts(&s.conn).unwrap();
+    assert_eq!(read(), written, "the backfill computes the same list view as a write");
+    let full = analytics::query(&s, "tool-calls", &Filter { include_content: Some(true), ..Default::default() }).unwrap();
+    assert_eq!(full["data"][0]["data"]["content_redacted"], long, "full content still comes from the document");
+}
+
+// The Models page reads threads and sub-agents per model from the model list, in one query instead of one per model.
+#[test]
+fn models_count_their_threads_and_agents() {
+    let (_tmp, c) = fixture();
+    let s = Store::open(&c).unwrap();
+    let put = |kind: &str, id: &str, model: &str| s.put("local", kind, id, "p", "t", "r", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z", "partial", "synthetic", json!({"model": model})).unwrap();
+    put("run", "r1", "m");
+    put("thread", "t1", "m");
+    put("thread", "t2", "m");
+    put("agent", "a1", "m");
+    put("thread", "t3", "only-a-thread");
+    let rows = analytics::query(&s, "models", &Filter::default()).unwrap()["data"].as_array().unwrap().clone();
+    assert_eq!(rows.len(), 1, "a model that never ran is not listed");
+    assert_eq!((rows[0]["model"].as_str(), rows[0]["observed_threads"].as_i64(), rows[0]["observed_agents"].as_i64(), rows[0]["observed_runs"].as_i64()), (Some("m"), Some(2), Some(1), Some(1)));
+}
+
+// Data Quality counts field coverage over every tool call and redactions over tools and sub-agents, never a sample.
+#[test]
+fn field_report_counts_every_tool_call() {
+    let (_tmp, c) = fixture();
+    let s = Store::open(&c).unwrap();
+    let put = |kind: &str, id: &str, data: serde_json::Value| s.put("local", kind, id, "p", "t", "r", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z", "partial", "synthetic", data).unwrap();
+    put("tool", "a", json!({"tool_category":"shell","status":"completed","exit_code":0,"duration_ms":5,"redaction_categories":["path","path","bearer"]}));
+    put("tool", "b", json!({"tool_category":"shell","status":"","redaction_categories":["path"]}));
+    put("tool", "c", json!({"tool_category":"unknown"}));
+    put("agent", "d", json!({"redaction_categories":["email"]}));
+    let r = analytics::query(&s, "data-quality/fields", &Filter::default()).unwrap();
+    assert_eq!(r["tools"], json!({"calls":3,"duration":1,"status":1,"category":2,"shell":2,"exit":1}));
+    assert_eq!(r["redactions"], json!([{"category":"path","records":2},{"category":"bearer","records":1},{"category":"email","records":1}]));
 }

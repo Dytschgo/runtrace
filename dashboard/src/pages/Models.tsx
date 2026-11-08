@@ -5,7 +5,7 @@ import { DataTable, type Column } from '../components/DataTable';
 import { CHART_MODELS, TokenFacts, useTokenStack } from '../components/tokens';
 import { AppLink, Async, ChartPanel, CoverageBar, NoRecords, PageHeader, Panel, Segmented, Skeleton, SkeletonRows, Stat, StatRow, Tag, Tokens, Unknown, Val, NotYetPage } from '../components/ui';
 import { percentile, stackByDay, tokenSummary } from '../lib/analytics';
-import { useAgents, useFilters, useModels, useModelSlots, useModelTurns, useOverviews, useThreads } from '../lib/data';
+import { useAgents, useFilters, useModels, useModelSlots, useModelTurns, useThreads } from '../lib/data';
 import { inTimeRange, isFuture } from '../lib/filters';
 import { fmtCompact, fmtDuration, fmtInt, fmtPct, isKnown } from '../lib/format';
 import { useSettings } from '../lib/settings';
@@ -27,9 +27,6 @@ export default function Models() {
   const threads = useThreads(f);
   const agents = useAgents(f);
   const turns = useModelTurns({ ...f, model: undefined });
-  // Every model is counted, so no cell is left unloaded. Each count is one small query.
-  const list = models.data ?? [];
-  const perModel = useOverviews(list.flatMap((m) => (m.model ? [{ ...f, model: m.model }] : [])));
 
   const rows: Row[] = useMemo(() => {
     const durations = new Map<string, number[]>();
@@ -39,18 +36,16 @@ export default function Models() {
     const all = models.data ?? [];
     const tokenTotal = all.reduce((s, m) => s + (m.total_tokens ?? 0), 0);
     const runTotal = all.reduce((s, m) => s + m.observed_runs, 0);
-    const named = list.filter((m) => m.model);
     return all.map((m) => {
-      const i = named.indexOf(m);
-      const c = i >= 0 ? perModel[i]?.data : undefined;
+      // Counted by the service with the model list. Rows with no model name have no per-model count.
       return {
         ...m, name: m.model ?? 'Model not recorded',
-        threads: c ? c.thread ?? 0 : null, agents: c ? c.agent ?? 0 : null,
+        threads: m.model ? m.observed_threads ?? null : null, agents: m.model ? m.observed_agents ?? null : null,
         median: m.model ? percentile(durations.get(m.model) ?? [], 0.5) : null,
         share: all.some((row) => isKnown(row.total_tokens)) ? (tokenTotal ? (m.total_tokens ?? 0) / tokenTotal : 0) : runTotal ? m.observed_runs / runTotal : 0,
       };
     });
-  }, [models.data, list, perModel, agents.data, f]);
+  }, [models.data, agents.data, f]);
 
   const summary = useMemo(() => tokenSummary((models.data ?? []).filter((m) => !f.model || m.model === f.model)), [models.data, f.model]);
   const hasTokens = [summary.total,summary.input,summary.output,summary.cached,summary.cacheWrite,summary.reasoning].some(isKnown);

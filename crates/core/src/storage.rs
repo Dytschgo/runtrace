@@ -57,6 +57,7 @@ impl Store {
         // Added before the first analytic pass, which fills these too.
         conn.execute_batch(include_str!("../../../migrations/003_analytic_columns.sql"))?;
         conn.execute_batch(include_str!("../../../migrations/006_more_facts.sql"))?;
+        conn.execute_batch(include_str!("../../../migrations/007_preview_doc.sql"))?;
         let analytic_version: i64 = conn.query_row(
             "SELECT count(*) FROM schema_migrations WHERE version=3",
             [],
@@ -187,7 +188,7 @@ impl Store {
             return Ok(false);
         }
         let captured = now();
-        self.conn.prepare_cached("INSERT INTO records (id,kind,instance_id,source_id,project_id,thread_id,run_id,occurred_at,source_updated_at,capture_quality,capture_source,source_version,captured_at,payload_hash,data,model,status,tool_name,tool_category,duration_ms,input_tokens,cached_input_tokens,output_tokens,reasoning_tokens,total_tokens,usage_status,redacted_characters,json_characters,facts_version,search_text,search_version,cache_write_tokens,exit_code,agent_provider,resolved_model,usage_scope,usage_source,has_subagents,elapsed_ms) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,lower(json_extract_string(?,'$.content_redacted')),?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data,payload_hash=excluded.payload_hash,source_updated_at=excluded.source_updated_at,captured_at=excluded.captured_at,capture_quality=excluded.capture_quality,source_version=excluded.source_version,project_id=excluded.project_id,thread_id=excluded.thread_id,run_id=excluded.run_id,occurred_at=excluded.occurred_at,model=excluded.model,status=excluded.status,tool_name=excluded.tool_name,tool_category=excluded.tool_category,duration_ms=excluded.duration_ms,input_tokens=excluded.input_tokens,cached_input_tokens=excluded.cached_input_tokens,output_tokens=excluded.output_tokens,reasoning_tokens=excluded.reasoning_tokens,total_tokens=excluded.total_tokens,usage_status=excluded.usage_status,redacted_characters=excluded.redacted_characters,json_characters=excluded.json_characters,facts_version=excluded.facts_version,search_text=excluded.search_text,search_version=excluded.search_version,cache_write_tokens=excluded.cache_write_tokens,exit_code=excluded.exit_code,agent_provider=excluded.agent_provider,resolved_model=excluded.resolved_model,usage_scope=excluded.usage_scope,usage_source=excluded.usage_source,has_subagents=excluded.has_subagents,elapsed_ms=excluded.elapsed_ms")?.execute(params![key,kind,instance,source,project,thread,run,date,updated,quality,self.capture_source.get(),version,captured,digest,payload,data.get("model").and_then(Value::as_str).or_else(||data.get("requested_model").and_then(Value::as_str)),data.get("status").and_then(Value::as_str),data.get("tool_name").and_then(Value::as_str),data.get("tool_category").and_then(Value::as_str),data.get("duration_ms").and_then(Value::as_i64),data.get("input_tokens").and_then(Value::as_i64),data.get("cached_input_tokens").and_then(Value::as_i64),data.get("output_tokens").and_then(Value::as_i64),data.get("reasoning_tokens").and_then(Value::as_i64),data.get("total_tokens").and_then(Value::as_i64),data.get("usage_status").and_then(Value::as_str),data.get("content_redacted").and_then(Value::as_str).map(|s|s.chars().count() as i64),payload.chars().count() as i64,2i32,payload,2i32,data.get("cache_write_tokens").and_then(Value::as_i64),data.get("exit_code").and_then(Value::as_i64),data.get("provider").and_then(Value::as_str).filter(|s|!s.is_empty()).or_else(||data.get("provider_thread_id").and_then(Value::as_str).and_then(provider_in_id)),data.get("resolved_model").and_then(Value::as_str).filter(|s|!s.is_empty()),data.get("usage_scope").and_then(Value::as_str),data.get("usage_source").and_then(Value::as_str),data.get("has_subagents").and_then(Value::as_bool),elapsed_ms(&data)])?;
+        self.conn.prepare_cached("INSERT INTO records (id,kind,instance_id,source_id,project_id,thread_id,run_id,occurred_at,source_updated_at,capture_quality,capture_source,source_version,captured_at,payload_hash,data,model,status,tool_name,tool_category,duration_ms,input_tokens,cached_input_tokens,output_tokens,reasoning_tokens,total_tokens,usage_status,redacted_characters,json_characters,facts_version,search_text,search_version,cache_write_tokens,exit_code,agent_provider,resolved_model,usage_scope,usage_source,has_subagents,elapsed_ms,preview_doc) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,lower(json_extract_string(?,'$.content_redacted')),?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data,payload_hash=excluded.payload_hash,source_updated_at=excluded.source_updated_at,captured_at=excluded.captured_at,capture_quality=excluded.capture_quality,source_version=excluded.source_version,project_id=excluded.project_id,thread_id=excluded.thread_id,run_id=excluded.run_id,occurred_at=excluded.occurred_at,model=excluded.model,status=excluded.status,tool_name=excluded.tool_name,tool_category=excluded.tool_category,duration_ms=excluded.duration_ms,input_tokens=excluded.input_tokens,cached_input_tokens=excluded.cached_input_tokens,output_tokens=excluded.output_tokens,reasoning_tokens=excluded.reasoning_tokens,total_tokens=excluded.total_tokens,usage_status=excluded.usage_status,redacted_characters=excluded.redacted_characters,json_characters=excluded.json_characters,facts_version=excluded.facts_version,search_text=excluded.search_text,search_version=excluded.search_version,cache_write_tokens=excluded.cache_write_tokens,exit_code=excluded.exit_code,agent_provider=excluded.agent_provider,resolved_model=excluded.resolved_model,usage_scope=excluded.usage_scope,usage_source=excluded.usage_source,has_subagents=excluded.has_subagents,elapsed_ms=excluded.elapsed_ms,preview_doc=excluded.preview_doc")?.execute(params![key,kind,instance,source,project,thread,run,date,updated,quality,self.capture_source.get(),version,captured,digest,payload,data.get("model").and_then(Value::as_str).or_else(||data.get("requested_model").and_then(Value::as_str)),data.get("status").and_then(Value::as_str),data.get("tool_name").and_then(Value::as_str),data.get("tool_category").and_then(Value::as_str),data.get("duration_ms").and_then(Value::as_i64),data.get("input_tokens").and_then(Value::as_i64),data.get("cached_input_tokens").and_then(Value::as_i64),data.get("output_tokens").and_then(Value::as_i64),data.get("reasoning_tokens").and_then(Value::as_i64),data.get("total_tokens").and_then(Value::as_i64),data.get("usage_status").and_then(Value::as_str),data.get("content_redacted").and_then(Value::as_str).map(|s|s.chars().count() as i64),payload.chars().count() as i64,3i32,payload,2i32,data.get("cache_write_tokens").and_then(Value::as_i64),data.get("exit_code").and_then(Value::as_i64),data.get("provider").and_then(Value::as_str).filter(|s|!s.is_empty()).or_else(||data.get("provider_thread_id").and_then(Value::as_str).and_then(provider_in_id)),data.get("resolved_model").and_then(Value::as_str).filter(|s|!s.is_empty()),data.get("usage_scope").and_then(Value::as_str),data.get("usage_source").and_then(Value::as_str),data.get("has_subagents").and_then(Value::as_bool),elapsed_ms(&data),preview_doc(&data)])?;
         self.conn
             .prepare_cached(
                 "INSERT INTO events VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING",
@@ -361,18 +362,22 @@ pub fn hydrate_facts(conn: &Connection) -> Result<()> {
     hydrate_more_facts(conn)
 }
 
-/// The second set of analytic columns, filled in one pass for rows written before they existed or restored from an older snapshot.
+/// The later analytic columns and the list view (version 3), filled in one pass for rows written before they existed or restored from an older snapshot.
 pub fn hydrate_more_facts(conn: &Connection) -> Result<()> {
-    let pending: i64 = conn.query_row("SELECT count(*) FROM records WHERE facts_version=1", [], |r| r.get(0))?;
+    let pending: i64 = conn.query_row("SELECT count(*) FROM records WHERE facts_version IN (1,2)", [], |r| r.get(0))?;
     if pending == 0 {
         return Ok(());
     }
     // In slices of rows, because one pass over every document can exceed the service's query memory.
     let end: i64 = conn.query_row("SELECT coalesce(max(rowid),-1)+1 FROM records", [], |r| r.get(0))?;
-    let sql = "UPDATE records SET  cache_write_tokens=try_cast(json_extract_string(data,'$.cache_write_tokens') AS BIGINT),  exit_code=try_cast(json_extract_string(data,'$.exit_code') AS BIGINT),  agent_provider=coalesce(nullif(json_extract_string(data,'$.provider'),''),nullif(regexp_extract(coalesce(json_extract_string(data,'$.provider_thread_id'),''),'(?:^|:)provider:([^:]+)',1),'')),  resolved_model=nullif(json_extract_string(data,'$.resolved_model'),''),  usage_scope=json_extract_string(data,'$.usage_scope'),  usage_source=json_extract_string(data,'$.usage_source'),  has_subagents=try_cast(json_extract_string(data,'$.has_subagents') AS BOOLEAN),  elapsed_ms=CASE WHEN duration_ms>=0 THEN duration_ms WHEN date_diff('millisecond',try_cast(json_extract_string(data,'$.started_at') AS TIMESTAMPTZ),try_cast(json_extract_string(data,'$.completed_at') AS TIMESTAMPTZ))>=0 THEN date_diff('millisecond',try_cast(json_extract_string(data,'$.started_at') AS TIMESTAMPTZ),try_cast(json_extract_string(data,'$.completed_at') AS TIMESTAMPTZ)) END,  facts_version=2 WHERE facts_version=1";
+    let sql = "UPDATE records SET  cache_write_tokens=try_cast(json_extract_string(data,'$.cache_write_tokens') AS BIGINT),  exit_code=try_cast(json_extract_string(data,'$.exit_code') AS BIGINT),  agent_provider=coalesce(nullif(json_extract_string(data,'$.provider'),''),nullif(regexp_extract(coalesce(json_extract_string(data,'$.provider_thread_id'),''),'(?:^|:)provider:([^:]+)',1),'')),  resolved_model=nullif(json_extract_string(data,'$.resolved_model'),''),  usage_scope=json_extract_string(data,'$.usage_scope'),  usage_source=json_extract_string(data,'$.usage_source'),  has_subagents=try_cast(json_extract_string(data,'$.has_subagents') AS BOOLEAN),  elapsed_ms=CASE WHEN duration_ms>=0 THEN duration_ms WHEN date_diff('millisecond',try_cast(json_extract_string(data,'$.started_at') AS TIMESTAMPTZ),try_cast(json_extract_string(data,'$.completed_at') AS TIMESTAMPTZ))>=0 THEN date_diff('millisecond',try_cast(json_extract_string(data,'$.started_at') AS TIMESTAMPTZ),try_cast(json_extract_string(data,'$.completed_at') AS TIMESTAMPTZ)) END,  preview_doc=json_merge_patch(json_merge_patch(data,'{\"content_ciphertext\":null,\"repository_path_encrypted\":null,\"content_redacted\":null}'),json_object('content_redacted',left(json_extract_string(data,'$.content_redacted'),512),'content_truncated',length(json_extract_string(data,'$.content_redacted'))>512))::VARCHAR,  facts_version=3 WHERE facts_version IN (1,2)";
     // The bounds are written into the statement: as parameters they are not used to narrow the scan, and every slice reads the whole table.
+    tracing::info!(operation = "hydrate_more_facts", pending_rows = pending, "Filling analytic columns");
     for start in (0..end).step_by(10_000) {
         conn.execute_batch(&format!("{sql} AND rowid>={start} AND rowid<{}", start + 10_000))?;
+        if start % 50_000 == 0 {
+            tracing::info!(operation = "hydrate_more_facts", done_rows = (start + 10_000).min(end), total_rows = end);
+        }
     }
     Ok(())
 }
@@ -381,6 +386,27 @@ pub fn hydrate_more_facts(conn: &Connection) -> Result<()> {
 fn provider_in_id(id: &str) -> Option<&str> {
     let at = if let Some(rest) = id.strip_prefix("provider:") { rest } else { &id[id.find(":provider:")? + ":provider:".len()..] };
     at.split(':').next().filter(|s| !s.is_empty())
+}
+
+/// The list view of a record, as the version 3 backfill writes it: no full text or encrypted fields, and the first 512 characters of the text.
+pub fn preview_doc(data: &Value) -> String {
+    let mut doc = data.clone();
+    if let Some(o) = doc.as_object_mut() {
+        let text = match o.remove("content_redacted") {
+            Some(Value::String(s)) => Some(s),
+            Some(Value::Null) | None => None,
+            Some(other) => Some(other.to_string()),
+        };
+        o.remove("content_ciphertext");
+        o.remove("repository_path_encrypted");
+        if let Some(text) = text {
+            let mut chars = text.chars();
+            let preview: String = chars.by_ref().take(512).collect();
+            o.insert("content_truncated".into(), json!(chars.next().is_some()));
+            o.insert("content_redacted".into(), json!(preview));
+        }
+    }
+    doc.to_string()
 }
 
 /// How long a record ran: its own duration, else the time between its start and end.

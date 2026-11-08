@@ -1,7 +1,7 @@
 import { hasTurnUsage } from './entities';
 import { useMemo, useState, useSyncExternalStore } from 'react';
 import { keepPreviousData, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
-import { tokensByKey, type ThreadTokens, type ToolStat, type ToolSummary } from './analytics';
+import { tokensByKey, type ThreadTokens, type ToolCoverage, type ToolStat, type ToolSummary } from './analytics';
 import { getEntities, getJson, scanHourly, scanPages } from './api';
 import { toAgent, toThread, toTool, toTurn, type TurnRow } from './entities';
 import { apiParams, resolveFilters, type Filters, DEFAULT_RANGE } from './filters';
@@ -281,6 +281,18 @@ export function useLatestRecord() {
     queryKey: ['latest'],
     refetchInterval: 60_000,
     queryFn: async ({ signal }) => (await getEntities<Entity>('timeline', new URLSearchParams({ limit: '1', include_content: 'false' }), signal))[0] ?? null,
+  });
+}
+
+/** Field coverage of every tool call, and redaction categories of every tool call and sub-agent, counted by the service. */
+export interface FieldReport { tools: ToolCoverage | null; redactions: { category: string; records: number }[] }
+export function useFieldReport() {
+  return useQuery({
+    queryKey: ['data-quality/fields'],
+    queryFn: async ({ signal }) => {
+      const r = await getJson<Partial<FieldReport>>('data-quality/fields', undefined, signal);
+      return { tools: r.tools ?? null, redactions: r.redactions ?? [] } satisfies FieldReport;
+    },
   });
 }
 

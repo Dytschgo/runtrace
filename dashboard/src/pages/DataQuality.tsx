@@ -1,9 +1,8 @@
 import { useMemo } from 'react';
-import { Async, CoverageBar, ErrorState, NoRecords, PageHeader, Panel, QualityBadge, RankedBars, ScanNote, Skeleton, SkeletonRows, Stat, StatRow, Tokens, Unknown } from '../components/ui';
-import { coverageRows, redactionTotals, usageByProvider } from '../lib/analytics';
-import { useAgents, useCollectorReadiness, useModels, useModelTurns, useQuality, useQualityReport, useQuota, useThreads, useToolAnalysis } from '../lib/data';
+import { Async, CoverageBar, ErrorState, NoRecords, PageHeader, Panel, QualityBadge, RankedBars, Skeleton, SkeletonRows, Stat, StatRow, Tokens, Unknown } from '../components/ui';
+import { coverageRows, usageByProvider } from '../lib/analytics';
+import { useAgents, useCollectorReadiness, useFieldReport, useModels, useModelTurns, useQuality, useQualityReport, useQuota, useThreads } from '../lib/data';
 import { fmtInt, fmtPct, isKnown } from '../lib/format';
-import { useUrl } from '../lib/url';
 
 const QUALITIES = ['complete', 'partial', 'inferred', 'unavailable'];
 const KIND_LABEL: Record<string, string> = { tool: 'Tool calls', answer: 'Answers', prompt: 'Prompts', run: 'Runs', model_turn: 'Provider turns', thread: 'Threads', agent: 'Sub-agents', project: 'Projects', instance: 'Instances', external_request: 'External requests' };
@@ -21,10 +20,10 @@ export default function DataQuality() {
   const quality = useQuality();
   const report = useQualityReport();
   const readiness = useCollectorReadiness();
-  const { params, set } = useUrl();
   const threads = useThreads({});
   const agents = useAgents({});
-  const { query: tools, reading, progress, total: toolTotal } = useToolAnalysis({}, params.get('scan') === 'all');
+  // Counted by the service over every tool call, so the coverage is never a sample.
+  const fields = useFieldReport();
   const turns = useModelTurns({});
   const models = useModels({});
   const quota = useQuota('quota/current');
@@ -44,8 +43,9 @@ export default function DataQuality() {
   const partial = matrix.grid.reduce((s, r) => s + (r.cells.partial ?? 0), 0);
 
   const turnRows = turns.data?.rows ?? (turns.isError ? [] : undefined);
-  const coverage = useMemo(() => (threads.data && agents.data && tools.data && turnRows ? coverageRows(threads.data.rows, agents.data.rows, tools.data.rows, turnRows) : null), [threads.data, agents.data, tools.data, turnRows]);
-  const redactions = useMemo(() => redactionTotals([...(tools.data?.rows ?? []), ...(agents.data?.rows ?? [])]), [tools.data, agents.data]);
+  const toolFields = fields.data?.tools;
+  const coverage = useMemo(() => (threads.data && agents.data && toolFields && turnRows ? coverageRows(threads.data.rows, agents.data.rows, toolFields, turnRows) : null), [threads.data, agents.data, toolFields, turnRows]);
+  const redactions = fields.data?.redactions ?? [];
   const providers = useMemo(() => usageByProvider(turns.data?.rows ?? []), [turns.data]);
   const measured = coverage?.filter((c) => c.total > 0) ?? [];
   const full = measured.filter((c) => c.known === c.total).length;
@@ -109,7 +109,8 @@ export default function DataQuality() {
           {turns.data && !turns.data.complete && <p className="fine pad">Based on the latest {fmtInt(turns.data.scanned)} provider turns.</p>}
         </Panel>
         <Panel className="grow-1" title="Redactions" sub="Tool call and sub-agent records with a removed match">
-          {tools.isPending || agents.isPending ? <SkeletonRows rows={4} label="Loading redactions" />
+          {fields.isPending ? <SkeletonRows rows={4} label="Loading redactions" />
+            : fields.isError ? <ErrorState error={fields.error} onRetry={() => fields.refetch()} compact />
             : redactions.length ? <RankedBars label="Records by redaction category" items={redactions.map((r) => ({ key: r.category, label: <span className="mono">{r.category}</span>, value: r.records }))} />
               : <p className="fine">No redactions in these records.</p>}
         </Panel>
@@ -118,9 +119,8 @@ export default function DataQuality() {
       <Panel
         title="Field coverage"
         sub="Solid is the share of records where the field holds a value. Hatched is missing, which is not the same as zero."
-        action={tools.data && <ScanNote scanned={tools.data.scanned} complete={tools.data.complete} noun="tool calls" total={toolTotal} reading={reading} progress={progress} onExpand={() => set({ scan: 'all' })} />}
       >
-        {threads.error ?? agents.error ?? tools.error ? <ErrorState error={threads.error ?? agents.error ?? tools.error} onRetry={() => { threads.refetch(); agents.refetch(); tools.refetch(); }} compact />
+        {threads.error ?? agents.error ?? fields.error ? <ErrorState error={threads.error ?? agents.error ?? fields.error} onRetry={() => { threads.refetch(); agents.refetch(); fields.refetch(); }} compact />
           : !coverage ? <SkeletonRows rows={10} label="Measuring coverage" />
             : (
               <ul className="coverage-list">
