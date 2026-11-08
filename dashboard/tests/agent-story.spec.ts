@@ -1,7 +1,8 @@
-import { expect, test, type Page } from '@playwright/test';
+import { type Page } from '@playwright/test';
+import { expect, test } from './fixture';
 
-// The story of a thread, played back. Mocked journeys cover states real history cannot produce on demand;
-// the live journey at the end runs against whatever the service holds and skips when nothing delegated.
+// The story of a thread, played back. Mocked journeys cover states real history cannot produce on demand.
+// The frame rate of a real story is measured in frames.spec.ts, which runs alone.
 const envelope = (data: unknown[]) => ({ data, capture_quality: 'partial', limit: 500, offset: 0, timezone: 'UTC', null_semantics: 'null means unavailable, never zero' });
 const T0 = Date.parse('2026-11-05T10:00:00Z');
 const at = (s: number) => new Date(T0 + s * 1000).toISOString();
@@ -122,23 +123,4 @@ test('reduced motion shows the finished story at once, and 390px fits without si
   await expect(page.locator('.story-log')).toContainText('gpt-x answered “All done.”');
   expect(await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth)).toBe(false);
   expect(await page.locator('.story-end-fail').evaluate((el) => getComputedStyle(el).animationName)).toBe('none');
-});
-
-test('live: the busiest delegating thread plays smoothly', async ({ page, request }) => {
-  test.setTimeout(180_000);
-  const counts = new Map<string, number>();
-  for (let offset = 0; ; offset += 500) {
-    const res = await request.get(`/api/v1/agents?limit=500&offset=${offset}`);
-    if (!res.ok()) test.skip(true, 'The service is not answering.');
-    const rows = (await res.json()).data as { thread_id: string }[];
-    for (const r of rows) counts.set(r.thread_id, (counts.get(r.thread_id) ?? 0) + 1);
-    if (rows.length < 500) break;
-  }
-  const [busiest] = [...counts].sort((a, b) => b[1] - a[1])[0] ?? [];
-  test.skip(!busiest, 'No delegation is recorded here.');
-  await page.goto(`/?page=Threads&id=${encodeURIComponent(busiest)}&story=1`);
-  await expect(page.getByRole('button', { name: /Pause|Play/ })).toBeVisible({ timeout: 120_000 });
-  const fps = await page.evaluate(() => new Promise<number>((res) => { let n = 0; const s = performance.now(); const f = () => { n++; if (performance.now() - s < 1500) requestAnimationFrame(f); else res(n / 1.5); }; requestAnimationFrame(f); }));
-  expect(fps).toBeGreaterThan(30);
-  expect(await page.locator('.story-hit').count()).toBeGreaterThan(1);
 });

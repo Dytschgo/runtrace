@@ -1,6 +1,7 @@
-import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
+import { type APIRequestContext, type Page } from '@playwright/test';
+import { day, expect, FIXTURE, fixtureOnly, LIVE, NOW, pinClock, test, wholeDay, zurichDay } from './fixture';
 
-// The new cuts on real history. Every total is compared with the API, never hard-coded.
+// The new cuts on the fixture history (tests/fixture.ts), or a live service with RUNTRACE_BASE_URL. Totals are compared with the API.
 const api = async (request: APIRequestContext, route: string) => {
   const res = await request.get(`/api/v1/${route}`);
   expect(res.ok(), `${route} responded`).toBeTruthy();
@@ -21,8 +22,10 @@ test('providers split the same total as models, with nothing left unattributed',
   await open(page);
   await page.getByRole('group', { name: 'Group by' }).getByRole('radio', { name: 'Providers', exact: true }).check({ force: true });
   await expect(page).toHaveURL(/by=provider/);
-  // Live capture can add a little between the two reads.
-  await expect.poll(async () => Number(((await page.locator('.tokens-hero strong').getAttribute('title')) ?? '').replace(/[^0-9]/g, ''))).toBeGreaterThan(total * 0.999);
+  const shownTotal = async () => Number(((await page.locator('.tokens-hero strong').getAttribute('title')) ?? '').replace(/[^0-9]/g, ''));
+  // A live service keeps capturing between the two reads; the fixture never changes.
+  if (LIVE) await expect.poll(shownTotal).toBeGreaterThan(total * 0.999);
+  else await expect.poll(shownTotal).toBe(total);
   const rows = page.locator('.model-lines .model-line-name');
   await expect(rows.first()).toHaveText('OpenAI');
   await expect(page.locator('.model-lines')).not.toContainText('Not recorded');
@@ -197,8 +200,9 @@ test('every resolution draws all the data across the October clock change', asyn
     await open(page, `?res=${res}&nr=1`);
     await page.getByRole('button', { name: 'Show as table' }).click();
     const sum = await page.locator('.hero-chart tbody tr').evaluateAll((rows) => rows.reduce((s, r) => s + [...r.querySelectorAll('td.num')].reduce((n, c) => n + (Number(c.textContent!.replace(/[^0-9]/g, '')) || 0), 0), 0));
-    // Live capture can add a little between the two reads, but nothing close to a dropped day.
-    expect(Math.abs(sum - total) / total, res).toBeLessThan(0.01);
+    // A live service can add a little between the two reads, but nothing close to a dropped day. The fixture never changes.
+    if (LIVE) expect(Math.abs(sum - total) / total, res).toBeLessThan(0.01);
+    else expect(sum, res).toBe(total);
   }
 });
 
@@ -216,7 +220,6 @@ test('the headline, list and chart agree, and a partial reporter is not called e
 });
 
 test('the last hour slides forward on its own while the page sits idle', async ({ page }) => {
-  await page.clock.install({ time: new Date() });
   await page.goto('/?range=1h');
   await page.clock.runFor(1_000);
   const seen: string[] = [];
@@ -230,7 +233,8 @@ test('the slider is the widest thing in the header, and a tap keeps the tooltip 
   const rail = (await page.locator('.ts-rail').boundingBox())!;
   const viewport = page.viewportSize()!;
   expect(rail.width).toBeGreaterThan(viewport.width * 0.4);
-  const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, timezoneId: 'Europe/Zurich' });
+  await pinClock(context);
   const phone = await context.newPage();
   await phone.goto('/');
   await phone.waitForLoadState('networkidle');
@@ -264,14 +268,15 @@ test('stepping back from a preset and forward again returns to that live preset'
   await expect(page.locator('.ts-read')).toContainText('Last 1h');
 });
 
-// A closed evening where Opus ran at 18:00 UTC and reported nothing, which old windows keep true.
-const EVENING = 'since=2026-10-31T17:00:00.000Z&until=2026-10-31T20:59:59.999Z&res=1h';
+// The fixture's closed evening: Opus ran in the 18:00 UTC hour and reported nothing.
+const EVENING = `since=${day(FIXTURE.evening, 17)}&until=${day(FIXTURE.evening, 20, 59, 59, 999)}&res=1h`;
 const hoverAt = async (page: Page, fraction: number) => {
   const box = (await page.locator('.trace').boundingBox())!;
   await page.mouse.move(box.x + box.width * fraction, box.y + 150);
 };
 
 test('a stacked band hatches what it cannot know and its sum says it is a lower bound', async ({ page }) => {
+  fixtureOnly();
   await open(page, `?${EVENING}&view=stacked`);
   await expect(page.locator('.trace-line').first()).toBeVisible();
   const holes = await page.locator('.trace-hole').evaluateAll((l) => l.filter((x) => x.getAttribute('d')).length);
@@ -283,13 +288,15 @@ test('a stacked band hatches what it cannot know and its sum says it is a lower 
 });
 
 test('lines have no hatched bands', async ({ page }) => {
+  fixtureOnly();
   await open(page, `?${EVENING}`);
   await expect(page.locator('.trace-line').first()).toBeVisible();
   expect(await page.locator('.trace-hole').evaluateAll((l) => l.filter((x) => x.getAttribute('d')).length)).toBe(0);
 });
 
 test('a focused or filtered model compares against its own silence, not a zero', async ({ page }) => {
-  const when = 'since=2026-10-31T19:00:00.000Z&until=2026-10-31T19:59:59.999Z&res=15m&compare=1';
+  fixtureOnly();
+  const when = `since=${day(FIXTURE.evening, 19)}&until=${day(FIXTURE.evening, 19, 59, 59, 999)}&res=15m&compare=1`;
   await open(page, `?${when}`);
   await page.locator('.model-line', { hasText: 'claude-opus-5-5' }).hover();
   await expect(page.locator('.trace')).toHaveAttribute('data-focus', 'true');
@@ -306,9 +313,8 @@ test('a focused or filtered model compares against its own silence, not a zero',
 });
 
 test('a live preset moves with the clock while nobody touches it', async ({ page }) => {
-  await page.clock.install({ time: new Date() });
   // Capture keeps up during the wait, as it does in real use.
-  await page.route('**/health/ready', (route) => route.fulfill({ json: { ready: true, collector: { state: 'idle', last_successful_sync_at: new Date(Date.now() + 3_600_000).toISOString() } } }));
+  await page.route('**/health/ready', (route) => route.fulfill({ json: { ready: true, collector: { state: 'idle', last_successful_sync_at: new Date(NOW + 3_600_000).toISOString() } } }));
   await open(page, '?range=1h');
   const last = page.locator('.trace-tick[text-anchor="end"]').last();
   await expect(last).toBeVisible();
@@ -319,7 +325,8 @@ test('a live preset moves with the clock while nobody touches it', async ({ page
 });
 
 test('a change made during the entrance animation is still there when it ends', async ({ page }) => {
-  await open(page, '?since=2026-10-31T17:00:00.000Z&until=2026-10-31T20:59:59.999Z&res=1h');
+  fixtureOnly();
+  await open(page, `?${EVENING}`);
   await expect(page.locator('.trace-line').first()).toBeVisible();
   const paths = () => page.locator('.trace-line').evaluateAll((l) => l.map((x) => x.getAttribute('d')));
   // Change the look straight after the data lands, then let any frames still queued run out.
@@ -333,6 +340,7 @@ test('a change made during the entrance animation is still there when it ends', 
 });
 
 test('the chart download says which values are missing and which are lower bounds', async ({ page }) => {
+  fixtureOnly();
   await open(page, `?${EVENING}`);
   const waiting = page.waitForEvent('download');
   await page.getByRole('button', { name: 'Download this chart as CSV' }).click();
@@ -346,7 +354,7 @@ test('the chart download says which values are missing and which are lower bound
 });
 
 test('opening today stops at now and compares equal time', async ({ page }) => {
-  const startOfToday = new Date(); startOfToday.setUTCHours(0, 0, 0, 0);
+  const startOfToday = new Date(NOW); startOfToday.setUTCHours(0, 0, 0, 0);
   const endOfToday = new Date(startOfToday.getTime() + 86_400_000 - 1);
   // Turns that name no model are drawn too, because early in the day they can be the only ones.
   await open(page, `?since=${startOfToday.toISOString()}&until=${endOfToday.toISOString()}&res=1h&nr=1`);
@@ -357,7 +365,7 @@ test('opening today stops at now and compares equal time', async ({ page }) => {
   // Early in the day an hour is too long for the window, and the chart falls back to a finer bucket, which its heading names.
   const per = /per (\d+)?\s*(minute|hour|day)/.exec((await page.locator('.hero-chart h2').first().textContent()) ?? '');
   const bucket = (Number(per?.[1] ?? 1)) * (per?.[2] === 'minute' ? 60_000 : per?.[2] === 'day' ? 86_400_000 : 3_600_000);
-  expect(rows).toBeLessThanOrEqual(Math.ceil((Date.now() - startOfToday.getTime()) / bucket) + 2);
+  expect(rows).toBeLessThanOrEqual(Math.ceil((NOW - startOfToday.getTime()) / bucket) + 2);
   await expect(page.locator('.ts-read')).toContainText('now');
 });
 
@@ -373,17 +381,19 @@ test('shortcuts still work after clicking a preset', async ({ page }) => {
 });
 
 test('a window before history is unknown, and a window part way in starts at history', async ({ page }) => {
-  await open(page, '?since=2026-05-01T00:00:00.000Z&until=2026-05-02T00:00:00.000Z');
+  fixtureOnly();
+  const start = FIXTURE.historyStart;
+  await open(page, `?since=${day(start + 43)}&until=${day(start + 42)}`);
   await expect(page.locator('.before-history')).toContainText('unknown');
   await expect(page.locator('.stats')).toContainText('Unknown');
-  await open(page, '?since=2026-06-01T00:00:00.000Z&until=2026-06-20T00:00:00.000Z&res=1d');
+  await open(page, `?since=${day(start + 12)}&until=${day(start - 7)}&res=1d`);
   await expect(page.locator('.trace-note')).toContainText('History here starts');
-  await expect(page.locator('.trace-tick[text-anchor="start"]').first()).toHaveText('13 JUN');
+  await expect(page.locator('.trace-tick[text-anchor="start"]').first()).toHaveText(zurichDay(day(start, 9)));
 });
 
 test('a window that starts later than now is unknown, not zero', async ({ page }) => {
-  const from = new Date(Date.now() + 2 * 86_400_000).toISOString();
-  const to = new Date(Date.now() + 3 * 86_400_000).toISOString();
+  const from = new Date(NOW + 2 * 86_400_000).toISOString();
+  const to = new Date(NOW + 3 * 86_400_000).toISOString();
   await open(page, `?since=${from}&until=${to}`);
   await expect(page.locator('.before-history')).toContainText('Not yet');
   await expect(page.locator('.tokens-hero strong')).toContainText('Not yet');
@@ -392,10 +402,12 @@ test('a window that starts later than now is unknown, not zero', async ({ page }
 });
 
 test('a long stretch with no records is not captured, not a quiet time', async ({ page }) => {
-  await open(page, '?since=2026-07-05T00:00:00.000Z&until=2026-07-10T00:00:00.000Z');
+  fixtureOnly();
+  // Inside the fixture's gap, then a window across it.
+  await open(page, `?since=${day(FIXTURE.gap[0] - 3)}&until=${day(FIXTURE.gap[1] + 8)}`);
   await expect(page.locator('.before-history')).toContainText('Not captured');
   await expect(page.locator('.tokens-hero strong')).toContainText('Not captured');
-  await open(page, '?since=2026-06-10T00:00:00.000Z&until=2026-08-25T00:00:00.000Z&res=1d');
+  await open(page, `?since=${day(FIXTURE.historyStart + 3)}&until=${day(FIXTURE.gap[1] - 30)}&res=1d`);
   await expect(page.locator('.trace-blackout').first()).toBeAttached();
   const d = (await page.locator('.trace-line').first().getAttribute('d'))!;
   expect((d.match(/M/g) ?? []).length).toBeGreaterThan(1);
@@ -420,7 +432,8 @@ test('exact dates cannot make a window that ends before it starts', async ({ pag
 });
 
 test('the compare total breaks where nothing reported', async ({ page }) => {
-  await open(page, '?since=2026-10-18T00:00:00.000Z&until=2026-10-18T06:59:59.999Z&res=1h&compare=1');
+  fixtureOnly();
+  await open(page, `?since=${day(FIXTURE.silentHour)}&until=${day(FIXTURE.silentHour, 6, 59, 59, 999)}&res=1h&compare=1`);
   await expect(page.locator('.trace-total')).toBeVisible();
   const d = (await page.locator('.trace-total').getAttribute('d'))!;
   expect((d.match(/M/g) ?? []).length).toBeGreaterThan(1);
@@ -438,14 +451,13 @@ test('focusing a line does not rescale the chart', async ({ page }) => {
 
 test('a tab left open keeps every new turn, even past one page', async ({ page }) => {
   test.slow();
-  await page.clock.install({ time: new Date() });
   let batch = 0;
   await page.route(/model-turns\?.*limit=200/, async (route) => {
     batch += 1;
     const res = await route.fetch();
     const body = await res.json();
     const sample = body.data[0];
-    const at = new Date().toISOString();
+    const at = new Date(NOW).toISOString();
     body.data = Array.from({ length: 200 }, (_, i) => ({ ...sample, id: `new-${batch}-${i}`, source_id: `new-${batch}-${i}`, occurred_at: at }));
     await route.fulfill({ response: res, json: body });
   });
@@ -458,6 +470,8 @@ test('a tab left open keeps every new turn, even past one page', async ({ page }
   for (let i = 0; i < 3; i++) await page.clock.fastForward(61_000);
   await expect.poll(() => batch).toBeGreaterThan(startBatch);
   await expect.poll(count, { timeout: 15_000 }).toBeGreaterThanOrEqual(startAt + (batch - startBatch) * 200);
+  // The page keeps polling; a fetch still in flight when the test ends must not fail the next test in this worker.
+  await page.unrouteAll({ behavior: 'ignoreErrors' });
 });
 
 test('a hovered row that disappears does not leave the chart dimmed', async ({ page }) => {
@@ -520,7 +534,9 @@ test('the whole history arrives in the background and a chosen window waits only
   await expect(page.locator('.tokens-hero strong')).toHaveAttribute('title', /tokens$/);
   await page.locator('.filterbar .segmented').getByRole('radio', { name: 'All', exact: true }).check({ force: true });
   await expect(page.locator('.ts-read')).not.toContainText('Last 7d');
-  await expect(page.locator('.trace-tick[text-anchor="start"]').first()).toHaveText(/JUN/, { timeout: 120_000 });
+  // The first tick is the month the whole history starts in.
+  const month = LIVE ? 'JUN' : zurichDay(day(FIXTURE.historyStart, 9)).split(' ')[1];
+  await expect(page.locator('.trace-tick[text-anchor="start"]').first()).toHaveText(new RegExp(month), { timeout: 120_000 });
 });
 
 test('every provider and model stays listed, ranked by use', async ({ page }) => {
@@ -598,7 +614,8 @@ test('the overview has no dropdowns for what a row can do, and other pages keep 
 test('an unsupported preset is ignored and a window with only an end before history says so', async ({ page }) => {
   await open(page, '?range=constructor');
   await expect(page.locator('.tokens-hero strong')).toHaveAttribute('title', /tokens$/, { timeout: 30_000 });
-  await open(page, '?until=2026-05-30T23:59:59.000Z');
+  fixtureOnly();
+  await open(page, `?until=${day(FIXTURE.historyStart + 14, 23, 59, 59)}`);
   await expect(page.locator('.before-history')).toContainText('Before history', { timeout: 120_000 });
 });
 
@@ -621,14 +638,15 @@ test('tokens by type are parts of the total, and turns with parts but no total a
 });
 
 test('a filter does not turn a real zero into unknown', async ({ page }) => {
-  await open(page, '?model=claude-sonnet-5-5&since=2026-10-04T00:00:00.000Z&until=2026-10-05T00:00:00.000Z');
+  fixtureOnly();
+  await open(page, `?model=claude-sonnet-5-5&since=${day(FIXTURE.noSonnet)}&until=${day(FIXTURE.noSonnet - 1)}`);
   await expect(page.locator('.before-history')).toHaveCount(0);
   await expect(page.locator('.tokens-hero strong')).toHaveText('0');
   await expect(page.locator('.trace-empty')).toBeVisible();
 });
 
 test('time after the last capture is unknown, not a quiet hour', async ({ page }) => {
-  await page.route('**/health/ready', (route) => route.fulfill({ json: { ready: true, collector: { state: 'idle', last_successful_sync_at: new Date(Date.now() - 11 * 3_600_000).toISOString() } } }));
+  await page.route('**/health/ready', (route) => route.fulfill({ json: { ready: true, collector: { state: 'idle', last_successful_sync_at: new Date(NOW - 11 * 3_600_000).toISOString() } } }));
   await open(page, '?range=1h');
   await expect(page.locator('.before-history')).toContainText('Not captured yet');
   await expect(page.locator('.tokens-hero strong')).toContainText('Not captured yet');
@@ -638,7 +656,8 @@ test('time after the last capture is unknown, not a quiet hour', async ({ page }
 });
 
 test('past windows never read as not yet, and unknown windows do not count threads as zero', async ({ page }) => {
-  await open(page, '?until=2026-05-01T00:00:00Z');
+  fixtureOnly();
+  await open(page, `?until=${day(FIXTURE.historyStart + 43)}`);
   await expect(page.locator('.before-history')).toContainText('Before history');
   await open(page, '?since=2000-01-01T00:00:00Z&until=2000-02-01T00:00:00Z');
   await expect(page.locator('.tokens-hero')).not.toContainText('0 main threads');
@@ -647,7 +666,7 @@ test('past windows never read as not yet, and unknown windows do not count threa
 });
 
 test('date-only links work and nonsense is ignored', async ({ page }) => {
-  await open(page, '?since=2026-10-10&until=2026-10-20');
+  await open(page, `?since=${day(29).slice(0, 10)}&until=${day(19).slice(0, 10)}`);
   await expect(page.getByText('Query rejected')).toHaveCount(0);
   await expect(page.locator('.stats strong').first()).toHaveAttribute('title', /\d/);
   for (const q of ['?since=1', '?since=-271821-04-20T00:00:00.000Z', '?res=constructor', '?range=toString']) {
@@ -674,20 +693,27 @@ test('pressing the slider without moving it changes nothing', async ({ page }) =
 });
 
 test('delegation follows a model filter', async ({ page }) => {
-  await open(page, '?model=claude-sonnet-5-5&since=2026-10-10T00:00:00.000Z&until=2026-10-11T00:00:00.000Z');
+  fixtureOnly();
+  const when = `since=${day(FIXTURE.delegationNoSonnet)}&until=${day(FIXTURE.delegationNoSonnet - 1)}`;
+  // The day holds delegation, none of it by the filtered model.
+  await open(page, `?${when}`);
+  await expect(page.locator('dl', { hasText: 'Delegating threads' }).first()).toBeVisible();
+  await expect(page.getByText('No delegation recorded here')).toHaveCount(0);
+  await open(page, `?model=claude-sonnet-5-5&${when}`);
   await expect(page.getByText('No delegation recorded here')).toBeVisible();
 });
 
 test('the calendar keeps the start of a preset when the end is set', async ({ page }) => {
   await open(page, '?page=Threads&range=7d');
   await page.getByRole('button', { name: 'Exact dates' }).click();
-  const end = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
+  const end = new Date(NOW - 86_400_000).toISOString().slice(0, 10);
   await page.getByLabel('To date').fill(end);
   await expect.poll(() => new URL(page.url()).searchParams.get('since')).toBeTruthy();
 });
 
 test('a percentage is withheld when too few turns reported', async ({ page }) => {
-  await open(page, '?since=2026-10-11T22:00:00.000Z&until=2026-10-12T21:59:59.999Z&by=provider');
+  fixtureOnly();
+  await open(page, `?since=${day(FIXTURE.burst + 1, 22)}&until=${day(FIXTURE.burst, 21, 59, 59, 999)}&by=provider`);
   await expect(page.locator('.tokens-hero strong')).toHaveAttribute('title', /tokens$/);
   await expect(page.locator('.hero-delta')).toHaveCount(0);
   await expect(page.locator('.hero-nocompare')).toHaveText('not compared');
@@ -711,7 +737,9 @@ test.describe('chart controls on a phone', () => {
 });
 
 test('a window with only session-log tokens shows them, not an unknown total', async ({ page }) => {
-  await open(page, '?since=2026-07-01T00:00:00.000Z&until=2026-08-01T00:00:00.000Z');
+  fixtureOnly();
+  // Session-log hours either side of the gap, and no provider turn.
+  await open(page, `?since=${day(FIXTURE.gap[0] + 9)}&until=${day(FIXTURE.gap[1] - 6)}`);
   await expect(page.locator('.tokens-hero strong')).toHaveAttribute('title', /tokens$/, { timeout: 60_000 });
   await expect(page.locator('.tokens-hero')).not.toContainText('No complete total');
   const shown = Number((await page.locator('.tokens-hero strong').getAttribute('title'))!.replace(/[^0-9]/g, ''));
@@ -751,7 +779,8 @@ test('Overview and Agent Trees give the same delegation numbers for the same win
 });
 
 test('a row with tokens only from session logs says so', async ({ page }) => {
-  await open(page, '?since=2026-06-13T00:00:00.000Z&until=2026-06-27T00:00:00.000Z');
+  fixtureOnly();
+  await open(page, `?since=${day(FIXTURE.historyStart)}&until=${day(FIXTURE.historyStart - 14)}`);
   await expect(page.locator('.model-lines small', { hasText: 'session logs only' }).first()).toBeVisible({ timeout: 60_000 });
   await expect(page.locator('.model-lines li:not([data-idle]) small', { hasText: /· 0 turns/ })).toHaveCount(0);
 });
@@ -807,12 +836,12 @@ test('a pinned reading names turns with no model and adds up to the period it op
       await page.keyboard.press('Escape');
     }
   }
-  test.skip(!found, 'No day in this week had turns with no model.');
+  test.skip(LIVE && !found, 'No day in this week had turns with no model.');
+  expect(found, 'a whole day in the week holds turns with no model').toBe(true);
 });
 
 test('Agent Trees says a future window is not yet known', async ({ page }) => {
-  const day = new Date(Date.now() + 10 * 86_400_000).toISOString().slice(0, 10);
-  await page.goto(`/?page=Agent+Trees&since=${day}T00:00:00.000Z&until=${day}T23:59:59.999Z`);
+  await page.goto(`/?page=Agent+Trees&${wholeDay(-10)}`);
   await expect(page.getByRole('heading', { name: 'Not yet' })).toBeVisible({ timeout: 30_000 });
 });
 
@@ -829,7 +858,7 @@ test('Shift and an arrow carry the week along its framed track', async ({ page }
 });
 
 test('an hour is too coarse for a 45-minute window', async ({ page }) => {
-  await open(page, '?since=2026-11-06T18:00:00.000Z&until=2026-11-06T18:45:00.000Z&res=1h');
+  await open(page, `?since=${day(2, 18)}&until=${day(2, 18, 45)}&res=1h`);
   await expect(page.locator('.res-note')).toBeVisible({ timeout: 60_000 });
   await expect(page.locator('.hero-chart h2')).not.toContainText('per hour');
 });
@@ -837,7 +866,8 @@ test('an hour is too coarse for a 45-minute window', async ({ page }) => {
 test('a model whose turns did not all report a total reads as a lower bound on Models', async ({ page, request }) => {
   const models = (await (await request.get('/api/v1/models')).json()).data as { model: string | null; total_tokens: number | null; complete_usage_turns?: number; observed_provider_turns?: number }[];
   const partial = models.find((m) => m.model && m.total_tokens && (m.complete_usage_turns ?? 0) < (m.observed_provider_turns ?? 0));
-  test.skip(!partial, 'Every model reported complete totals.');
+  test.skip(!partial && LIVE, 'Every model reported complete totals.');
+  expect(partial, 'the fixture has a model with turns that reported no total').toBeTruthy();
   await page.goto('/?page=Models&range=all');
   const row = page.getByRole('table', { name: 'Usage by requested model' }).locator('tbody tr', { hasText: partial!.model! }).first();
   await expect(row.locator('.lower-bound').first()).toBeVisible({ timeout: 30_000 });
@@ -847,15 +877,14 @@ test('a selected tree reads its numbers inside the window and names the whole tr
   await page.goto('/?page=Agent+Trees&range=24h');
   await page.waitForLoadState('networkidle');
   const partialRow = page.locator('tbody tr', { has: page.locator('small', { hasText: /^of \d/ }) }).first();
-  test.skip(!(await partialRow.count()), 'No tree in the last day is larger than the window.');
+  test.skip(LIVE && !(await partialRow.count()), 'No tree in the last day is larger than the window.');
   await partialRow.locator('a').first().click();
   await expect(page.locator('.tree-stats')).toContainText('in the tree');
   await expect(page.locator('.tree-stats')).toContainText('busy in this window');
 });
 
 test('a future window is not yet known on every page, and no row reads zero', async ({ page }) => {
-  const day = new Date(Date.now() + 5 * 86_400_000).toISOString().slice(0, 10);
-  const win = `since=${day}T00:00:00.000Z&until=${day}T23:59:59.999Z`;
+  const win = wholeDay(-5);
   for (const p of ['Activity', 'Models', 'Projects', 'Threads', 'Tool+Calls']) {
     await page.goto(`/?page=${p}&${win}`);
     await expect(page.getByRole('heading', { name: 'Not yet' })).toBeVisible({ timeout: 30_000 });
@@ -869,12 +898,12 @@ test('a future window is not yet known on every page, and no row reads zero', as
 test('a share is never shown for a group that measured nothing', async ({ page }) => {
   await open(page, '?range=7d');
   const silent = page.locator('.model-lines li', { has: page.locator('b .unknown', { hasText: 'Not reported' }) });
-  test.skip(!(await silent.count()), 'Every group reported in this week.');
+  test.skip(LIVE && !(await silent.count()), 'Every group reported in this week.');
   await expect(silent.first().locator('small')).toContainText('Share unknown');
 });
 
 test('a bucket longer than a past window falls back to the automatic resolution', async ({ page }) => {
-  await open(page, '?since=2026-11-07T08:00:00.000Z&until=2026-11-07T13:00:00.000Z&res=6h');
+  await open(page, `?since=${day(1, 8)}&until=${day(1, 13)}&res=6h`);
   await expect(page.locator('.res-note')).toBeVisible({ timeout: 60_000 });
   await expect(page.locator('.hero-chart h2')).not.toContainText('per 6 hours');
 });
@@ -891,41 +920,46 @@ test('Agent Trees lists only trees that delegated inside the window', async ({ p
   await page.goto('/?page=Agent+Trees&range=24h');
   await page.waitForLoadState('networkidle');
   const rows = page.locator('tbody tr');
-  test.skip(!(await rows.count()), 'Nothing delegated in the last day.');
+  test.skip(LIVE && !(await rows.count()), 'Nothing delegated in the last day.');
+  await expect(rows.first()).toBeVisible();
   const shown = await page.locator('.stat', { hasText: 'Delegating threads' }).locator('.stat-value').innerText();
   expect(Number(shown.replace(/\D/g, ''))).toBe(await rows.count());
   for (const cell of await rows.locator('td:nth-child(2)').allInnerTexts()) expect(cell.trim().startsWith('0')).toBe(false);
 });
 
 test('repeat delegations keep their tree in a closed window, and the count matches the records', async ({ page, request }) => {
-  const since = '2026-11-07T03:10:00.000Z';
-  const until = '2026-11-07T03:45:00.000Z';
+  const since = day(FIXTURE.repeatDelegation, 3, 10);
+  const until = day(FIXTURE.repeatDelegation, 3, 45);
   const overview = (await (await request.get(`/api/v1/overview?since=${since}&until=${until}`)).json()).data as { kind: string; count: number }[];
   const agents = overview.find((r) => r.kind === 'agent')?.count ?? 0;
-  test.skip(!agents, 'No delegation in this window.');
+  test.skip(LIVE && !agents, 'No delegation in this window.');
+  // The fixture delegates to one child twice here.
+  if (!LIVE) expect(agents).toBeGreaterThanOrEqual(2);
   await page.goto(`/?page=Agent+Trees&since=${since}&until=${until}`);
   await expect(page.locator('.stat', { hasText: 'Sub-agents' }).first().locator('.stat-value')).toHaveText(String(agents), { timeout: 30_000 });
 });
 
 test('thread detail keeps the lower bound the list shows', async ({ page, request }) => {
-  const id = 'a9a6af7e-72b5-47c5-ab80-8be5b9c7852c';
+  fixtureOnly();
+  const threads = (await (await request.get('/api/v1/threads?limit=500')).json()).data as { source_id: string; data: { title?: string } }[];
+  const id = threads.find((t) => t.data.title === FIXTURE.lowerBoundThread)!.source_id;
   const turns = (await (await request.get(`/api/v1/model-turns?limit=2000`)).json()).data as { thread_id: string; data: { total_tokens?: number | null; usage_source?: string } }[];
   const mine = turns.filter((t) => t.thread_id === id && t.data.usage_source !== 'session_log');
-  test.skip(!mine.length || mine.every((t) => t.data.total_tokens != null), 'This thread has no turn without a total in the latest page.');
+  expect(mine.length).toBeGreaterThan(1);
+  expect(mine.some((t) => t.data.total_tokens == null)).toBe(true);
   await page.goto(`/?page=Threads&range=all&id=${id}`);
   await expect(page.locator('.facts div', { hasText: 'Complete-turn tokens' }).locator('.lower-bound')).toHaveCount(1, { timeout: 30_000 });
 });
 
 test('the Models daily table marks days where some turns reported no total', async ({ page }) => {
-  await page.goto('/?page=Models&since=2026-11-01T00:00:00.000Z&until=2026-11-07T00:00:00.000Z');
+  await page.goto(`/?page=Models&since=${day(7)}&until=${day(1)}`);
   await page.waitForLoadState('networkidle');
   await page.getByRole('button', { name: 'Show as table' }).first().click();
   await expect(page.locator('table td.num', { hasText: /^≥ / }).first()).toBeVisible({ timeout: 30_000 });
 });
 
 test('Search says a future window is not yet known', async ({ page }) => {
-  const day = new Date(Date.now() + 5 * 86_400_000).toISOString().slice(0, 10);
-  await page.goto(`/?page=Search&q=dashboard&since=${day}T00:00:00.000Z`);
+  await page.goto(`/?page=Search&q=dashboard&since=${day(-5)}`);
   await expect(page.getByRole('heading', { name: 'Not yet' })).toBeVisible({ timeout: 30_000 });
 });
 
@@ -939,7 +973,7 @@ test('a resolution chosen by link stays lit while the chart falls back', async (
 test('a group with no turns in the window shows no share', async ({ page }) => {
   await open(page, '?range=24h');
   const toggle = page.locator('.idle-toggle');
-  test.skip(!(await toggle.count()), 'Every group ran in the last day.');
+  test.skip(LIVE && !(await toggle.count()), 'Every group ran in the last day.');
   const idle = page.locator('.model-lines li[data-idle]');
   await expect(idle).toHaveCount(0);
   await toggle.click();
@@ -948,7 +982,7 @@ test('a group with no turns in the window shows no share', async ({ page }) => {
 });
 
 test('a future window keeps its stated end, and nothing below the headline reads as empty', async ({ page }) => {
-  await open(page, '?since=2026-11-20T00:00:00.000Z&until=2026-11-22T00:00:00.000Z');
+  await open(page, `?since=${day(-12)}&until=${day(-14)}`);
   await expect(page.locator('.ts-read')).not.toContainText('now');
   await expect(page.getByRole('heading', { name: 'Not yet' })).toBeVisible({ timeout: 30_000 });
   await expect(page.locator('main')).not.toContainText('No records match');
@@ -969,11 +1003,14 @@ test('a range the page does not know opens the default week', async ({ page }) =
 });
 
 test('tokens by type count provider turns only, never session-log hours', async ({ page, request }) => {
-  const since = '2026-09-01T00:00:00.000Z';
-  const until = '2026-09-30T23:59:59.999Z';
+  // Provider turns and session-log hours side by side.
+  const since = day(FIXTURE.logsEnd + 23);
+  const until = day(FIXTURE.logsEnd - 6, 23, 59, 59, 999);
   const rows = (await (await request.get(`/api/v1/model-turns?since=${since}&until=${until}&limit=20000`)).json()).data as { data: { usage_source?: string } }[];
   const turns = rows.filter((r) => r.data.usage_source !== 'session_log').length;
-  test.skip(turns === rows.length, 'No session-log hours in this window.');
+  test.skip(LIVE && turns === rows.length, 'No session-log hours in this window.');
+  expect(turns).toBeGreaterThan(0);
+  expect(turns).toBeLessThan(rows.length);
   await open(page, `?since=${since}&until=${until}`);
   await expect(page.locator('.type-coverage')).toBeVisible({ timeout: 60_000 });
   const of = Number((await page.locator('.type-coverage small').innerText()).match(/of ([\d,]+) turns/)![1].replace(/,/g, ''));
@@ -995,7 +1032,7 @@ test('a chosen provider is counted exactly, including turns that name no model',
 test('groups with no turns fold under one button, and a chosen one stays in view', async ({ page }) => {
   await open(page, '?range=24h');
   const toggle = page.locator('.idle-toggle');
-  test.skip(!(await toggle.count()), 'Every group ran in the last day.');
+  test.skip(LIVE && !(await toggle.count()), 'Every group ran in the last day.');
   const folded = Number(/\d+/.exec((await toggle.textContent()) ?? '')![0]);
   const before = await page.locator('.model-lines li').count();
   await toggle.click();

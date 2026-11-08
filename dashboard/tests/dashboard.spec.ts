@@ -1,7 +1,8 @@
 import AxeBuilder from '@axe-core/playwright';
-import { expect, test, type APIRequestContext } from '@playwright/test';
+import { type APIRequestContext } from '@playwright/test';
+import { expect, FIXTURE, fixtureOnly, test } from './fixture';
 
-// These journeys run against a live service and imported history. Numbers are compared with the API, never hard-coded.
+// These journeys run against the fixture history (tests/fixture.ts), or a live service. Numbers are compared with the API.
 const api = async (request: APIRequestContext, route: string) => {
   const res = await request.get(`/api/v1/${route}`);
   expect(res.ok(), `${route} responded`).toBeTruthy();
@@ -26,7 +27,7 @@ test('real history project and thread drilldown', async ({ page, request }) => {
 
   await page.getByRole('link', { name: 'Projects', exact: true }).click();
   await expect(page).toHaveURL(/page=Projects/);
-  await expect(page.locator('tbody')).toContainText('justrunit');
+  await expect(page.locator('tbody')).toContainText(FIXTURE.project);
 
   await page.locator('.row-link').first().click();
   await expect(page.getByRole('heading', { name: 'Threads', level: 1 })).toBeVisible();
@@ -93,12 +94,12 @@ test('dashboard screenshot and narrow layout', async ({ page, request }) => {
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
 });
 
-test('unsupported quota is explicit', async ({ page, request }) => {
-  const current = await api(request, 'quota/current');
-  test.skip(current.data.length > 0, 'Quota snapshots now exist, so the unavailable state no longer applies.');
+test('unsupported quota is explicit', async ({ page }) => {
+  // No quota is ever collected here, which the history cannot show once readings exist, so the quota reads are empty.
+  await page.route('**/api/v1/quota/**', (route) => route.fulfill({ json: { data: [], capture_quality: 'partial', limit: 100, offset: 0, timezone: 'UTC', null_semantics: 'null means unavailable, never zero' } }));
   await page.goto('/?page=Quota+and+Resets');
   await expect(page.getByRole('heading', { name: 'No quota snapshots collected' })).toBeVisible();
-  await expect(page.getByText('Historical window without snapshots', { exact: true })).toBeVisible();
+  await expect(page.getByText('No agent has reported its limits yet', { exact: false })).toBeVisible();
 });
 
 test('filters live in the URL, reach the API and survive reload', async ({ page, request }) => {

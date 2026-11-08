@@ -1,4 +1,5 @@
-import { expect, test, type Page } from '@playwright/test';
+import { type Page } from '@playwright/test';
+import { expect, NOW, test } from './fixture';
 
 // Page totals must come from the whole window, not from whatever sample happened to load. These replace API responses.
 const envelope = (data: unknown[]) => ({ data, capture_quality: 'partial', limit: 100, offset: 0, timezone: 'UTC', null_semantics: 'null means unavailable, never zero' });
@@ -27,7 +28,7 @@ const paged = (rows: { occurred_at: string }[], url: URL) => {
 };
 
 test('the tool headline counts every call in the window, not the loaded sample', async ({ page }) => {
-  const at = new Date(Date.now() - 3_600_000).toISOString();
+  const at = new Date(NOW - 3_600_000).toISOString();
   await mockApi(page, (name, url) => {
     if (name === 'overview') return envelope([{ kind: 'tool', count: 250_000 }]);
     if (name === 'usage/tool-summary') return envelope([{ calls: 250_000, failed: 2_500, statusKnown: 250_000, p50: 120, p95: 900, timed: 250_000, shell: 100_000, exitKnown: 90_000, nonZero: 900 }]);
@@ -66,7 +67,7 @@ test('agent trees say nothing about threads outside an empty window', async ({ p
 
 test('the event feed filters by kind on the service, so a page is full', async ({ page }) => {
   const kinds: (string | null)[] = [];
-  const at = new Date(Date.now() - 3_600_000).toISOString();
+  const at = new Date(NOW - 3_600_000).toISOString();
   await mockApi(page, (name, url) => {
     if (name === 'overview') return envelope([{ kind: 'tool', count: 25 }, { kind: 'prompt', count: 500 }]);
     if (name === 'timeline') {
@@ -82,7 +83,7 @@ test('the event feed filters by kind on the service, so a page is full', async (
 });
 
 test('activity never counts more active days than the window holds', async ({ page }) => {
-  const now = Date.now();
+  const now = NOW;
   await mockApi(page, (name) => {
     if (name === 'activity/hourly') return envelope(Array.from({ length: 8 }, (_, i) => ({ hour: new Date(Math.floor((now - i * 86_400_000) / 3_600_000) * 3_600_000).toISOString(), prompts: 2 })));
   });
@@ -144,7 +145,7 @@ test('on a phone every navigation icon shows its name', async ({ page }) => {
 });
 
 test('a quota window at 80% or more is marked on every page, and its pace is a labelled projection', async ({ page }) => {
-  const now = Date.now();
+  const now = NOW;
   const reset = new Date(now + 3 * 3_600_000).toISOString();
   const quota = { provider: 'claude', window: 'five_hour', used_percentage: 85, remaining_percentage: 15, reset_at: reset, reset_passed: false, window_minutes: 300, sampled_at: new Date(now - 60_000).toISOString(), source: 'claude_usage_cache', plan: null };
   // Readings rising 20 points an hour, so a 5-hour window at 85% fills before its reset.
@@ -165,7 +166,7 @@ test('a quota window at 80% or more is marked on every page, and its pace is a l
 });
 
 test('no warning when every window is below 80% or has reset', async ({ page }) => {
-  const now = Date.now();
+  const now = NOW;
   await mockApi(page, (name) => {
     if (name === 'quota/current') return envelope([
       { provider: 'codex', window: 'weekly', used_percentage: 40, reset_at: new Date(now + 86_400_000).toISOString(), reset_passed: false, window_minutes: 10080, sampled_at: new Date(now).toISOString() },
@@ -178,7 +179,7 @@ test('no warning when every window is below 80% or has reset', async ({ page }) 
 });
 
 test('a thread whose turns did not all report a total reads as a lower bound', async ({ page }) => {
-  const at = (h: number) => new Date(Date.now() - h * 3_600_000).toISOString();
+  const at = (h: number) => new Date(NOW - h * 3_600_000).toISOString();
   const thread = entity('thread', 'th1', at(5), { title: 'Partly reported', thread_type: 'primary' }, { thread_id: 'th1' });
   const turns = [
     entity('model_turn', 'm1', at(4), { total_tokens: 1000, usage_status: 'complete', model: 'gpt-6.1-sol' }, { thread_id: 'th1' }),
@@ -195,7 +196,7 @@ test('a thread whose turns did not all report a total reads as a lower bound', a
 });
 
 test('on a phone the quota warning shows in the top bar and the current page is scrolled into the nav', async ({ page }) => {
-  const now = Date.now();
+  const now = NOW;
   await page.setViewportSize({ width: 390, height: 844 });
   await mockApi(page, (name) => {
     if (name === 'quota/current') return envelope([{ provider: 'claude', window: 'five_hour', used_percentage: 90, reset_at: new Date(now + 3_600_000).toISOString(), reset_passed: false, window_minutes: 300, sampled_at: new Date(now).toISOString() }]);
@@ -210,7 +211,7 @@ test('on a phone the quota warning shows in the top bar and the current page is 
 });
 
 test('a quota track whose window reset after its last reading says reset, not an old percentage', async ({ page }) => {
-  const now = Date.now();
+  const now = NOW;
   const reset = new Date(now - 30 * 60_000).toISOString();
   const samples = [3, 2, 1].map((h, i) => ({ provider: 'claude', window: 'five_hour', sampled_at: new Date(now - h * 3_600_000).toISOString(), used_percentage: 40 + i * 10, reset_at: reset }));
   await mockApi(page, (name) => {
@@ -224,7 +225,7 @@ test('a quota track whose window reset after its last reading says reset, not an
 });
 
 test('a thread whose totals sum to 0 while other turns reported none is not an exact zero', async ({ page }) => {
-  const at = (h: number) => new Date(Date.now() - h * 3_600_000).toISOString();
+  const at = (h: number) => new Date(NOW - h * 3_600_000).toISOString();
   const thread = entity('thread', 'th0', at(5), { title: 'Zero with gaps', thread_type: 'primary' }, { thread_id: 'th0' });
   const turns = [
     entity('model_turn', 'z1', at(4), { total_tokens: 0, usage_status: 'complete', model: 'gpt-6.1-sol' }, { thread_id: 'th0' }),

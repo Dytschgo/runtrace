@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './fixture';
 
 test('cache writes expose real API values and coverage across token panels', async ({ page, request }, testInfo) => {
   const response = await request.get('/api/v1/models');

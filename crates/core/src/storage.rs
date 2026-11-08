@@ -8,8 +8,29 @@ pub struct Store {
     /// Where records being written came from. Only a one-time import of an older source changes this.
     pub capture_source: std::cell::Cell<&'static str>,
 }
+/// The instant T3UI_NOW pins the service's clock to, for repeatable tests. Unset, the system clock is used.
+pub fn pinned_now() -> Option<chrono::DateTime<chrono::Utc>> {
+    std::env::var("T3UI_NOW")
+        .ok()
+        .and_then(|v| chrono::DateTime::parse_from_rfc3339(&v).ok())
+        .map(|d| d.with_timezone(&chrono::Utc))
+}
+/// The service's clock: the pinned instant if there is one, otherwise the system clock.
+pub fn clock() -> chrono::DateTime<chrono::Utc> {
+    pinned_now().unwrap_or_else(chrono::Utc::now)
+}
 pub fn now() -> String {
-    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+    clock().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+}
+/// "Now" in SQL. Exactly `now()` unless the clock is pinned, then that instant as a literal.
+pub fn now_sql() -> String {
+    match pinned_now() {
+        Some(t) => format!(
+            "TIMESTAMPTZ '{}'",
+            t.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+        ),
+        None => "now()".into(),
+    }
 }
 pub fn id(instance: &str, kind: &str, source: &str) -> String {
     hash(&format!("{instance}\0{kind}\0{source}"))

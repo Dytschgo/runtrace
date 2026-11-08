@@ -95,6 +95,12 @@ enum Command {
     Retention {
         action: String,
     },
+    /// Fills an empty database with the synthetic history the browser tests read, placed relative to --now. Not for real use.
+    #[command(hide = true)]
+    Fixture {
+        #[arg(long)]
+        now: String,
+    },
 }
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -104,6 +110,12 @@ async fn main() -> Result<()> {
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
     let cli = Cli::parse();
+    if let Ok(pinned) = std::env::var("T3UI_NOW") {
+        anyhow::ensure!(
+            t3ui_core::storage::pinned_now().is_some(),
+            "T3UI_NOW must be an RFC 3339 instant, such as 2026-11-08T13:37:00Z, not {pinned:?}"
+        );
+    }
     let c = Config::load()?;
     if let Command::ValidateSource { ref project } = cli.command {
         println!("{}", importer::validate_source(&c, project.as_deref())?);
@@ -303,6 +315,9 @@ async fn main() -> Result<()> {
             } else {
                 println!("{}", t3ui_core::archive::run(&c, &s, &action)?)
             }
+        }
+        Command::Fixture { now } => {
+            println!("{}", t3ui_core::fixture::build(&s, &c.source.instance_id, &now)?)
         }
         Command::Retention { action } => {
             anyhow::ensure!(action == "run", "Use retention run");
