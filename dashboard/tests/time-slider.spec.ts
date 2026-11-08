@@ -1,6 +1,7 @@
-import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
+import { type APIRequestContext, type Page } from '@playwright/test';
+import { expect, LIVE, pinClock, test } from './fixture';
 
-// The slider against real history. Totals are compared with the API, never hard-coded.
+// The slider against the fixture history, or a live service. Totals are compared with the API, never hard-coded.
 const api = async (request: APIRequestContext, route: string) => {
   const res = await request.get(`/api/v1/${route}`);
   expect(res.ok(), `${route} responded`).toBeTruthy();
@@ -41,14 +42,15 @@ test('dragging follows the data without a request, and agrees with the service o
   await expect(page).toHaveURL(/since=/);
   const since = new URL(page.url()).searchParams.get('since')!;
   await page.waitForLoadState('networkidle');
-  // Capture keeps running during the test, so the two reads are compared closely rather than exactly.
+  // A live service keeps capturing during the test, so there the two reads are compared closely. The fixture never changes.
   const shown = async () => Number((await hero.getAttribute('title'))!.replace(/[^0-9]/g, ''));
   const windowed = await modelTotal(request, `?since=${encodeURIComponent(since)}`);
-  await expect.poll(async () => Math.abs((await shown()) - windowed) / windowed).toBeLessThan(0.002);
+  const agrees = async () => (LIVE ? Math.abs((await shown()) - windowed) / windowed < 0.002 : (await shown()) === windowed);
+  await expect.poll(agrees).toBe(true);
 
   await page.reload();
   await page.waitForLoadState('networkidle');
-  await expect.poll(async () => Math.abs((await shown()) - windowed) / windowed).toBeLessThan(0.002);
+  await expect.poll(agrees).toBe(true);
   await expect(page.locator('.ts-start')).not.toHaveAttribute('aria-valuenow', '0');
 });
 
@@ -89,7 +91,8 @@ test('a preset moves the handles, and any window reaches other pages', async ({ 
 });
 
 test('reduced motion shows the final state with nothing looping', async ({ browser }) => {
-  const context = await browser.newContext({ reducedMotion: 'reduce' });
+  const context = await browser.newContext({ reducedMotion: 'reduce', timezoneId: 'Europe/Zurich' });
+  await pinClock(context);
   const page = await context.newPage();
   await page.goto('/?range=all');
   await page.waitForLoadState('networkidle');

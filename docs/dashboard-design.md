@@ -130,10 +130,10 @@ The overview browser test used to write `../docs/screenshots/overview.png`, whic
 cd dashboard
 npm run build
 npm test
-RUNTRACE_BASE_URL=http://127.0.0.1:4310 npx playwright test
+npx playwright test
 ```
 
-`RUNTRACE_BASE_URL` selects the service under test. `RUNTRACE_API` points `vite preview` at another backend, so a build can be checked without replacing a deployed one.
+The browser tests build and serve a synthetic fixture with a pinned clock by default (see development.md). `RUNTRACE_BASE_URL` selects a running service instead. `RUNTRACE_API` points `vite preview` at another backend, so a build can be checked without replacing a deployed one.
 
 ## Remaining API needs
 

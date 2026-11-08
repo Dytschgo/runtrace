@@ -2,6 +2,7 @@ pub mod analytics;
 pub mod archive;
 pub mod compression;
 pub mod config;
+pub mod fixture;
 pub mod importer;
 pub mod legacy;
 pub mod session_logs;

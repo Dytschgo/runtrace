@@ -1,4 +1,5 @@
-import { expect, test, type Page } from '@playwright/test';
+import { type Page } from '@playwright/test';
+import { expect, NOW, test } from './fixture';
 
 // These journeys replace API responses in the browser, so they cover states that real history cannot produce on demand.
 const envelope = (data: unknown[]) => ({ data, capture_quality: 'partial', limit: 100, offset: 0, timezone: 'UTC', null_semantics: 'null means unavailable, never zero' });
@@ -108,7 +109,7 @@ test('richer optional data appears without a frontend change', async ({ page }) 
   await mockApi(page, (name) => {
     if (name === 'models') return envelope([{ model: 'm-1', observed_runs: 2, calls: 5, input_tokens: 1000, output_tokens: 200, total_tokens: 1200, capture_quality: 'partial' }]);
     if (name === 'overview') return envelope([{ kind: 'run', count: 2 }]);
-    if (name === 'quota/current') return envelope([{ provider: 'codex', remaining_percentage: 42, sampled_at: new Date(Date.now() - 600_000).toISOString(), reset_at: new Date(Date.now() + 86_400_000).toISOString(), capture_quality: 'complete' }]);
+    if (name === 'quota/current') return envelope([{ provider: 'codex', remaining_percentage: 42, sampled_at: new Date(NOW - 600_000).toISOString(), reset_at: new Date(NOW + 86_400_000).toISOString(), capture_quality: 'complete' }]);
     if (name === 'quota/windows') return envelope([{ provider: 'codex', unused_percentage_before_reset: 20, reset_at: '2026-11-05T12:00:00Z', capture_quality: 'partial' }]);
     return undefined;
   });
