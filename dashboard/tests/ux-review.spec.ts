@@ -1,4 +1,5 @@
-import { expect, test, type Page } from '@playwright/test';
+import type { Page } from '@playwright/test';
+import { expect, pinClock, test } from './fixture';
 
 // Findings from the keyboard, error-state and phone reviews of 8 Nov, each kept fixed by a test.
 
@@ -76,6 +77,7 @@ test('the footer is the page footer landmark', async ({ page }) => {
 
 test('short controls take taps from a 44px band on a touch screen', async ({ browser }) => {
   const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+  await pinClock(ctx);
   const page = await ctx.newPage();
   await page.goto('/?range=1h');
   const pill = page.locator('.segmented-track label').first();
