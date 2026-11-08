@@ -8,7 +8,7 @@ anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 chrono.workspace = true
-duckdb = { version = "1.20000.1", features = ["bundled"] }
+duckdb = { version = "1.20000.1", features = ["bundled", "json", "parquet"] }
 rusqlite = { version = "0.38", features = ["bundled"] }
 sha2 = "0.10"
 regex = "1"

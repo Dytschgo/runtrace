@@ -39,7 +39,14 @@ impl Store {
         if let Some(p) = std::path::Path::new(&c.storage.duckdb_path).parent() {
             std::fs::create_dir_all(p)?;
         }
-        let conn = Connection::open(&c.storage.duckdb_path)?;
+        // The JSON, Parquet and ICU extensions are built into the program. DuckDB would otherwise fetch missing ones from
+        // the internet the first time a query needs them, which fails offline and runs code nobody shipped.
+        let conn = Connection::open_with_flags(
+            &c.storage.duckdb_path,
+            duckdb::Config::default()
+                .with("autoinstall_known_extensions", "false")?
+                .with("autoload_known_extensions", "false")?,
+        )?;
         conn.execute_batch(include_str!("../../../migrations/001_initial.sql"))?;
         conn.execute_batch(include_str!("../../../migrations/002_revision_cache.sql"))?;
         conn.execute_batch(&format!(
@@ -400,7 +407,7 @@ pub fn hydrate_more_facts(conn: &Connection) -> Result<()> {
     let end: i64 = conn.query_row("SELECT coalesce(max(rowid),-1)+1 FROM records", [], |r| {
         r.get(0)
     })?;
-    let sql = "UPDATE records SET  cache_write_tokens=try_cast(json_extract_string(data,'$.cache_write_tokens') AS BIGINT),  exit_code=try_cast(json_extract_string(data,'$.exit_code') AS BIGINT),  agent_provider=coalesce(nullif(json_extract_string(data,'$.provider'),''),nullif(regexp_extract(coalesce(json_extract_string(data,'$.provider_thread_id'),''),'(?:^|:)provider:([^:]+)',1),'')),  resolved_model=nullif(json_extract_string(data,'$.resolved_model'),''),  usage_scope=json_extract_string(data,'$.usage_scope'),  usage_source=json_extract_string(data,'$.usage_source'),  has_subagents=try_cast(json_extract_string(data,'$.has_subagents') AS BOOLEAN),  elapsed_ms=CASE WHEN duration_ms>=0 THEN duration_ms WHEN date_diff('millisecond',try_cast(json_extract_string(data,'$.started_at') AS TIMESTAMPTZ),try_cast(json_extract_string(data,'$.completed_at') AS TIMESTAMPTZ))>=0 THEN date_diff('millisecond',try_cast(json_extract_string(data,'$.started_at') AS TIMESTAMPTZ),try_cast(json_extract_string(data,'$.completed_at') AS TIMESTAMPTZ)) END,  preview_doc=json_merge_patch(json_merge_patch(data,'{\"content_ciphertext\":null,\"repository_path_encrypted\":null,\"content_redacted\":null}'),json_object('content_redacted',left(json_extract_string(data,'$.content_redacted'),512),'content_truncated',length(json_extract_string(data,'$.content_redacted'))>512))::VARCHAR,  facts_version=3 WHERE facts_version IN (1,2)";
+    let sql = "UPDATE records SET  cache_write_tokens=try_cast(json_extract_string(data,'$.cache_write_tokens') AS BIGINT),  exit_code=try_cast(json_extract_string(data,'$.exit_code') AS BIGINT),  agent_provider=coalesce(nullif(json_extract_string(data,'$.provider'),''),nullif(regexp_extract(coalesce(json_extract_string(data,'$.provider_thread_id'),''),'(?:^|:)provider:([^:]+)',1),'')),  resolved_model=nullif(json_extract_string(data,'$.resolved_model'),''),  usage_scope=json_extract_string(data,'$.usage_scope'),  usage_source=json_extract_string(data,'$.usage_source'),  has_subagents=try_cast(json_extract_string(data,'$.has_subagents') AS BOOLEAN),  elapsed_ms=CASE WHEN duration_ms>=0 THEN duration_ms WHEN (epoch_ms(try_cast(json_extract_string(data,'$.completed_at') AS TIMESTAMPTZ))-epoch_ms(try_cast(json_extract_string(data,'$.started_at') AS TIMESTAMPTZ)))>=0 THEN (epoch_ms(try_cast(json_extract_string(data,'$.completed_at') AS TIMESTAMPTZ))-epoch_ms(try_cast(json_extract_string(data,'$.started_at') AS TIMESTAMPTZ))) END,  preview_doc=json_merge_patch(json_merge_patch(data,'{\"content_ciphertext\":null,\"repository_path_encrypted\":null,\"content_redacted\":null}'),json_object('content_redacted',left(json_extract_string(data,'$.content_redacted'),512),'content_truncated',length(json_extract_string(data,'$.content_redacted'))>512))::VARCHAR,  facts_version=3 WHERE facts_version IN (1,2)";
     // The bounds are written into the statement: as parameters they are not used to narrow the scan, and every slice reads the whole table.
     tracing::info!(
         operation = "hydrate_more_facts",
@@ -527,6 +534,9 @@ pub fn hydrate_search(conn: &Connection) -> Result<()> {
 
 /// Clear every copy of expired content in one statement, including derived caches.
 pub fn retain_content(conn: &Connection, days: i64) -> Result<()> {
-    conn.execute("UPDATE records SET data=json_merge_patch(data,'{\"content_redacted\":null,\"content_ciphertext\":null}'),search_text=NULL,search_version=2,facts_version=0 WHERE kind IN ('prompt','answer','tool','agent') AND try_cast(occurred_at AS TIMESTAMP)< current_timestamp - INTERVAL 1 DAY * ?", [days])?;
+    // The cutoff is worked out here: date arithmetic on time-zone-aware values needs DuckDB's ICU extension, which is not built in.
+    let now = pinned_now().unwrap_or_else(chrono::Utc::now);
+    let cutoff = (now - chrono::Duration::days(days)).to_rfc3339();
+    conn.execute("UPDATE records SET data=json_merge_patch(data,'{\"content_redacted\":null,\"content_ciphertext\":null}'),search_text=NULL,search_version=2,facts_version=0 WHERE kind IN ('prompt','answer','tool','agent') AND try_cast(occurred_at AS TIMESTAMPTZ) < try_cast(? AS TIMESTAMPTZ)", [cutoff])?;
     hydrate_facts(conn)
 }
