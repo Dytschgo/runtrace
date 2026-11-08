@@ -1,4 +1,7 @@
+mod assets;
+mod control;
 mod mcp;
+mod update;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use serde_json::{Value, json};
@@ -10,13 +13,42 @@ use t3ui_core::{
     storage::Store,
 };
 #[derive(Parser)]
-#[command(name = "t3ui", version)]
+#[command(name = "runtrace", version, about = "Local analytics for coding agents, read from T3 Code history.")]
 struct Cli {
+    /// Settings file to use, instead of the one in your Runtrace folder.
+    #[arg(long, global = true)]
+    config: Option<std::path::PathBuf>,
     #[command(subcommand)]
     command: Command,
 }
 #[derive(Subcommand)]
 enum Command {
+    /// Start Runtrace in the background (updating the database first) and print the dashboard address.
+    Start {
+        /// Open the dashboard in your browser once it is running.
+        #[arg(long)]
+        open: bool,
+    },
+    /// Stop the background service.
+    Stop,
+    /// Show whether Runtrace is running, its version, and where its settings, data and logs are.
+    Status,
+    /// Open the dashboard in your browser.
+    Open,
+    /// Install the latest release from GitHub, after a backup of the database.
+    Update {
+        /// Only report whether a newer version exists.
+        #[arg(long)]
+        check: bool,
+        /// Install without asking.
+        #[arg(long)]
+        yes: bool,
+        /// Start Runtrace after updating even if it was not running.
+        #[arg(long)]
+        restart: bool,
+    },
+    /// Start Runtrace when you log in (on), or stop doing so (off).
+    Autostart { action: String },
     Init,
     Doctor,
     /// Bring the database up to date, with progress, before the service starts. start.ps1 runs this first.
@@ -110,13 +142,63 @@ async fn main() -> Result<()> {
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
     let cli = Cli::parse();
-    if let Ok(pinned) = std::env::var("T3UI_NOW") {
+    if let Some(pinned) = t3ui_core::config::env("NOW") {
         anyhow::ensure!(
             t3ui_core::storage::pinned_now().is_some(),
-            "T3UI_NOW must be an RFC 3339 instant, such as 2026-11-08T13:37:00Z, not {pinned:?}"
+            "RUNTRACE_NOW must be an RFC 3339 instant, such as 2026-11-08T13:37:00Z, not {pinned:?}"
         );
     }
-    let c = Config::load()?;
+    let config_path = match &cli.config {
+        Some(p) => p.clone(),
+        None => t3ui_core::config::config_path()?,
+    };
+    // Absolute, so a service or updater started from here finds the same settings from any folder.
+    let config_path = std::path::absolute(&config_path)?;
+    let c = Config::load_from(&config_path)?;
+    // These run beside a live service, which holds the database, so they never open it here.
+    match &cli.command {
+        Command::Start { open } => return control::start(&c, &config_path, *open),
+        Command::Stop => {
+            println!("{}", if control::stop(&c)? { "Runtrace stopped." } else { "Runtrace was not running." });
+            return Ok(());
+        }
+        Command::Status => {
+            control::status(&c, &config_path);
+            return Ok(());
+        }
+        Command::Open => {
+            if control::running(&c).is_none() {
+                control::start(&c, &config_path, false)?;
+            }
+            return control::open(&c);
+        }
+        Command::Autostart { action } => {
+            anyhow::ensure!(action == "on" || action == "off", "Use `runtrace autostart on` or `runtrace autostart off`");
+            return control::autostart(action == "on", &config_path);
+        }
+        Command::Update { check, yes, restart } => {
+            let status = update::check(&c)?;
+            if !status["available"].as_bool().unwrap_or(false) {
+                println!("Runtrace {} is up to date (latest release: {}).", update::VERSION, status["latest"].as_str().unwrap_or("none"));
+                return Ok(());
+            }
+            println!("Runtrace {} is available (you have {}). {}", status["latest"].as_str().unwrap_or("?"), update::VERSION, status["url"].as_str().unwrap_or(""));
+            if *check {
+                return Ok(());
+            }
+            if !*yes {
+                print!("Install it now? The database is backed up first. [y/N] ");
+                std::io::Write::flush(&mut std::io::stdout())?;
+                let mut answer = String::new();
+                std::io::stdin().read_line(&mut answer)?;
+                if !answer.trim().eq_ignore_ascii_case("y") {
+                    return Ok(());
+                }
+            }
+            return update::apply(&c, &config_path, *restart);
+        }
+        _ => {}
+    }
     if let Command::ValidateSource { ref project } = cli.command {
         println!("{}", importer::validate_source(&c, project.as_deref())?);
         return Ok(());
@@ -155,6 +237,7 @@ async fn main() -> Result<()> {
     let opened = std::time::Instant::now();
     let s = Store::open(&c)?;
     match cli.command {
+        Command::Start { .. } | Command::Stop | Command::Status | Command::Open | Command::Update { .. } | Command::Autostart { .. } => unreachable!("handled above"),
         Command::Migrate => println!(
             "Database is up to date ({:.1} s)",
             opened.elapsed().as_secs_f64()
@@ -239,7 +322,7 @@ async fn main() -> Result<()> {
                 tokio::select! {_=tokio::signal::ctrl_c()=>break,_=tokio::time::sleep(std::time::Duration::from_secs(delay))=>{}}
             }
         }
-        Command::Serve => serve(c, s).await?,
+        Command::Serve => serve(c, s, config_path).await?,
         Command::Mcp { .. } => unreachable!(),
         Command::ValidateSource { .. } => unreachable!(),
         Command::Storage { action, against } => {
@@ -328,7 +411,7 @@ async fn main() -> Result<()> {
     Ok(())
 }
 type Shared = Arc<Mutex<Store>>;
-async fn serve(c: Config, s: Store) -> Result<()> {
+async fn serve(c: Config, s: Store, config_path: std::path::PathBuf) -> Result<()> {
     use axum::{Router, routing::get};
     let addr = format!("{}:{}", c.server.host, c.server.port);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
@@ -378,7 +461,69 @@ async fn serve(c: Config, s: Store) -> Result<()> {
             }
         });
     }
+    // Whether a newer release exists, checked shortly after starting and then once a day. Nothing installs on its own.
+    let update_status = Arc::new(Mutex::new(json!({"current":update::VERSION,"available":false,"checking":c.update.check})));
+    if c.update.check {
+        let status = update_status.clone();
+        let cfg = c.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_secs(20)).await;
+            loop {
+                let cfg2 = cfg.clone();
+                let result = tokio::task::spawn_blocking(move || update::check(&cfg2)).await;
+                {
+                    let mut s = status.lock().unwrap();
+                    match result {
+                        Ok(Ok(v)) => *s = v,
+                        // A failed check keeps what was known and says when it failed; the dashboard shows nothing for it.
+                        _ => {
+                            s["error"] = json!("check_failed");
+                            s["checked_at"] = json!(t3ui_core::storage::now());
+                        }
+                    }
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(24 * 3600)).await;
+            }
+        });
+    }
+    let read_status = update_status.clone();
+    let apply_config = c.clone();
+    let apply_path = config_path.clone();
+    let port = c.server.port;
     let app = Router::new()
+        .route(
+            "/api/v1/update",
+            get(move || {
+                let status = read_status.clone();
+                async move { axum::Json(status.lock().unwrap().clone()) }
+            }),
+        )
+        .route(
+            "/api/v1/update/apply",
+            axum::routing::post(move |headers: axum::http::HeaderMap| {
+                let cfg = apply_config.clone();
+                let path = apply_path.clone();
+                let status = update_status.clone();
+                async move {
+                    use axum::http::StatusCode;
+                    // Only this computer's own dashboard may ask. A web page elsewhere cannot set this header without the
+                    // service agreeing to it first, and it never does, so a click on another site cannot start an update.
+                    let header = |k: &str| headers.get(k).and_then(|v| v.to_str().ok()).unwrap_or("");
+                    let local = |h: &str| [format!("127.0.0.1:{port}"), format!("localhost:{port}"), format!("[::1]:{port}")].iter().any(|x| h == x);
+                    let origin_ok = header("origin").is_empty() || header("origin").strip_prefix("http://").is_some_and(local);
+                    if header("x-runtrace-action") != "update" || !local(header("host")) || !origin_ok {
+                        return (StatusCode::FORBIDDEN, axum::Json(json!({"error":{"code":"forbidden","message":"Updates can only be started from this computer's dashboard"}})));
+                    }
+                    if status.lock().unwrap()["available"] != json!(true) {
+                        return (StatusCode::CONFLICT, axum::Json(json!({"error":{"code":"no_update","message":"No newer version is known"}})));
+                    }
+                    match update::spawn_apply(&cfg, &path) {
+                        Ok(()) => (StatusCode::ACCEPTED, axum::Json(json!({"started":true}))),
+                        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, axum::Json(json!({"error":{"code":"update_failed","message":e.to_string()}}))),
+                    }
+                }
+            }),
+        )
         .route(
             "/health/live",
             get(|| async { axum::Json(json!({"status":"live"})) }),
@@ -389,22 +534,34 @@ async fn serve(c: Config, s: Store) -> Result<()> {
                 let status = ready_status.clone();
                 let identity = storage_identity.clone();
                 async move {
-                    axum::Json(json!({"ready":true,"pid":std::process::id(),"storage_identity":identity,"collector":status.lock().unwrap().clone()}))
+                    axum::Json(json!({"ready":true,"version":update::VERSION,"pid":std::process::id(),"storage_identity":identity,"collector":status.lock().unwrap().clone()}))
                 }
             }),
         )
         .route("/api/v1/{*path}", get(api))
         .with_state(Arc::new(Mutex::new(s)))
-        .fallback_service(
+        ;
+    // The dashboard built into the program; a build without one serves the folder in the settings instead.
+    let app = if assets::embedded() {
+        app.fallback(assets::serve)
+    } else {
+        app.fallback_service(
             tower_http::services::ServeDir::new(&c.dashboard.assets_path).not_found_service(
                 tower_http::services::ServeFile::new(
                     std::path::Path::new(&c.dashboard.assets_path).join("index.html"),
                 ),
             ),
-        );
-    println!("T3 Usage Intelligence http://{addr}");
+        )
+    };
+    println!("Runtrace {} http://{addr}", update::VERSION);
     axum::serve(listener, app)
         .with_graceful_shutdown(async {
+            #[cfg(unix)]
+            {
+                let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).expect("signal handler");
+                tokio::select! { _ = tokio::signal::ctrl_c() => {}, _ = term.recv() => {} }
+            }
+            #[cfg(not(unix))]
             let _ = tokio::signal::ctrl_c().await;
         })
         .await?;

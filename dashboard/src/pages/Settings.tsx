@@ -63,12 +63,12 @@ export default function Settings() {
 
       <Panel title="Privacy and capture" sub="Default policy stores redacted text only. These change only through the CLI, so a browser session can never widen access.">
         <div className="command-grid">
-          <div><h3>Pause capture</h3><Command text="t3ui capture pause" /></div>
-          <div><h3>Resume capture</h3><Command text="t3ui capture resume" /></div>
-          <div><h3>Metadata only for a project</h3><Command text="t3ui project privacy <t3-project-id> metadata_only" /></div>
-          <div><h3>Purge a thread</h3><Command text="t3ui purge thread <t3-thread-id>" /></div>
-          <div><h3>Purge a project</h3><Command text="t3ui purge project <t3-project-id>" /></div>
-          <div><h3>Export redacted records</h3><Command text="t3ui export --output data/redacted-export.json" /></div>
+          <div><h3>Pause capture</h3><Command text="runtrace capture pause" /></div>
+          <div><h3>Resume capture</h3><Command text="runtrace capture resume" /></div>
+          <div><h3>Metadata only for a project</h3><Command text="runtrace project privacy <t3-project-id> metadata_only" /></div>
+          <div><h3>Purge a thread</h3><Command text="runtrace purge thread <t3-thread-id>" /></div>
+          <div><h3>Purge a project</h3><Command text="runtrace purge project <t3-project-id>" /></div>
+          <div><h3>Export redacted records</h3><Command text="runtrace export --output data/redacted-export.json" /></div>
         </div>
         <p className="fine">MCP exposes redacted content only. No endpoint decrypts full content. Stop the service before commands that write to the database.</p>
       </Panel>

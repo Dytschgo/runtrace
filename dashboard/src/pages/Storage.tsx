@@ -63,10 +63,10 @@ export default function Storage() {
       </div>
       <Panel title="Maintenance" sub="These run from the local CLI. Stop the service first, because DuckDB allows one writer process.">
         <div className="command-grid">
-          <div><h3>Inspect</h3><Command text="t3ui storage stats" /></div>
-          <div><h3>Back up events</h3><Command text="t3ui archive run" /></div>
-          <div><h3>Verify backups</h3><Command text="t3ui archive verify" /></div>
-          <div><h3>Apply content retention</h3><Command text="t3ui retention run" /></div>
+          <div><h3>Inspect</h3><Command text="runtrace storage stats" /></div>
+          <div><h3>Back up events</h3><Command text="runtrace archive run" /></div>
+          <div><h3>Verify backups</h3><Command text="runtrace archive verify" /></div>
+          <div><h3>Apply content retention</h3><Command text="runtrace retention run" /></div>
         </div>
         <p className="fine">Purges are logical deletes. Old database pages and existing backups must be removed separately.</p>
       </Panel>

@@ -1,6 +1,6 @@
 import { test as base, expect, type BrowserContext } from '@playwright/test';
 
-// The browser tests read a small synthetic history that `t3ui fixture --now <instant>` builds, served with the service's
+// The browser tests read a small synthetic history that `runtrace fixture --now <instant>` builds, served with the service's
 // clock pinned to that instant (global-setup.ts). Every browser context gets the same instant on its clock, so "now",
 // "today" and "the last hour" mean the same thing on every run and at any time of day.
 // Set RUNTRACE_BASE_URL to run against a live service instead: the clock is then left alone and the tests that need the

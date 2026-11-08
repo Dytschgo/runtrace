@@ -8,10 +8,9 @@ pub struct Store {
     /// Where records being written came from. Only a one-time import of an older source changes this.
     pub capture_source: std::cell::Cell<&'static str>,
 }
-/// The instant T3UI_NOW pins the service's clock to, for repeatable tests. Unset, the system clock is used.
+/// The instant RUNTRACE_NOW (or T3UI_NOW) pins the service's clock to, for repeatable tests. Unset, the system clock is used.
 pub fn pinned_now() -> Option<chrono::DateTime<chrono::Utc>> {
-    std::env::var("T3UI_NOW")
-        .ok()
+    crate::config::env("NOW")
         .and_then(|v| chrono::DateTime::parse_from_rfc3339(&v).ok())
         .map(|d| d.with_timezone(&chrono::Utc))
 }

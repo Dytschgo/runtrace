@@ -1,5 +1,6 @@
 [package]
-name = "t3ui"
+name = "runtrace"
+description = "Local analytics for coding agents, read from T3 Code history."
 version.workspace = true
 edition.workspace = true
 
@@ -8,9 +9,15 @@ t3ui-core = { path = "../core" }
 anyhow.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
+chrono.workspace = true
+dirs = "7"
 axum = "0.8"
 clap = { version = "4", features = ["derive"] }
 tower-http = { version = "0.6", features = ["fs", "trace", "timeout"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 ureq = { version = "3", features = ["json"] }
+rust-embed = { version = "8", features = ["mime-guess"] }
+self-replace = "1"
+sha2 = "0.10"
+hex = "0.4"

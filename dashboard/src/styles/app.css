@@ -696,6 +696,15 @@ pre { margin: 0; padding: 0.6rem 0.75rem; max-block-size: 24rem; overflow: auto;
 .dialog-head { position: sticky; inset-block-start: 0; z-index: 1; display: flex; justify-content: space-between; align-items: center; gap: 1rem; padding: 0.7rem 0.6rem 0.7rem 1rem; background: var(--surface-1); border-block-end: 1px solid var(--line); }
 .dialog-head h2 { display: flex; align-items: center; gap: 0.5rem; font-size: var(--text-md); overflow-wrap: anywhere; }
 .dialog-body { padding: 0.9rem 1rem 1rem; display: grid; gap: 0.5rem; }
+/* A newer release: one quiet chip in the top bar, and a dialog that explains, backs up and restarts. */
+.update-chip { position: relative; display: inline-flex; align-items: center; gap: 0.35rem; padding: 0.25rem 0.6rem; border: 1px solid var(--accent-ink); border-radius: 999px; color: var(--accent-ink); font-size: var(--text-xs); font-weight: 560; cursor: pointer; }
+.update-chip::after { content: ''; position: absolute; inset: min(0px, (100% - 44px) / 2) 0; }
+.update-chip:active { transform: scale(0.97); }
+@media (hover: hover) and (pointer: fine) { .update-chip:hover { background: color-mix(in oklch, var(--accent-ink) 14%, transparent); } }
+.update-body { max-inline-size: 38rem; }
+.update-notes { max-block-size: 12rem; overflow: auto; padding: 0.6rem 0.75rem; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-2); font-size: var(--text-xs); white-space: pre-wrap; overflow-wrap: anywhere; }
+.update-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-block-start: 0.25rem; }
+.update-go { background: var(--ink-1); color: var(--on-accent); border-color: var(--ink-1); }
 .dialog-body .btn { margin-block-start: 0.5rem; }
 .shortcuts { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 14rem), 1fr)); gap: 0.4rem 1.25rem; padding: 0.9rem 1rem 1.1rem; }
 .shortcuts > div { display: flex; align-items: center; gap: 0.6rem; }

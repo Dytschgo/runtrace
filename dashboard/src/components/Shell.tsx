@@ -13,6 +13,7 @@ import { nextDay } from '../lib/timeWindow';
 import { useSettings } from '../lib/settings';
 import { applyPatch, CHORDS, focusRequest, PAGES, pushSearch, useUrl, type PageName } from '../lib/url';
 import { Logo } from './Logo';
+import { UpdateNotice } from './UpdateNotice';
 import { TimeSlider } from './TimeSlider';
 import { AppLink, Segmented, SelectField } from './ui';
 
@@ -225,6 +226,7 @@ function Topbar({ searchRef }: { searchRef: React.RefObject<HTMLInputElement | n
           <input ref={searchRef} name="q" type="search" defaultValue={q} aria-label="Search captured content" placeholder="Search" maxLength={500} />
           <kbd aria-hidden="true">/</kbd>
         </form>
+        <UpdateNotice />
         <button type="button" className="icon-btn" aria-label="Refresh data" title="Refresh data" onClick={() => client.invalidateQueries()}>
           <RefreshCw size={15} aria-hidden="true" className={fetching ? 'spin' : undefined} />
         </button>
@@ -329,7 +331,7 @@ export function Shell({ children }: { children: ReactNode }) {
       <main className="main" ref={mainRef} id="content">
         {health.isError && (
           <div className="banner" role="alert">
-            <strong>Cannot reach the local service.</strong> Showing the last data loaded in this tab. Start it with <code>t3ui serve</code>.
+            <strong>Cannot reach the local service.</strong> Showing the last data loaded in this tab. Start it with <code>runtrace start</code>.
             <button type="button" className="link-btn" onClick={() => health.refetch()}>Check again</button>
           </div>
         )}

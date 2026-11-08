@@ -1,4 +1,4 @@
 @echo off
+rem Runs any runtrace command against this install folder. Kept under its old name so existing habits keep working.
 setlocal
-set "T3UI_CONFIG=%~dp0config\default.toml"
-"%~dp0bin\t3ui.exe" %*
+"%~dp0bin\runtrace.exe" --config "%~dp0config\default.toml" %*

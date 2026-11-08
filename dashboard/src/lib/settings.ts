@@ -1,7 +1,9 @@
 import { useSyncExternalStore } from 'react';
 
 export interface Settings { timezone: string; density: 'comfortable' | 'compact'; pageSize: number }
-export const DEFAULTS: Settings = { timezone: 'Europe/Zurich', density: 'comfortable', pageSize: 25 };
+/** The browser's own time zone, so a new install reads in local time wherever it runs. */
+const localZone = (() => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'; } catch { return 'UTC'; } })();
+export const DEFAULTS: Settings = { timezone: localZone, density: 'comfortable', pageSize: 25 };
 const KEY = 'runtrace.settings';
 
 function read(): Settings {

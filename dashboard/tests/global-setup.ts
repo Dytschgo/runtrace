@@ -13,9 +13,9 @@ const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.
 export const FIXTURE_PORT = Number(process.env.RUNTRACE_FIXTURE_PORT ?? 4398);
 
 function executable() {
-  const named = process.env.RUNTRACE_T3UI;
-  const exe = named ?? path.join(repo, 'target', 'release', process.platform === 'win32' ? 't3ui.exe' : 't3ui');
-  if (!fs.existsSync(exe)) throw new Error(`No service binary at ${exe}. Build it with "cargo build --release", or name one in RUNTRACE_T3UI.`);
+  const named = process.env.RUNTRACE_EXE ?? process.env.RUNTRACE_T3UI;
+  const exe = named ?? path.join(repo, 'target', 'release', process.platform === 'win32' ? 'runtrace.exe' : 'runtrace');
+  if (!fs.existsSync(exe)) throw new Error(`No service binary at ${exe}. Build it with "cargo build --release", or name one in RUNTRACE_EXE.`);
   return exe;
 }
 
@@ -35,7 +35,7 @@ async function ready(port: number, pid: number, child: ReturnType<typeof spawn>,
   let exited: number | null = null;
   child.once('exit', (code) => { exited = code ?? -1; });
   while (Date.now() < deadline) {
-    if (exited !== null) throw new Error(`t3ui serve exited with ${exited}. Log:\n${fs.readFileSync(log, 'utf8')}`);
+    if (exited !== null) throw new Error(`runtrace serve exited with ${exited}. Log:\n${fs.readFileSync(log, 'utf8')}`);
     try {
       const res = await fetch(`http://127.0.0.1:${port}/health/ready`);
       const body = await res.json() as { ready?: boolean; pid?: number };
@@ -47,7 +47,7 @@ async function ready(port: number, pid: number, child: ReturnType<typeof spawn>,
     }
     await new Promise((r) => setTimeout(r, 250));
   }
-  throw new Error(`t3ui serve did not become ready on port ${port}. Log:\n${fs.readFileSync(log, 'utf8')}`);
+  throw new Error(`runtrace serve did not become ready on port ${port}. Log:\n${fs.readFileSync(log, 'utf8')}`);
 }
 
 export default async function globalSetup() {
@@ -69,10 +69,10 @@ export default async function globalSetup() {
     '[source]', 'instance_id = "local"', 'display_name = "Fixture"', `sqlite_path = "${toml(path.join(dir, 'no-source.sqlite'))}"`, 'poll_seconds = 60', 'collect_on_serve = false', '',
   ].join('\n'));
 
-  const env: NodeJS.ProcessEnv = { ...process.env, T3UI_CONFIG: config, T3UI_NOW: now };
-  // These would point the service at another database or source.
-  delete env.T3UI_DB;
-  delete env.T3UI_SOURCE;
+  // The fixture never asks GitHub for releases.
+  const env: NodeJS.ProcessEnv = { ...process.env, RUNTRACE_CONFIG: config, RUNTRACE_NOW: now, RUNTRACE_NO_UPDATE_CHECK: '1' };
+  // These would point the service at another database, source, clock or settings file.
+  for (const k of ['T3UI_DB', 'T3UI_SOURCE', 'T3UI_CONFIG', 'T3UI_NOW', 'RUNTRACE_DB', 'RUNTRACE_SOURCE', 'RUNTRACE_HOME']) delete env[k];
   const dll = duckdbDir(exe);
   if (dll) {
     const key = Object.keys(env).find((k) => k.toLowerCase() === 'path') ?? 'PATH';
@@ -86,7 +86,7 @@ export default async function globalSetup() {
   const out = fs.openSync(log, 'a');
   const child = spawn(exe, ['serve'], { env, cwd: dir, stdio: ['ignore', out, out], windowsHide: true });
   const pid = child.pid;
-  if (!pid) throw new Error('t3ui serve did not start');
+  if (!pid) throw new Error('runtrace serve did not start');
   fs.writeFileSync(path.join(dir, 'serve.pid'), String(pid));
   try {
     await ready(FIXTURE_PORT, pid, child, log);

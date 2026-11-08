@@ -86,3 +86,24 @@ test('short controls take taps from a 44px band on a touch screen', async ({ bro
   expect(band).toBeGreaterThanOrEqual(43);
   await ctx.close();
 });
+
+test('a newer release is offered in the top bar and installs from its dialog', async ({ page }) => {
+  let applyHeader: string | undefined;
+  await page.route('**/api/v1/update', (r) => r.fulfill({ json: { current: '0.2.0', latest: '0.3.0', available: true, url: 'https://github.com/Dytschgo/runtrace/releases/tag/v0.3.0', notes: 'Faster pages\nA fix' } }));
+  await page.route('**/api/v1/update/apply', (r) => { applyHeader = r.request().headers()['x-runtrace-action']; return r.fulfill({ status: 202, json: { started: true } }); });
+  await page.goto('/?page=Settings');
+  await page.getByRole('button', { name: 'Update' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Runtrace 0.3.0 is available' });
+  await expect(dialog).toContainText('You have 0.2.0');
+  await expect(dialog).toContainText('Faster pages');
+  await dialog.getByRole('button', { name: 'Update now' }).click();
+  await expect(dialog.getByRole('status')).toContainText('Updating');
+  expect(applyHeader).toBe('update');
+});
+
+test('no update chip when the installed version is the latest', async ({ page }) => {
+  await page.route('**/api/v1/update', (r) => r.fulfill({ json: { current: '0.2.0', latest: '0.2.0', available: false } }));
+  await page.goto('/?page=Settings');
+  await expect(page.getByRole('heading', { name: 'Settings', level: 1 })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Update' })).toHaveCount(0);
+});

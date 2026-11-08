@@ -118,14 +118,14 @@ describe('Async states', () => {
     render(withClient(<Harness fn={fn} />));
     const alert = await screen.findByRole('alert');
     expect(within(alert).getByText('Analytics service unreachable')).toBeInTheDocument();
-    expect(within(alert).getByText('t3ui serve')).toBeInTheDocument();
+    expect(within(alert).getByText('runtrace start')).toBeInTheDocument();
     await userEvent.click(within(alert).getByRole('button', { name: 'Retry' }));
     expect(await screen.findByText('back')).toBeInTheDocument();
   });
   it('names rejected filters as a filter problem', () => {
     render(<ErrorState error={new ApiError('invalid', 'Bad date')} />);
     expect(screen.getByRole('alert')).toHaveTextContent('Query rejected');
-    expect(screen.queryByText('t3ui serve')).not.toBeInTheDocument();
+    expect(screen.queryByText('runtrace start')).not.toBeInTheDocument();
   });
 });
 

@@ -1,0 +1,94 @@
+name: Release
+# Tag a version (git tag v0.3.0 && git push origin v0.3.0) and this builds every platform, writes SHA256SUMS and
+# publishes the GitHub release that installs and `runtrace update` read.
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: write
+jobs:
+  dashboard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: The tag matches the version in Cargo.toml
+        run: |
+          version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          test "v$version" = "$GITHUB_REF_NAME" || { echo "Tag $GITHUB_REF_NAME does not match Cargo.toml version $version"; exit 1; }
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm ci && npm run build && npm test
+        working-directory: dashboard
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dashboard-dist
+          path: dashboard/dist
+  build:
+    needs: dashboard
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-latest, target: x86_64-pc-windows-msvc }
+          - { os: macos-latest, target: aarch64-apple-darwin }
+          - { os: macos-latest, target: x86_64-apple-darwin }
+          - { os: ubuntu-22.04, target: x86_64-unknown-linux-gnu }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: dashboard-dist
+          path: dashboard/dist
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
+      - run: cargo build --release --locked -p runtrace --target ${{ matrix.target }}
+      - name: Package
+        shell: bash
+        run: |
+          ext=""; [ "${{ runner.os }}" = "Windows" ] && ext=".exe"
+          mkdir out
+          cp "target/${{ matrix.target }}/release/runtrace$ext" "out/runtrace-${{ matrix.target }}$ext"
+      - name: The program runs and carries the dashboard
+        if: matrix.target != 'x86_64-apple-darwin'
+        shell: bash
+        env:
+          RUNTRACE_NO_UPDATE_CHECK: '1'
+        run: |
+          ext=""; [ "${{ runner.os }}" = "Windows" ] && ext=".exe"
+          exe="$PWD/out/runtrace-${{ matrix.target }}$ext"
+          export RUNTRACE_HOME="$RUNNER_TEMP/rt-home" RUNTRACE_SOURCE="$RUNNER_TEMP/no-source.sqlite"
+          "$exe" --version
+          "$exe" start
+          curl -fsS http://127.0.0.1:4310/health/ready
+          curl -fsS http://127.0.0.1:4310/ | grep -q '<div id="root">'
+          "$exe" stop
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bin-${{ matrix.target }}
+          path: out/*
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: bin-*
+          path: out
+          merge-multiple: true
+      - name: Checksums and installers
+        run: |
+          cp install.ps1 install.sh out/
+          cd out && sha256sum runtrace-* > SHA256SUMS && cat SHA256SUMS
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" out/* --title "Runtrace ${GITHUB_REF_NAME#v}" --generate-notes

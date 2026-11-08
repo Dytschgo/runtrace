@@ -58,7 +58,7 @@ test('service down shows recovery, and Retry brings data back', async ({ page })
   await page.goto('/?range=all');
   const alert = page.getByRole('alert').filter({ hasText: 'Analytics service unreachable' }).first();
   await expect(alert).toBeVisible();
-  await expect(alert).toContainText('t3ui serve');
+  await expect(alert).toContainText('runtrace start');
   // Navigation stays usable while the service is away.
   await expect(page.getByRole('link', { name: 'Settings', exact: true })).toBeVisible();
   down = false;
@@ -87,7 +87,7 @@ test('an empty database invites an import and invents no numbers', async ({ page
   await mockApi(page, (name) => (name === 'storage' ? { rows: [], events: 0 } : undefined));
   await page.goto('/?range=all');
   await expect(page.getByRole('heading', { name: 'No imported history in this view' })).toBeVisible();
-  await expect(page.getByText('t3ui import --all')).toBeVisible();
+  await expect(page.getByText('runtrace import --all')).toBeVisible();
   await expect(page.locator('.stats strong').first()).toHaveText('0');
   for (const [name, text] of [['Threads', 'No records match'], ['Agent Trees', 'No delegation recorded in this view'], ['Tool Calls', 'No records match'], ['Activity', 'No records match'], ['Models', 'No records match']]) {
     await page.goto(`/?page=${encodeURIComponent(name)}`);

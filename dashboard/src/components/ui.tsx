@@ -92,7 +92,7 @@ export function ErrorState({ error, onRetry, compact }: { error: unknown; onRetr
       <h2>{kind === 'offline' ? 'Analytics service unreachable' : kind === 'invalid' ? 'Query rejected' : 'Could not load this view'}</h2>
       <div className="state-body">
         <p>{message}</p>
-        {kind === 'offline' && <p>Start it with <code>t3ui serve</code>, then retry.</p>}
+        {kind === 'offline' && <p>Start it with <code>runtrace start</code>, then retry.</p>}
       </div>
       {onRetry && <button type="button" className="btn" onClick={onRetry}><RefreshCw size={14} aria-hidden="true" /> Retry</button>}
     </div>

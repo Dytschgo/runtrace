@@ -436,7 +436,7 @@ export default function Overview() {
       ) : noData ? (
         <Panel>
           <EmptyState title="No imported history in this view">
-            <p>Clear the filters, or import completed T3 history with <code>t3ui import --all</code>.</p>
+            <p>Clear the filters, or import completed T3 history with <code>runtrace import --all</code>.</p>
           </EmptyState>
         </Panel>
       ) : (
