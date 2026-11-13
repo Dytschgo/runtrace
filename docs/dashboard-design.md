@@ -50,7 +50,7 @@ These rules hold on every view, table and download of the Overview.
 - On the Overview the rows are the filter. Every model and provider stays listed and ranked by use, any number can be chosen, and the whole page follows the selection. Turns that name no model keep their rank in the list, hatched, so the shares add up to the whole. They stay off the chart until asked for. The list is one tab stop, and the arrow keys move along it.
 - A chosen provider is counted by the service, which works out each record's provider the same way the rows do: from the model name, or from the agent that ran it when no model is named. So a provider's tiles are exact, not lower bounds.
 - Groups with no turns in the window stay listed, folded under one button so the ones that ran stand out. A chosen one stays in view.
-- The Quota page opens with one line: the windows that are nearly full or on pace to fill before their reset, marked as projections, or a plain statement that none are.
+- The Quota page shows what is left, never what was used. It opens with one line: the windows with 20% or less left or on pace to run out before their reset, marked as projections, or a plain statement that none are.
 - The Delegation panel lists the busiest delegating threads in the window, each a link straight to its tree.
 - Provider turns come from the service lean: only the fields a chart or list reads. The fields every chart needs are stored as columns, so no aggregate reads the JSON document.
 - Every list page reads a stored list view of each record (the document without its full text, plus a 512-character preview) instead of the whole document. A page of 1,000 tool calls went from about 740 ms to about 100 ms on the service. Full text is still fetched on demand.
@@ -58,7 +58,7 @@ These rules hold on every view, table and download of the Overview.
 - Data Quality's tool field coverage and redaction counts come from the service over every record, not a sample of the latest 1,000 calls.
 - The Projects list shows each project in the colour it has on the Overview chart, which comes from its id alone.
 - Tokens by type are summed from turns that reported a total, so the parts add up to the headline. Turns that reported parts but no total are counted and named beside them.
-- Quota pace is a projection from a window's own readings over the last fifth of its length, at least an hour and at most a day, and is always labelled as one. Readings from another reset are never mixed in. A window at 80% or more is marked.
+- Quota pace is a projection from a window's own readings over the last fifth of its length, at least an hour and at most a day, and is always labelled as one. Readings from another reset are never mixed in. A window with 20% or less left is marked.
 
 ## Performance
 
@@ -84,14 +84,15 @@ Measured cold, at 1440 wide, on the full history of 34 billion tokens.
 
 | Page | What it is for |
 |---|---|
-| Overview | Total tokens, models with share, tokens per day by model, totals, tokens by type with coverage, weekday-by-hour rhythm, recent threads with sparklines, top tools, delegation |
+| Overview | Total tokens, models with share, tokens per day by model, provider, harness or project, totals, tokens by type with coverage, weekday-by-hour rhythm, recent threads with sparklines, top tools, delegation |
 | Activity | Peak hour, busiest day, weekday-by-hour heatmap, daily prompts, paged event feed |
 | Models | Ledger of tokens, turns, usage coverage, cache share and latency per model; chart by tokens, turns or threads |
+| Harnesses | Which agent ran each turn, for all turns, the ones you started or delegated ones: balance between two harnesses (daily, or trailing week past 21 days) with limit hits marked and the change since the period before, share of every harness, a comparison of tokens per turn, cache share, turn time, failures and models, the balance while each limit held, harness by project and by hour, and turns or tokens per day (per week past 60 days) |
 | Projects | Tokens and counts per project; per-project detail with models, branches and threads |
 | Threads | Title and type filters, sort, paging, tokens per thread. Detail has facts, sub-agents, provider turns, runs and the timeline |
 | Agent Trees | Delegating threads ranked, keyboard tree with waterfall, node detail with full task and result |
 | Tool Calls | Failure rate, shell exit codes, latency percentiles per tool, filterable calls, linkable call dialog |
-| Quota and Resets | Explicit unavailable state today. Renders snapshots and whatever window fields the API sends |
+| Quota and Resets | Live cards per harness showing what is left, from T3's usage checks or Runtrace's own (freshness, reset credits), harnesses without limits and why, what was left over time, past windows with complete/partial coverage, limits reached |
 | Storage | Records by kind, database size, stored text, span, maintenance commands |
 | Data Quality | Usage by provider, field coverage measured from records, quality by kind, redactions, known gaps |
 | Settings | Timezone, page size, density, service health, capture instances, privacy commands |

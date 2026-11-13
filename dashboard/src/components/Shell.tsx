@@ -4,9 +4,9 @@ import { isTypingTarget } from '../lib/keys';
 import { useIsFetching, useQueryClient } from '@tanstack/react-query';
 import {
   Activity, CalendarDays, CircleGauge, Cpu, Database, Filter, FolderKanban, Keyboard, LayoutDashboard, MessagesSquare,
-  Network, RefreshCw, Search, Settings as SettingsIcon, ShieldCheck, Wrench, X, Folder } from 'lucide-react';
+  Network, RefreshCw, Scale, Search, Settings as SettingsIcon, ShieldCheck, Wrench, X, Folder } from 'lucide-react';
 import { useFilters, useHealth, useLatestRecord, useModels, useProjects, useQuota, useThreads, useUsage } from '../lib/data';
-import { QUOTA_HIGH } from '../lib/quota';
+import { QUOTA_LOW } from '../lib/quota';
 import { cleanSearch, PAGE_SCOPE, readDate, zoomOutPatch } from '../lib/filters';
 import { fmtDateTime, fmtRelative, localParts, repairText, zonedDayStart } from '../lib/format';
 import { nextDay } from '../lib/timeWindow';
@@ -21,6 +21,7 @@ const NAV: { page: PageName; icon: ReactNode; gap?: boolean }[] = [
   { page: 'Overview', icon: <LayoutDashboard size={16} /> },
   { page: 'Activity', icon: <Activity size={16} /> },
   { page: 'Models', icon: <Cpu size={16} /> },
+  { page: 'Harnesses', icon: <Scale size={16} /> },
   { page: 'Projects', icon: <FolderKanban size={16} /> },
   { page: 'Threads', icon: <MessagesSquare size={16} />, gap: true },
   { page: 'Agent Trees', icon: <Network size={16} /> },
@@ -31,13 +32,13 @@ const NAV: { page: PageName; icon: ReactNode; gap?: boolean }[] = [
   { page: 'Settings', icon: <SettingsIcon size={16} /> },
 ];
 
-/** A quota window at or above the mark, read by the agent and not yet reset, so it is seen from any page before it refuses work. */
+/** A quota window with little left, read by the agent and not yet reset, so it is seen from any page before it refuses work. */
 function useQuotaHigh() {
   const quota = useQuota('quota/current');
   return (quota.data?.data ?? []).some((r) => {
     const used = typeof r.used_percentage === 'number' ? r.used_percentage : null;
     const reset = typeof r.reset_at === 'string' ? Date.parse(r.reset_at) : NaN;
-    return used !== null && used >= QUOTA_HIGH && r.reset_passed !== true && !(Number.isFinite(reset) && reset <= Date.now());
+    return used !== null && 100 - used <= QUOTA_LOW && r.reset_passed !== true && !(Number.isFinite(reset) && reset <= Date.now());
   });
 }
 

@@ -37,3 +37,7 @@ A model_turn entity is a provider turn, not an individual model call. Missing to
 Complete canonical per-entity tables and typed OpenAPI schemas from the original specification remain future work. See migrations and data-model.md for the actual implemented schema.
 
 Models API/MCP aggregates now expose `cache_write_tokens` (nullable sum of observed normalized cacheCreationTokens) and `cache_write_observed_turns` (number of provider turns with that field recorded, including explicit zero). Input includes both cache-read and cache-write subsets. These values are never added again to total tokens. The dashboard does not yet display the new aggregate fields.
+
+A provider turn with no run (a turn in a provider's own sub-agent thread) takes the model its thread names, and says so with `data.model_source = "thread"`.
+
+The `harness` filter (API and MCP) names the agent program that ran a record as T3 names its provider instance (`codex`, `claudeAgent`, `grok`…). A turn or run matches by its own; a prompt, answer, tool call or sub-agent by the run it belongs to; anything else by the harness that ran most of its thread. Each record belongs to one harness, so the counts of all harnesses add up to the whole, apart from threads that never ran a turn.

@@ -1,9 +1,10 @@
 import { turnMs, type TurnRow } from './entities';
 import { localParts, zonedDayStart, type LocalParts } from './format';
+import { harnessColor, harnessFamily, harnessName } from './harness';
 import { FAMILIES, modelProvider, OTHER_COLOR, type Provider } from './modelColors';
 import { nextDay } from './timeWindow';
 
-export type GroupBy = 'model' | 'provider' | 'project';
+export type GroupBy = 'model' | 'provider' | 'harness' | 'project';
 export type Metric = 'total' | 'input' | 'cached' | 'cacheWrite' | 'output' | 'reasoning' | 'turns';
 export type Resolution = '5m' | '15m' | '1h' | '6h' | '1d' | '1w';
 
@@ -110,16 +111,21 @@ const groupOf = (t: TurnRow, by: GroupBy, modelColors: Map<string, string>, proj
     const p = turnProvider(t);
     return p ? { key: p, label: PROVIDER_NAMES[p], color: FAMILIES[p][0], model: null, provider: p } : { key: 'not-recorded', label: 'Not recorded', color: OTHER_COLOR, model: null, provider: null, dash: true };
   }
+  if (by === 'harness') {
+    if (!t.provider) return { key: 'not-recorded', label: 'Not recorded', color: OTHER_COLOR, model: null, provider: null, dash: true };
+    return { key: t.provider, label: harnessName(t.provider), color: harnessColor(t.provider), model: null, provider: harnessFamily(t.provider) };
+  }
   const name = projectName(t.project_id);
   return { key: t.project_id || 'none', label: name ?? 'Project not imported', color: OTHER_COLOR, model: null, provider: null };
 };
 
 /** The key a turn is grouped under, without building the rest of its group. */
-export const turnGroupKey = (t: TurnRow, by: GroupBy) => (by === 'model' ? t.model || 'not-recorded' : by === 'provider' ? turnProvider(t) ?? 'not-recorded' : t.project_id || 'none');
+export const turnGroupKey = (t: TurnRow, by: GroupBy) => (by === 'model' ? t.model || 'not-recorded' : by === 'provider' ? turnProvider(t) ?? 'not-recorded' : by === 'harness' ? t.provider || 'not-recorded' : t.project_id || 'none');
 
 /** A group that did not run in this window, so it can still be listed and chosen. */
 export function idleGroup(by: GroupBy, key: string, modelColors: Map<string, string>): GroupInfo | null {
   if (by === 'model') return { key, label: key, color: modelColors.get(key) ?? OTHER_COLOR, model: key, provider: modelProvider(key) };
+  if (by === 'harness' && key !== 'not-recorded') return { key, label: harnessName(key), color: harnessColor(key), model: null, provider: harnessFamily(key) };
   if (by === 'provider' && key in PROVIDER_NAMES) return { key, label: PROVIDER_NAMES[key as Provider], color: FAMILIES[key as Provider][0], model: null, provider: key as Provider };
   return null;
 }

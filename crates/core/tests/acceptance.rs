@@ -1933,3 +1933,423 @@ fn field_report_counts_every_tool_call() {
         json!([{"category":"path","records":2},{"category":"bearer","records":1},{"category":"email","records":1}])
     );
 }
+
+#[test]
+fn turn_without_a_run_takes_its_threads_model() {
+    let (_tmp, c) = fixture();
+    let source = rusqlite::Connection::open(&c.source.sqlite_path).unwrap();
+    // A provider's own sub-agent thread names its model, and its turns link to no run.
+    source.execute("UPDATE orchestration_v2_projection_threads SET payload_json=json_set(payload_json,'$.modelSelection.model','thread-model') WHERE json_extract(payload_json,'$.id')='child'",[]).unwrap();
+    source.execute_batch("CREATE TABLE orchestration_v2_projection_nodes(node_id TEXT PRIMARY KEY,run_id TEXT); CREATE TABLE orchestration_v2_projection_provider_turns(provider_turn_id TEXT PRIMARY KEY,thread_id TEXT,node_id TEXT,payload_json TEXT); INSERT INTO orchestration_v2_projection_nodes VALUES('node',NULL)").unwrap();
+    let turn = json!({"id":"pt","nodeId":"node","status":"completed","startedAt":"2026-01-01T00:00:00Z","completedAt":"2026-01-01T00:01:00Z","providerThreadId":"provider-thread:provider:codex:native-thread:x","turnTokenUsage":{"usageScope":"main_agent","usageStatus":"complete","inputTokens":100,"outputTokens":20}});
+    source
+        .execute(
+            "INSERT INTO orchestration_v2_projection_provider_turns VALUES('pt','child','node',?)",
+            [turn.to_string()],
+        )
+        .unwrap();
+    let s = Store::open(&c).unwrap();
+    importer::import(&c, &s, &Options::default()).unwrap();
+    let row = analytics::query(&s, "model-turns", &Filter::default()).unwrap();
+    assert_eq!(row["data"][0]["data"]["model"], "thread-model");
+    assert_eq!(row["data"][0]["data"]["model_source"], "thread");
+    let models = analytics::query(&s, "models", &Filter::default()).unwrap();
+    assert!(
+        models["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|m| m["model"] == "thread-model" && m["observed_provider_turns"] == 1)
+    );
+    assert_eq!(
+        importer::import(&c, &s, &Options::default()).unwrap()["changed"],
+        0
+    );
+}
+
+#[test]
+fn harness_filter_follows_the_thread_a_record_ran_in() {
+    let (_tmp, c) = fixture();
+    let s = Store::open(&c).unwrap();
+    let at = "2026-01-01T00:00:00Z";
+    for (thread, harness) in [("codex-thread", "codex"), ("claude-thread", "claudeAgent")] {
+        s.put(
+            "local",
+            "run",
+            &format!("run-{thread}"),
+            "p",
+            thread,
+            "",
+            at,
+            at,
+            "partial",
+            "synthetic",
+            json!({"provider":harness}),
+        )
+        .unwrap();
+        s.put(
+            "local",
+            "model_turn",
+            &format!("turn-{thread}"),
+            "p",
+            thread,
+            "",
+            at,
+            at,
+            "partial",
+            "synthetic",
+            json!({"provider":harness,"usage_status":"complete","total_tokens":5}),
+        )
+        .unwrap();
+        s.put(
+            "local",
+            "prompt",
+            &format!("prompt-{thread}"),
+            "p",
+            thread,
+            "",
+            at,
+            at,
+            "partial",
+            "synthetic",
+            json!({"content_redacted":"hi"}),
+        )
+        .unwrap();
+        s.put(
+            "local",
+            "tool",
+            &format!("tool-{thread}"),
+            "p",
+            thread,
+            "",
+            at,
+            at,
+            "partial",
+            "synthetic",
+            json!({"tool_name":"shell"}),
+        )
+        .unwrap();
+    }
+    let counts = |harness: Option<&str>| {
+        let v = analytics::query(
+            &s,
+            "overview",
+            &Filter {
+                harness: harness.map(str::to_owned),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        v["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| {
+                (
+                    r["kind"].as_str().unwrap().to_owned(),
+                    r["count"].as_i64().unwrap(),
+                )
+            })
+            .collect::<std::collections::BTreeMap<_, _>>()
+    };
+    let all = counts(None);
+    let codex = counts(Some("codex"));
+    assert_eq!(all["prompt"], 2);
+    for kind in ["prompt", "tool", "run", "model_turn"] {
+        assert_eq!(codex[kind], 1, "{kind}");
+    }
+    assert!(counts(Some("nobody")).is_empty());
+    // A thread that switched harness: its records follow their own run, so the harnesses add up to the whole.
+    s.put(
+        "local",
+        "run",
+        "switched-run",
+        "p",
+        "codex-thread",
+        "",
+        at,
+        at,
+        "partial",
+        "synthetic",
+        json!({"provider":"claudeAgent"}),
+    )
+    .unwrap();
+    s.put(
+        "local",
+        "prompt",
+        "switched-prompt",
+        "p",
+        "codex-thread",
+        "switched-run",
+        at,
+        at,
+        "partial",
+        "synthetic",
+        json!({"content_redacted":"hi"}),
+    )
+    .unwrap();
+    let all = counts(None);
+    let (codex, claude) = (counts(Some("codex")), counts(Some("claudeAgent")));
+    for kind in ["prompt", "run", "tool", "model_turn"] {
+        assert_eq!(
+            codex.get(kind).unwrap_or(&0) + claude.get(kind).unwrap_or(&0),
+            all[kind],
+            "{kind}"
+        );
+    }
+    assert_eq!(claude["prompt"], 2);
+    assert!(
+        Filter {
+            harness: Some("bad name;".into()),
+            ..Default::default()
+        }
+        .validate()
+        .is_err()
+    );
+}
+
+/// T3's cache of what each harness said about its limits: readings into the history, kept on change or every 15 minutes,
+/// and a live snapshot of every enabled harness that never copies the account's sign-in.
+#[test]
+fn t3_usage_cache_feeds_readings_and_the_live_view() {
+    use t3ui_core::quota_sources::collect_from;
+    let (tmp, c) = fixture();
+    let s = Store::open(&c).unwrap();
+    let home = tmp.path().join("home");
+    let caches = tmp.path().join("caches");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(&caches).unwrap();
+    let write = |name: &str, v: serde_json::Value| {
+        std::fs::write(caches.join(name), v.to_string()).unwrap()
+    };
+    let claude = |at: &str, used: f64| {
+        json!({"driver":"claudeAgent","instanceId":"claudeAgent","displayName":"Claude","enabled":true,"status":"ready",
+            "auth":{"status":"authenticated","email":"someone@example.com"},
+            "usageLimits":{"checkedAt":at,"windows":[
+                {"id":"five_hour","kind":"session","label":"Session","windowDurationMins":300,"usedPercent":used,"resetsAt":"2026-01-01T05:00:00.000Z"},
+                {"id":"seven_day_fable","kind":"weekly","label":"Weekly · Fable","windowDurationMins":10080,"usedPercent":40,"resetsAt":"2026-01-06T23:59:59.950Z"}],
+                "resetCredits":{"availableCount":2,"nextExpiresAt":"2026-02-01T00:00:00.000Z","options":[{"creditId":"full","label":"Full reset","description":"Refills both.","availableCount":1,"expiresAt":"2026-02-01T00:00:00.000Z"}]}}})
+    };
+    write("claudeAgent.json", claude("2026-01-01T01:00:00.000Z", 10.0));
+    write(
+        "grok.json",
+        json!({"driver":"grok","instanceId":"grok","displayName":"Grok","enabled":true,"status":"ready",
+        "usageLimits":{"checkedAt":"2026-01-01T01:00:00.000Z","windows":[{"id":"subscription","kind":"weekly","label":"Weekly","usedPercent":81,"resetsAt":"2026-01-04T04:12:48.041Z"}]}}),
+    );
+    write(
+        "codex-ollama.json",
+        json!({"driver":"codex","instanceId":"codex-ollama","displayName":"Codex","enabled":true,"status":"ready",
+        "usageLimits":{"checkedAt":"2026-01-01T01:00:00.000Z","windows":[],"unavailable":{"reason":"probeFailed","message":"Codex could not read usage."}}}),
+    );
+    write(
+        "muse.json",
+        json!({"driver":"muse","instanceId":"muse","displayName":"Muse","enabled":true,"status":"ready"}),
+    );
+    write(
+        "kiro.json",
+        json!({"driver":"kiro","instanceId":"kiro","displayName":"Kiro","enabled":false,"status":"disabled"}),
+    );
+    write("models.json", json!({"models":[]}));
+    let count = || {
+        s.rows(
+            "SELECT json_object('n',count(*))::VARCHAR FROM quota_samples",
+            &[],
+        )
+        .unwrap()[0]["n"]
+            .as_i64()
+            .unwrap()
+    };
+
+    collect_from(&s, &home, Some(&caches)).unwrap();
+    assert_eq!(count(), 3, "Claude's two windows and Grok's");
+    // The same reading checked again five minutes later adds nothing; sixteen minutes later it is kept as a heartbeat.
+    write("claudeAgent.json", claude("2026-01-01T01:05:00.000Z", 10.0));
+    collect_from(&s, &home, Some(&caches)).unwrap();
+    assert_eq!(count(), 3);
+    write("claudeAgent.json", claude("2026-01-01T01:16:00.000Z", 10.0));
+    collect_from(&s, &home, Some(&caches)).unwrap();
+    assert_eq!(count(), 5);
+    // A change is kept at once.
+    write("claudeAgent.json", claude("2026-01-01T01:17:00.000Z", 12.0));
+    collect_from(&s, &home, Some(&caches)).unwrap();
+    assert_eq!(count(), 6);
+
+    let names = s.rows("SELECT json_object('p',provider,'w',window_kind,'m',window_minutes,'src',source)::VARCHAR FROM (SELECT DISTINCT provider,window_kind,window_minutes,source FROM quota_samples) ORDER BY 1", &[]).unwrap();
+    assert_eq!(
+        names,
+        vec![
+            json!({"p":"claude","w":"five_hour","m":300,"src":"t3_usage_cache"}),
+            json!({"p":"claude","w":"seven_day_fable","m":10080,"src":"t3_usage_cache"}),
+            json!({"p":"grok","w":"weekly","m":10080,"src":"t3_usage_cache"}),
+        ]
+    );
+
+    let live = analytics::query(&s, "quota/live", &Filter::default()).unwrap();
+    let text = live.to_string();
+    assert!(
+        !text.contains("someone@example.com"),
+        "the sign-in is never copied"
+    );
+    let rows = live["data"].as_array().unwrap();
+    let harnesses: Vec<_> = rows
+        .iter()
+        .map(|r| r["harness"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        harnesses,
+        ["claudeAgent", "codex-ollama", "grok", "muse"],
+        "disabled harnesses with nothing to show are left out"
+    );
+    assert_eq!(rows[0]["quota_key"], "claude");
+    assert_eq!(rows[0]["windows"][0]["used_percentage"], 12.0);
+    assert_eq!(rows[0]["windows"][0]["reset_at"], "2026-01-01T05:00:00Z");
+    assert_eq!(rows[0]["credits"]["available"], 2);
+    assert_eq!(rows[0]["credits"]["options"][0]["label"], "Full reset");
+    assert_eq!(rows[1]["unavailable"]["reason"], "probeFailed");
+    assert_eq!(rows[3]["reports_limits"], false);
+    assert!(rows[0]["read_at"].is_string());
+}
+
+/// Runtrace's own checks, for harnesses T3 does not check, join the live view and the readings like T3's; a Codex home
+/// that runs local models says it has no limit; and Muse's refusals become limits reached.
+#[test]
+fn own_checks_local_models_and_muse_refusals_join_the_quota_view() {
+    use t3ui_core::quota_sources::collect_from;
+    let (tmp, c) = fixture();
+    let s = Store::open(&c).unwrap();
+    let home = tmp.path().join("home");
+    let caches = tmp.path().join("caches");
+    let local = tmp.path().join("codex-local");
+    std::fs::create_dir_all(&caches).unwrap();
+    std::fs::create_dir_all(&local).unwrap();
+    std::fs::write(
+        local.join("config.toml"),
+        "model_provider = \"ollama-local\"\n[model_providers.ollama-local]\nname = \"Ollama (localhost)\"\nbase_url = \"http://127.0.0.1:11434/v1/\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        caches.join("codex-local.json"),
+        json!({"driver":"codex","instanceId":"codex-local","enabled":true,"status":"ready",
+            "continuation":{"groupKey":format!("codex:home:{}", local.display())},
+            "usageLimits":{"checkedAt":"2026-01-01T01:00:00.000Z","windows":[],"unavailable":{"reason":"probeFailed","message":"Codex could not read usage."}}})
+        .to_string(),
+    )
+    .unwrap();
+    std::fs::write(
+        caches.join("muse.json"),
+        json!({"driver":"muse","instanceId":"muse","enabled":true,"status":"ready"}).to_string(),
+    )
+    .unwrap();
+    s.set(
+        t3ui_core::quota_checks::CHECKS,
+        &json!({
+            "antigravity": {"harness":"antigravity","name":"Antigravity","checked_at":"2026-01-01T01:00:00.000Z","windows":[
+                {"window":"seven_day_gemini","label":"Weekly · Gemini","window_minutes":10080,"used_percentage":35.0,"reset_at":"2026-01-05T10:00:00Z"},
+                {"window":"seven_day_claude_and_gpt","label":"Weekly · Claude and GPT","window_minutes":10080,"used_percentage":0.0,"reset_at":null}]},
+            "muse": {"harness":"muse","name":"Muse","checked_at":"2026-01-01T01:00:00.000Z","plan":"High Usage","windows":[],
+                "unavailable":{"reason":"noUsageData","message":"Subscribed, but Meta sends no usage numbers yet"}}
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let sessions = home.join(".local/share/muse/sessions/2026/01/01/s1");
+    std::fs::create_dir_all(&sessions).unwrap();
+    std::fs::write(
+        sessions.join("session.jsonl"),
+        "{\"record_json\":\"{\\\"recorded_at\\\":1767229200000000,\\\"payload\\\":{\\\"reason\\\":\\\"API error 429: Subscription quota exhausted. Your usage window resets at 2026-01-01T03:00:00Z. (rate_limit_error)\\\"}}\"}\n",
+    )
+    .unwrap();
+
+    collect_from(&s, &home, Some(&caches)).unwrap();
+    let live = analytics::query(&s, "quota/live", &Filter::default()).unwrap();
+    let rows = live["data"].as_array().unwrap();
+    let by = |h: &str| rows.iter().find(|r| r["harness"] == h).unwrap().clone();
+    assert_eq!(
+        rows.len(),
+        3,
+        "T3's muse row is replaced by Runtrace's, not repeated"
+    );
+    assert_eq!(by("codex-local")["unavailable"]["reason"], "local");
+    assert_eq!(
+        by("codex-local")["unavailable"]["message"],
+        "Runs models on this machine through Ollama, so it has no limit"
+    );
+    assert_eq!(by("muse")["checked_by"], "runtrace");
+    assert_eq!(by("muse")["plan"], "High Usage");
+    assert_eq!(by("muse")["unavailable"]["reason"], "noUsageData");
+    let ag = by("antigravity");
+    assert_eq!(ag["windows"][0]["label"], "Weekly · Gemini");
+    assert!(ag["windows"][1]["reset_at"].is_null());
+    // Only the window with a running reset becomes a reading.
+    let stored = s.rows("SELECT json_object('p',provider,'w',window_kind,'src',source)::VARCHAR FROM quota_samples ORDER BY 1", &[]).unwrap();
+    assert_eq!(
+        stored,
+        vec![json!({"p":"antigravity","w":"seven_day_gemini","src":"runtrace_check"})]
+    );
+    let events = s.rows("SELECT json_object('p',provider,'w',window_kind,'at',happened_at,'r',reset_at)::VARCHAR FROM quota_events", &[]).unwrap();
+    assert_eq!(
+        events,
+        vec![
+            json!({"p":"muse","w":"usage_window","at":"2026-01-01T01:00:00.000Z","r":"2026-01-01T03:00:00Z"})
+        ]
+    );
+}
+
+/// A finished window is complete only when readings no more than 20 minutes apart cover it from start to reset.
+#[test]
+fn quota_windows_are_complete_only_when_readings_cover_them() {
+    let (_tmp, c) = fixture();
+    let s = Store::open(&c).unwrap();
+    let add = |window: &str, reset: &str, minutes: &[i64]| {
+        for m in minutes {
+            let at = chrono::DateTime::parse_from_rfc3339(reset).unwrap()
+                - chrono::Duration::minutes(300 - m);
+            s.conn
+                .execute(
+                    "INSERT INTO quota_samples VALUES ('codex',?,?,?,?,300,NULL,'synthetic')",
+                    duckdb::params![
+                        window,
+                        at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+                        *m as f64 / 10.0,
+                        reset
+                    ],
+                )
+                .unwrap();
+        }
+    };
+    // Every 15 minutes from 5 minutes in to 5 minutes before the reset.
+    add(
+        "five_hour",
+        "2026-01-01T05:00:00Z",
+        &(0..20).map(|i| 5 + i * 15).collect::<Vec<_>>(),
+    );
+    // The same, but an hour without a reading in the middle.
+    add(
+        "five_hour",
+        "2026-01-01T10:00:00Z",
+        &(0..20)
+            .map(|i| 5 + i * 15)
+            .filter(|m| !(100..160).contains(m))
+            .collect::<Vec<_>>(),
+    );
+    let windows = analytics::query(&s, "quota/windows", &Filter::default()).unwrap();
+    let quality: Vec<_> = windows["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|w| {
+            (
+                w["reset_at"].as_str().unwrap().to_string(),
+                w["capture_quality"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        quality,
+        vec![
+            ("2026-01-01T10:00:00Z".to_string(), "partial".to_string()),
+            ("2026-01-01T05:00:00Z".to_string(), "complete".to_string()),
+        ]
+    );
+    assert!(windows["data"][0].get("sample_times").is_none());
+}

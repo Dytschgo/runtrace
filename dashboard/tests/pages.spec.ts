@@ -144,7 +144,7 @@ test('on a phone every navigation icon shows its name', async ({ page }) => {
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 });
 
-test('a quota window at 80% or more is marked on every page, and its pace is a labelled projection', async ({ page }) => {
+test('a quota window with 20% or less left is marked on every page, and its pace is a labelled projection', async ({ page }) => {
   const now = NOW;
   const reset = new Date(now + 3 * 3_600_000).toISOString();
   const quota = { provider: 'claude', window: 'five_hour', used_percentage: 85, remaining_percentage: 15, reset_at: reset, reset_passed: false, window_minutes: 300, sampled_at: new Date(now - 60_000).toISOString(), source: 'claude_usage_cache', plan: null };
@@ -160,12 +160,13 @@ test('a quota window at 80% or more is marked on every page, and its pace is a l
   await expect(link.locator('.nav-alert')).toHaveCount(1);
   await link.click();
   const card = page.locator('[aria-label="Claude Code quota"]');
-  await expect(card.locator('.quota-window[data-high]')).toHaveCount(1);
-  await expect(card.locator('.quota-pace')).toContainText('At this pace, full around');
+  await expect(card.locator('.quota-window[data-low]')).toHaveCount(1);
+  await expect(card.locator('.quota-line b')).toHaveText('15% left');
+  await expect(card.locator('.quota-pace')).toContainText('At this pace, runs out around');
   await expect(card.locator('.quota-pace')).toContainText('projection from 59m');
 });
 
-test('no warning when every window is below 80% or has reset', async ({ page }) => {
+test('no warning when every window has more than 20% left or has reset', async ({ page }) => {
   const now = NOW;
   await mockApi(page, (name) => {
     if (name === 'quota/current') return envelope([

@@ -10,6 +10,20 @@ pub struct Config {
     pub source: Source,
     #[serde(default)]
     pub update: Update,
+    #[serde(default)]
+    pub quota: Quota,
+}
+/// Quota collection. With `checks` on, Runtrace asks harnesses T3 does not check (Antigravity, Muse) for their limits
+/// itself, every few minutes, by running their own programs.
+#[derive(Clone, Deserialize, Serialize)]
+pub struct Quota {
+    #[serde(default = "default_true")]
+    pub checks: bool,
+}
+impl Default for Quota {
+    fn default() -> Self {
+        Self { checks: true }
+    }
 }
 /// Where new versions come from. Checking only reads the latest release; installing always needs a person to ask for it.
 #[derive(Clone, Deserialize, Serialize)]

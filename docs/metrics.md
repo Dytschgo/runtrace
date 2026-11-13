@@ -17,7 +17,7 @@ Each metric describes observed source coverage. Missing values remain null; miss
 | Agent fan-out (observed) | Count explicit direct child edges per parent | Tree view shows recorded fan-out, not complete provider-native internal activity. Four child edges = observed fan-out 4. |
 | Subagent busy time | Sum known child elapsed durations | Overlapping agents count independently. Two concurrent 1-minute agents give 2 busy minutes, not 2 elapsed minutes. |
 | Unused at reset | Final valid matching pre-reset remaining percentage | No snapshots gives null. 20% at 09:59 before 10:00 means 20%, not next-window 100%. |
-| Complete quota window | Boundary-near samples plus bounded internal gaps across the matching window | Tested primitive; otherwise partial/unavailable. No live windows are collected by this adapter. |
+| Complete quota window | Boundary-near samples plus bounded internal gaps across the matching window | Readings no more than 20 minutes apart from the window's start to its reset (or early end); otherwise partial. |
 | Quota utilisation | 100 - unused percentage before reset | Complete-window comparisons only. 100 - 20 = 80%. |
 | Wasted reset thresholds | Count complete windows with unused percentage strictly above 10/25/50/75 | 30% unused increments only 10 and 25. No historical reconstruction. |
 

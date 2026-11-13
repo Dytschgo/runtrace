@@ -4,7 +4,7 @@ import { OTHER_COLOR, seriesColor, StackedDays, type StackSeries } from '../comp
 import { DataTable, type Column } from '../components/DataTable';
 import { CHART_MODELS, TokenFacts, useTokenStack } from '../components/tokens';
 import { AppLink, Async, ChartPanel, CoverageBar, NoRecords, PageHeader, Panel, Segmented, Skeleton, SkeletonRows, Stat, StatRow, Tag, Tokens, Unknown, Val, NotYetPage } from '../components/ui';
-import { percentile, stackByDay, tokenSummary } from '../lib/analytics';
+import { percentile, stackByDay, tokenSummary, weeklyWhenLong } from '../lib/analytics';
 import { useAgents, useFilters, useModels, useModelSlots, useModelTurns, useThreads } from '../lib/data';
 import { inTimeRange, isFuture } from '../lib/filters';
 import { fmtCompact, fmtDuration, fmtInt, fmtPct, isKnown } from '../lib/format';
@@ -55,7 +55,7 @@ export default function Models() {
   const metric = (params.get('metric') ?? 'tokens') as 'tokens' | 'turns' | 'threads';
   const tokenStack = useTokenStack(turns.data?.rows ?? [], slots, timezone);
   const windowThreads = useMemo(() => (threads.data?.rows ?? []).filter((t) => inTimeRange(t.occurred_at, f)), [threads.data, f]);
-  const stack = useMemo(() => {
+  const daily = useMemo(() => {
     if (metric === 'tokens' && hasTokens) return tokenStack;
     const visible = new Set([...slots.keys()].slice(0, CHART_MODELS));
     const name = (m: string | null) => (m && visible.has(m) ? m : 'Other');
@@ -67,6 +67,13 @@ export default function Models() {
     if (present.has('Other')) series.push({ key: 'Other', label: 'Other', color: OTHER_COLOR });
     return { data, series };
   }, [metric, hasTokens, tokenStack, turns.data, windowThreads, slots, timezone]);
+  // Past two months a bar per day is too thin, so the bars become weeks, and a day short of usage makes its week short too.
+  const stack = useMemo(() => {
+    const { rows, unit, weekOf } = weeklyWhenLong(daily.data, timezone);
+    const partial = 'partial' in daily ? new Set([...(daily.partial as Set<string>)].map((k) => { const [day, ...rest] = k.split('|'); return `${weekOf.get(day) ?? day}|${rest.join('|')}`; })) : undefined;
+    return { data: rows, series: daily.series, unit, partial };
+  }, [daily, timezone]);
+  const per = stack.unit === 'week' ? 'week' : 'day';
 
   const columns: Column<Row>[] = [
     {
@@ -164,13 +171,13 @@ export default function Models() {
             <div className="split">
               <ChartPanel
                 className="grow-2"
-                title={metric === 'tokens' && hasTokens ? 'Tokens per day, by model' : metric === 'turns' && hasTokens ? 'Provider turns per day, by model' : 'Threads started per day, by model'}
+                title={metric === 'tokens' && hasTokens ? `Tokens per ${per}, by model` : metric === 'turns' && hasTokens ? `Provider turns per ${per}, by model` : `Threads started per ${per}, by model`}
                 sub={metric === 'tokens' && hasTokens ? 'Complete-turn totals only; partial token fields are shown in the ledger' : 'In the display timezone'}
                 chart={metric === 'tokens' && hasTokens && !hasTotals ? <p className="fine">No complete token totals. Partial token fields are shown in the ledger.</p> : <Async query={metric === 'threads' || !hasTokens ? threads : turns as unknown as typeof threads} skeleton={<SkeletonRows label="Loading chart" />} isEmpty={() => !stack.data.length} compact>{() => <StackedDays rows={stack.data} series={stack.series} compactValues={metric === 'tokens'} />}</Async>}
                 table={
                   <table>
-                    <thead><tr><th scope="col">Day</th>{stack.series.map((s) => <th key={s.key} scope="col" className="num">{s.label}</th>)}</tr></thead>
-                    <tbody>{stack.data.map((d) => <tr key={d.day}><td>{d.label}</td>{stack.series.map((s) => <td key={s.key} className="num">{metric === 'tokens' && 'partial' in stack && (stack.partial as Set<string>).has(`${d.day}|${s.key}`) ? '≥ ' : ''}{fmtInt(Number(d[s.key] ?? 0))}</td>)}</tr>)}</tbody>
+                    <thead><tr><th scope="col">{per === 'week' ? 'Week of' : 'Day'}</th>{stack.series.map((s) => <th key={s.key} scope="col" className="num">{s.label}</th>)}</tr></thead>
+                    <tbody>{stack.data.map((d) => <tr key={d.day}><td>{d.label}</td>{stack.series.map((s) => <td key={s.key} className="num">{metric === 'tokens' && stack.partial?.has(`${d.day}|${s.key}`) ? '≥ ' : ''}{fmtInt(Number(d[s.key] ?? 0))}</td>)}</tr>)}</tbody>
                   </table>
                 }
                 action={

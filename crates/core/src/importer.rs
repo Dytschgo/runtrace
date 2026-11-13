@@ -506,9 +506,18 @@ fn import_project(c: &Config, s: &Store, o: &Options) -> Result<Value> {
                         .unwrap_or(&c.capture.default_policy);
                     // Hash exact payload + linkage evidence, not timestamps alone: usage
                     // corrections and run/model relinks must invalidate unchanged turns.
+                    // A turn in a provider's own sub-agent thread has no run, so it takes the model its thread names.
+                    let thread_model = t
+                        .pointer("/modelSelection/model")
+                        .filter(|m| m.as_str().is_some_and(|s| !s.is_empty()));
+                    let fallback = if run.is_none() { thread_model } else { None };
+                    // The thread's model only joins the revision when it is used, so every other turn keeps its cache.
                     let revision = privacy::hash(&format!(
-                        "provider_turn1:{version}:{policy}:{rid}:{raw}:{}",
-                        run.map(Value::to_string).unwrap_or_default()
+                        "provider_turn1:{version}:{policy}:{rid}:{raw}:{}{}",
+                        run.map(Value::to_string).unwrap_or_default(),
+                        fallback
+                            .map(|m| format!(":thread-model:{m}"))
+                            .unwrap_or_default()
                     ));
                     if o.since.as_deref() != Some("")
                         && revisions.get(&("model_turn".into(), source_id.clone()))
@@ -528,15 +537,16 @@ fn import_project(c: &Config, s: &Store, o: &Options) -> Result<Value> {
                         .unwrap_or(Value::Null);
                     data["requested_model"] = run
                         .and_then(|r| r.pointer("/modelSelection/model"))
+                        .or(fallback)
                         .cloned()
                         .unwrap_or(Value::Null);
                     data["resolved_model"] = Value::Null;
                     data["status"] = v["status"].clone();
                     data["duration_ms"] = duration_ms(&v);
-                    data["model"] = run
-                        .and_then(|r| r.pointer("/modelSelection/model"))
-                        .cloned()
-                        .unwrap_or(Value::Null);
+                    data["model"] = data["requested_model"].clone();
+                    if fallback.is_some() {
+                        data["model_source"] = json!("thread");
+                    }
                     data["started_at"] = v["startedAt"].clone();
                     data["completed_at"] = v["completedAt"].clone();
                     data["node_id"] = v["nodeId"].clone();

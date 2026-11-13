@@ -7,6 +7,8 @@ export interface Filters {
   project?: string; model?: string; instance?: string; since?: string; until?: string; range?: string;
   /** A provider family. Never read from a link: only a chosen provider row sets it. */
   provider?: string;
+  /** The agent program that ran a record (codex, claudeAgent…). Like provider, only a chosen row sets it. */
+  harness?: string;
 }
 
 const MINUTE = 60_000;
@@ -71,16 +73,16 @@ export function previousWindow(f: Filters, now = Date.now()): { since: string; u
   return { since: new Date(start - span).toISOString(), until: new Date(start - 1).toISOString() };
 }
 
-type FilterKey = 'project' | 'model' | 'provider' | 'instance' | 'time';
+type FilterKey = 'project' | 'model' | 'provider' | 'harness' | 'instance' | 'time';
 
 /**
  * Which filters each endpoint is sent. Project records carry no model, so a model filter would empty them.
  * Threads and agents are scanned whole per project so lineage is never cut by a time filter.
  */
 export const ROUTE_FILTERS: Record<string, FilterKey[]> = {
-  overview: ['project', 'model', 'provider', 'instance', 'time'],
+  overview: ['project', 'model', 'provider', 'harness', 'instance', 'time'],
   models: ['project', 'instance', 'time'],
-  'activity/hourly': ['project', 'model', 'provider', 'instance', 'time'],
+  'activity/hourly': ['project', 'model', 'provider', 'harness', 'instance', 'time'],
   projects: ['instance'],
   threads: ['project', 'instance'],
   agents: ['project', 'instance'],
@@ -88,7 +90,7 @@ export const ROUTE_FILTERS: Record<string, FilterKey[]> = {
   'model-turns': ['project', 'model', 'instance', 'time'],
   'usage/projects': ['instance', 'time'],
   'usage/machines': ['project', 'time'],
-  'usage/tools': ['project', 'model', 'provider', 'instance', 'time'],
+  'usage/tools': ['project', 'model', 'provider', 'harness', 'instance', 'time'],
   'usage/tool-hours': ['project', 'model', 'instance', 'time'],
   timeline: ['project', 'model', 'instance', 'time'],
   search: ['project', 'model', 'instance', 'time'],
@@ -100,6 +102,7 @@ export function apiParams(route: string, f: Filters, extra: Record<string, strin
   if (keys.includes('project') && f.project) p.set('project', f.project);
   if (keys.includes('model') && f.model) p.set('model', f.model);
   if (keys.includes('provider') && f.provider) p.set('provider', f.provider);
+  if (keys.includes('harness') && f.harness) p.set('harness', f.harness);
   if (keys.includes('instance') && f.instance) p.set('instance', f.instance);
   if (keys.includes('time')) {
     if (f.since) p.set('since', f.since);
@@ -129,6 +132,7 @@ export function inTimeRange(iso: string, f: Filters): boolean {
 export type PageScope = 'all' | 'no-model' | 'none';
 export const PAGE_SCOPE: Record<string, PageScope> = {
   Projects: 'no-model',
+  Harnesses: 'no-model',
   'Quota and Resets': 'none',
   Storage: 'none',
   'Data Quality': 'none',

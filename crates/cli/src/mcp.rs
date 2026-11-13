@@ -11,6 +11,7 @@ pub const TOOLS: &[(&str, &str)] = &[
     ("usage_by_project", "usage/projects"),
     ("usage_by_machine", "usage/machines"),
     ("quota_current", "quota/current"),
+    ("quota_live", "quota/live"),
     ("quota_history", "quota/windows"),
     ("quota_waste", "quota/resets"),
     ("list_projects", "projects"),
@@ -27,7 +28,7 @@ pub const TOOLS: &[(&str, &str)] = &[
     ("storage_statistics", "storage"),
 ];
 pub fn schema() -> Value {
-    json!({"type":"object","additionalProperties":false,"properties":{"include_content":{"type":"boolean"},"limit":{"type":"integer","minimum":1,"maximum":500},"offset":{"type":"integer","minimum":0,"maximum":1000000},"project":{"type":"string"},"model":{"type":"string"},"provider":{"type":"string","enum":["openai","anthropic","xai","meta","google","qwen","other"]},"instance":{"type":"string"},"since":{"type":"string","format":"date-time"},"until":{"type":"string","format":"date-time"},"q":{"type":"string","maxLength":500},"id":{"type":"string"}}})
+    json!({"type":"object","additionalProperties":false,"properties":{"include_content":{"type":"boolean"},"limit":{"type":"integer","minimum":1,"maximum":500},"offset":{"type":"integer","minimum":0,"maximum":1000000},"project":{"type":"string"},"model":{"type":"string"},"provider":{"type":"string","enum":["openai","anthropic","xai","meta","google","qwen","other"]},"harness":{"type":"string","maxLength":64,"description":"Agent program that ran it, as T3 names it: codex, claudeAgent, grok…"},"instance":{"type":"string"},"since":{"type":"string","format":"date-time"},"until":{"type":"string","format":"date-time"},"q":{"type":"string","maxLength":500},"id":{"type":"string"}}})
 }
 const PROMPTS: &[&str] = &[
     "analyse-my-day",
@@ -157,6 +158,6 @@ mod tests {
     #[test]
     fn strict_schema() {
         assert_eq!(super::schema()["additionalProperties"], false);
-        assert_eq!(super::TOOLS.len(), 20);
+        assert_eq!(super::TOOLS.len(), 21);
     }
 }

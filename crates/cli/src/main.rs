@@ -306,13 +306,22 @@ async fn main() -> Result<()> {
                 t3ui_core::session_logs::import(&c, Some(&s), &cache, &old_db)?
             );
         }
-        Command::QuotaCollect => println!("{}", t3ui_core::quota_sources::collect(&s)?),
+        Command::QuotaCollect => {
+            let caches = t3ui_core::quota_sources::t3_caches(&c.source.sqlite_path);
+            if c.quota.checks {
+                t3ui_core::quota_checks::run_due(&s, caches.as_deref())?;
+            }
+            println!(
+                "{}",
+                t3ui_core::quota_sources::collect(&s, caches.as_deref())?
+            );
+        }
         Command::ImportLegacy { source, .. } => {
             println!("{}", t3ui_core::legacy::import_v1(&c, Some(&s), &source)?);
         }
         Command::Doctor => println!(
             "{}",
-            json!({"database":"writable","source_exists":std::path::Path::new(&c.source.sqlite_path).exists(),"transport":"sqlite_readonly","http_auth":"not configured","websocket":"not implemented","quota":"unavailable","keychain":t3ui_core::privacy::key(false).is_ok(),"dashboard_built":std::path::Path::new("dashboard/dist/index.html").exists(),"clock_offset":"unavailable","mcp":"stdio implemented"})
+            json!({"database":"writable","source_exists":std::path::Path::new(&c.source.sqlite_path).exists(),"transport":"sqlite_readonly","http_auth":"not configured","websocket":"not implemented","quota":if t3ui_core::quota_sources::t3_caches(&c.source.sqlite_path).is_some_and(|d| d.is_dir()) {"t3 usage cache, agent logs"} else {"agent logs"},"keychain":t3ui_core::privacy::key(false).is_ok(),"dashboard_built":std::path::Path::new("dashboard/dist/index.html").exists(),"clock_offset":"unavailable","mcp":"stdio implemented"})
         ),
         Command::Import {
             instance,
@@ -494,7 +503,17 @@ async fn serve(c: Config, s: Store, config_path: std::path::PathBuf) -> Result<(
                 let started = std::time::Instant::now();
                 let result = tokio::task::spawn_blocking(move || {
                     let report = importer::import(&config, &writer, &Options::default());
-                    if let Err(error) = t3ui_core::quota_sources::collect(&writer) {
+                    let caches = t3ui_core::quota_sources::t3_caches(&config.source.sqlite_path);
+                    // Runtrace's own limit checks, for harnesses T3 does not check; each is due every few minutes.
+                    if config.quota.checks
+                        && let Err(error) =
+                            t3ui_core::quota_checks::run_due(&writer, caches.as_deref())
+                    {
+                        tracing::warn!(operation = "quota_checks", error = %error);
+                    }
+                    if let Err(error) =
+                        t3ui_core::quota_sources::collect(&writer, caches.as_deref())
+                    {
                         tracing::warn!(operation = "quota_collect", error = %error);
                     }
                     (writer, report)

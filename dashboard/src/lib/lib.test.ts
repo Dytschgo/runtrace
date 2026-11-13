@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { bucketActivity, buildHeatmap, coverageRows, delta, percentile, redactionTotals, stackByDay, tokensByKey, tokenSummary, toolStats, toolSummary, usageByProvider, captureGaps } from './analytics';
+import { bucketActivity, buildHeatmap, coverageRows, delta, percentile, redactionTotals, stackByDay, tokensByKey, tokenSummary, toolStats, toolSummary, usageByProvider, captureGaps, weeklyWhenLong } from './analytics';
 import { ApiError, getEntities, getJson, scanHourly, scanPages, toCsv } from './api';
 import { commandPreview, durationMs, parseContent, readCutField, toAgent, toThread, toTool, toTurn, type ThreadRow, type ToolRow } from './entities';
 import { apiParams, inTimeRange, previousWindow, resolveFilters } from './filters';
@@ -488,5 +488,20 @@ describe('page totals', () => {
     expect(toolHeadline(loaded, false, { stats, tool: 'Bash' })).toMatchObject({ calls: 300, failed: 30, p50: 7, sampled: { calls: false, time: false, exit: true } });
     expect(toolHeadline(loaded, false, { stats, category: 'unknown' })).toMatchObject({ calls: 600, failed: 5, sampled: { calls: false, time: true } });
     expect(toolHeadline(loaded, false, { stats, status: 'failed' })).toMatchObject({ calls: 1000, sampled: { calls: true } });
+  });
+});
+
+describe('weeklyWhenLong', () => {
+  it('keeps days up to the limit and adds longer spans up into Monday weeks', () => {
+    const short = stackByDay([{ t: '2026-11-03T12:00:00Z' }, { t: '2026-11-04T12:00:00Z' }], (r) => r.t, () => 'm', 'UTC');
+    expect(weeklyWhenLong(short, 'UTC').unit).toBe('day');
+    const long = stackByDay([{ t: '2026-08-01T12:00:00Z' }, { t: '2026-11-03T12:00:00Z' }, { t: '2026-11-04T12:00:00Z' }, { t: '2026-11-09T12:00:00Z' }], (r) => r.t, () => 'm', 'UTC');
+    const w = weeklyWhenLong(long, 'UTC');
+    expect(w.unit).toBe('week');
+    // 3 and 4 Nov share the week of Monday 2 Nov; Monday 9 Nov starts the next.
+    expect(w.rows.find((r) => r.day === '2026-11-02')?.m).toBe(2);
+    expect(w.rows.find((r) => r.day === '2026-11-09')?.m).toBe(1);
+    expect(w.weekOf.get('2026-11-04')).toBe('2026-11-02');
+    expect(w.rows.reduce((s, r) => s + Number(r.m ?? 0), 0)).toBe(4);
   });
 });

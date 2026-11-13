@@ -121,9 +121,9 @@ test('richer optional data appears without a frontend change', async ({ page }) 
   await expect(page.locator('.gaps')).not.toContainText('Tokens');
   await expect(page.locator('.gaps')).not.toContainText('Model calls');
   await page.goto('/?page=Quota+and+Resets');
-  await expect(page.getByText('42.0%')).toBeVisible();
+  await expect(page.locator('[aria-label="Codex quota"] .quota-line b')).toHaveText('42% left');
   await expect(page.getByRole('heading', { name: 'No quota snapshots collected' })).toBeHidden();
-  await expect(page.getByRole('cell', { name: '20.0%' })).toBeVisible();
+  await expect(page.getByRole('cell', { name: '≤ 20%' })).toBeVisible();
   await expect(page.locator('[aria-label="Codex quota"]')).toBeVisible();
 });
 

@@ -9,6 +9,7 @@ const pages: Record<PageName, ComponentType> = {
   Overview,
   Activity: lazy(() => import('./pages/ActivityPage')),
   Models: lazy(() => import('./pages/Models')),
+  Harnesses: lazy(() => import('./pages/Harnesses')),
   Projects: lazy(() => import('./pages/Projects')),
   Threads: lazy(() => import('./pages/Threads')),
   'Agent Trees': lazy(() => import('./pages/AgentTrees')),

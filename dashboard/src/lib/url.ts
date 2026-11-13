@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useSyncExternalStore } from 'react';
 
 export const PAGES = [
-  'Overview', 'Activity', 'Models', 'Projects', 'Threads', 'Agent Trees', 'Tool Calls',
+  'Overview', 'Activity', 'Models', 'Harnesses', 'Projects', 'Threads', 'Agent Trees', 'Tool Calls',
   'Quota and Resets', 'Storage', 'Data Quality', 'Settings',
 ] as const;
 export type PageName = (typeof PAGES)[number] | 'Search';
@@ -65,6 +65,6 @@ export function useUrl() {
 export const focusRequest = { pending: false };
 
 export const CHORDS: Record<string, PageName> = {
-  o: 'Overview', a: 'Activity', m: 'Models', p: 'Projects', t: 'Threads', r: 'Agent Trees', c: 'Tool Calls',
+  o: 'Overview', a: 'Activity', m: 'Models', h: 'Harnesses', p: 'Projects', t: 'Threads', r: 'Agent Trees', c: 'Tool Calls',
   u: 'Quota and Resets', s: 'Storage', d: 'Data Quality', x: 'Settings',
 };

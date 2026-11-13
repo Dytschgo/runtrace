@@ -22,6 +22,8 @@ sqlite_path = ""
 poll_seconds = 60
 collect_on_serve = true
 [quota]
+# Ask harnesses T3 does not check (Antigravity, Muse) for their limits, every 5 minutes, with their own programs.
+checks = true
 normal_interval_seconds = 600
 near_reset_interval_seconds = 120
 near_reset_window_minutes = 30

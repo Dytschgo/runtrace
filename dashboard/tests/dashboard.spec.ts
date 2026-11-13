@@ -99,7 +99,7 @@ test('unsupported quota is explicit', async ({ page }) => {
   await page.route('**/api/v1/quota/**', (route) => route.fulfill({ json: { data: [], capture_quality: 'partial', limit: 100, offset: 0, timezone: 'UTC', null_semantics: 'null means unavailable, never zero' } }));
   await page.goto('/?page=Quota+and+Resets');
   await expect(page.getByRole('heading', { name: 'No quota snapshots collected' })).toBeVisible();
-  await expect(page.getByText('No agent has reported its limits yet', { exact: false })).toBeVisible();
+  await expect(page.getByText('No harness has reported its limits yet', { exact: false })).toBeVisible();
 });
 
 test('filters live in the URL, reach the API and survive reload', async ({ page, request }) => {
@@ -232,7 +232,7 @@ test('keyboard shortcuts navigate and move focus to the page heading', async ({ 
   await expect(help).toBeHidden();
 });
 
-for (const name of ['Overview', 'Activity', 'Models', 'Projects', 'Threads', 'Agent Trees', 'Tool Calls', 'Quota and Resets', 'Storage', 'Data Quality', 'Settings']) {
+for (const name of ['Overview', 'Activity', 'Models', 'Harnesses', 'Projects', 'Threads', 'Agent Trees', 'Tool Calls', 'Quota and Resets', 'Storage', 'Data Quality', 'Settings']) {
   test(`${name}: accessible, and no overflow at 390px`, async ({ page }) => {
     const errors: string[] = [];
     page.on('pageerror', (e) => errors.push(String(e)));

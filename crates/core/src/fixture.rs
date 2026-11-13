@@ -1451,6 +1451,42 @@ fn fill(fx: &mut Fx) -> Result<()> {
             "claude_usage_cache",
         )?;
     }
+    // Grok's weekly window as T3 reads it, hourly over the last day.
+    let grok = now + Duration::days(2) + Duration::hours(4);
+    for j in 0..24i64 {
+        fx.quota_sample(
+            "grok",
+            "weekly",
+            now - Duration::hours(23) + Duration::hours(j) - Duration::minutes(3),
+            60.0 + 0.7 * j as f64,
+            grok,
+            10_080,
+            None,
+            "t3_usage_cache",
+        )?;
+    }
+    // What T3 last heard from each harness, matching the newest readings above, with a local harness that has no limit,
+    // and the two Runtrace checks itself: one with limits and one whose provider sends no figures.
+    let window = |window: &str, label: &str, used: f64, reset: DateTime<Utc>, minutes: i64| json!({"window":window,"label":label,"kind":if minutes == 300 {"session"} else {"weekly"},"used_percentage":used,"reset_at":iso(reset),"window_minutes":minutes});
+    let checked = iso(now - Duration::minutes(2));
+    let expires = iso(now + Duration::days(20));
+    let live = json!({"read_at": iso(now), "harnesses": [
+        {"harness":"claudeAgent","driver":"claudeAgent","name":"Claude","enabled":true,"status":"ready","quota_key":"claude","reports_limits":true,"checked_at":checked,
+         "windows":[window("five_hour","Session",70.0,five,300),window("seven_day","Weekly",54.0,seven,10_080)],
+         "credits":{"available":1,"next_expires_at":expires,"options":[{"label":"Full reset","description":"Refills your 5-hour and weekly limits.","available":1,"expires_at":expires}]},"unavailable":null},
+        {"harness":"codex","driver":"codex","name":"Codex","enabled":true,"status":"ready","quota_key":"codex","reports_limits":true,"checked_at":checked,
+         "windows":[window("five_hour","Session",29.0,now + Duration::hours(2),300),window("weekly","Weekly",45.0,weekly,10_080)],
+         "credits":{"available":2,"next_expires_at":expires,"options":[]},"unavailable":null},
+        {"harness":"codex-ollama","driver":"codex","name":"Codex","enabled":true,"status":"ready","quota_key":"codex-ollama","reports_limits":true,"checked_at":checked,
+         "windows":[],"credits":null,"unavailable":{"reason":"local","message":"Runs models on this machine through Ollama, so it has no limit"}},
+        {"harness":"grok","driver":"grok","name":"Grok","enabled":true,"status":"ready","quota_key":"grok","reports_limits":true,"checked_at":checked,
+         "windows":[window("weekly","Weekly",76.1,grok,10_080)],"credits":null,"unavailable":null},
+        {"harness":"muse","driver":"muse","name":"Muse","enabled":true,"status":"ready","quota_key":"muse","reports_limits":true,"checked_at":checked,"checked_by":"runtrace","plan":"High Usage",
+         "windows":[],"credits":null,"unavailable":{"reason":"noUsageData","message":"Subscribed, but Meta sends no usage numbers yet"}},
+        {"harness":"antigravity","driver":"antigravity","name":"Antigravity","enabled":true,"status":"ready","quota_key":"antigravity","reports_limits":true,"checked_at":checked,"checked_by":"runtrace",
+         "windows":[{"window":"seven_day_gemini","label":"Weekly · Gemini","used_percentage":35.0,"reset_at":iso(now + Duration::days(3)),"window_minutes":10_080},{"window":"seven_day_claude_and_gpt","label":"Weekly · Claude and GPT","used_percentage":0.0,"reset_at":null,"window_minutes":10_080}],"credits":null,"unavailable":null}
+    ]});
+    fx.s.set(crate::quota_sources::LIVE, &live.to_string())?;
 
     // One finished sync, so Data Quality has a checkpoint to show.
     fx.s.conn.execute(
@@ -1582,6 +1618,8 @@ mod tests {
             0
         );
         let current = query(&s, "quota/current", &Filter::default()).unwrap();
-        assert_eq!(current["data"].as_array().unwrap().len(), 4);
+        assert_eq!(current["data"].as_array().unwrap().len(), 5);
+        let live = query(&s, "quota/live", &Filter::default()).unwrap();
+        assert_eq!(live["data"].as_array().unwrap().len(), 6);
     }
 }

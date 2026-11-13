@@ -75,6 +75,8 @@ export default function Overview() {
     if (by === 'project') return chosen.map((project) => ({ ...f, project }));
     // The service works out each record's provider the way the rows do, so a provider's counts include turns that name no model.
     if (by === 'provider') return chosen.map((provider) => ({ ...f, provider }));
+    // A harness is matched by the thread a record ran in, so prompts, tools and sub-agents follow the turns.
+    if (by === 'harness') return chosen.map((harness) => ({ ...f, harness }));
     return chosen.map((model) => ({ ...f, model }));
   }, [picks, by, f]);
   const previousScopes = useMemo(() => (prevWindow ? scopes.map((s) => ({ ...s, ...prevWindow, range: undefined })) : []), [scopes, prevWindow]);
@@ -241,7 +243,7 @@ export default function Overview() {
     if (fromTurns || (turnsLoading && !listFallback)) {
       // Every model and provider stays listed, ranked by use, so one that was quiet in this window can still be chosen.
       const seen = new Set(listTrace.lines.map((l) => l.key));
-      const known = f.model || by === 'project' ? [] : by === 'model' ? [...slots.keys()] : [...new Set([...slots.keys()].flatMap((m) => modelProvider(m) ?? []))];
+      const known = f.model || by === 'project' ? [] : by === 'model' ? [...slots.keys()] : by === 'harness' ? [...new Set(scoped.flatMap((t) => t.provider ?? []))] : [...new Set([...slots.keys()].flatMap((m) => modelProvider(m) ?? []))];
       const idle = known.filter((k) => !seen.has(k)).flatMap((k) => { const info = idleGroup(by, k, slots); return info ? [{ key: k, value: 0, turns: 0, reported: 0, partial: false, info }] : []; });
       return [...listTrace.lines, ...idle];
     }
@@ -252,7 +254,7 @@ export default function Overview() {
       key: m.model ?? 'not-recorded', value: m.total_tokens ?? 0, turns: m.observed_provider_turns ?? 0, reported: m.turns_with_usage ?? m.observed_provider_turns ?? 0, partial: !!m.turns_with_usage,
       info: { key: m.model ?? 'not-recorded', label: m.model ?? 'Not recorded', color: m.model ? slots.get(m.model) ?? OTHER_COLOR : OTHER_COLOR, model: m.model ?? null, provider: null, dash: !m.model },
     })).sort((a, b) => b.value - a.value);
-  }, [fromTurns, turnsLoading, turnsFailed, listFallback, metric, by, f.model, listTrace.lines, modelRows, slots]);
+  }, [fromTurns, turnsLoading, turnsFailed, listFallback, metric, by, f.model, listTrace.lines, modelRows, slots, scoped]);
   // Some turns reported and some did not, so the sum is at least this much.
   const lowerBound = isKnown(total) && total > 0 && metric !== 'turns' && (fromTurns ? head.reported < head.turns : !!summary.turns && (summary.withUsage ?? 0) < summary.turns);
   // A model can report some fields but no complete total, and that is said plainly.

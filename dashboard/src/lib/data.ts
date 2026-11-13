@@ -362,7 +362,7 @@ export function useStorage() {
   return useQuery({ queryKey: ['storage'], retry: false, queryFn: ({ signal }) => getJson<StorageResponse>('storage', undefined, signal) });
 }
 
-export type QuotaRoute = 'quota/current' | 'quota/windows' | 'quota/resets';
+export type QuotaRoute = 'quota/current' | 'quota/live' | 'quota/windows' | 'quota/resets';
 /** Quota readings over a span, for drawing how each window filled. Refreshed with every sync. */
 export function useQuotaSamples(since: string) {
   return useQuery({ queryKey: ['quota/samples', since], placeholderData: keepPreviousData, refetchInterval: 60_000, queryFn: ({ signal }) => getJson<Envelope<Record<string, unknown>>>('quota/samples', new URLSearchParams({ since }), signal) });

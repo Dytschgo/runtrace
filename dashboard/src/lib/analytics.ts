@@ -191,6 +191,37 @@ export function stackByDay<T>(rows: T[], when: (r: T) => string, series: (r: T) 
   return filled;
 }
 
+/** Past this many days a bar per day is too thin to read, so charts draw a bar per week. */
+export const WEEKLY_AFTER_DAYS = 60;
+
+/**
+ * Daily rows added up into weeks starting on Monday, once there are more days than WEEKLY_AFTER_DAYS. `weekOf` maps each
+ * day to its week, so a caller can carry per-day notes (such as a partial total) over to the week.
+ */
+export function weeklyWhenLong(rows: DayStack[], tz: string): { rows: DayStack[]; unit: 'day' | 'week'; weekOf: Map<string, string> } {
+  const weekOf = new Map<string, string>();
+  if (rows.length <= WEEKLY_AFTER_DAYS) {
+    for (const r of rows) weekOf.set(r.day, r.day);
+    return { rows, unit: 'day', weekOf };
+  }
+  const weeks = new Map<string, DayStack>();
+  for (const r of rows) {
+    const [y, m, d] = r.day.split('-').map(Number);
+    const date = new Date(Date.UTC(y, m - 1, d));
+    date.setUTCDate(date.getUTCDate() - ((date.getUTCDay() + 6) % 7));
+    const start = date.toISOString().slice(0, 10);
+    weekOf.set(r.day, start);
+    let w = weeks.get(start);
+    if (!w) {
+      const iso = new Date(zonedDayStart(start, tz).getTime() + 12 * HOUR).toISOString();
+      w = { day: start, label: fmtDay(iso, tz), iso };
+      weeks.set(start, w);
+    }
+    for (const [k, v] of Object.entries(r)) if (typeof v === 'number') w[k] = ((w[k] as number | undefined) ?? 0) + v;
+  }
+  return { rows: [...weeks.values()].sort((x, y) => x.day.localeCompare(y.day)), unit: 'week', weekOf };
+}
+
 export interface Coverage { id: string; entity: string; field: string; known: number; total: number; note: string }
 
 export interface TokenSummary {

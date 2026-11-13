@@ -1,10 +1,10 @@
 import { METRICS, RESOLUTION_MS, type GroupBy, type Metric, type Resolution, type Trace } from '../../lib/series';
 
 /** The Overview chart's choices and how the period before is lined up with this one. */
-export const GROUPS: { value: GroupBy; label: string }[] = [{ value: 'model', label: 'Models' }, { value: 'provider', label: 'Providers' }, { value: 'project', label: 'Projects' }];
+export const GROUPS: { value: GroupBy; label: string }[] = [{ value: 'model', label: 'Models' }, { value: 'provider', label: 'Providers' }, { value: 'harness', label: 'Harnesses' }, { value: 'project', label: 'Projects' }];
 export const RES_OPTIONS: { value: Resolution | 'auto'; label: string }[] = [{ value: 'auto', label: 'Auto' }, { value: '5m', label: '5m' }, { value: '15m', label: '15m' }, { value: '1h', label: '1h' }, { value: '6h', label: '6h' }, { value: '1d', label: '1d' }, { value: '1w', label: '1w' }];
 export const RES_WORDS: Record<Resolution, string> = { '5m': '5 minutes', '15m': '15 minutes', '1h': 'hour', '6h': '6 hours', '1d': 'day', '1w': 'week' };
-export const isGroup = (v: string | null): v is GroupBy => v === 'model' || v === 'provider' || v === 'project';
+export const isGroup = (v: string | null): v is GroupBy => v === 'model' || v === 'provider' || v === 'harness' || v === 'project';
 export const isMetric = (v: string | null): v is Metric => METRICS.some((m) => m.key === v);
 export const isRes = (v: string | null): v is Resolution => v !== null && Object.hasOwn(RESOLUTION_MS, v);
 

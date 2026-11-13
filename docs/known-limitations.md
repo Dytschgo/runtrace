@@ -9,7 +9,7 @@ The local installation is usable and tested against real history. The original f
 - Normalized provider-turn tokens are imported from `turnTokenUsage`. A provider turn is not an individual model call. Requested model is linked through a recorded run; provider turns without that link retain an unknown model. Resolved model, cost, first-token time and native-subagent token breakdowns remain unavailable.
 - Historical migrated messages without a terminal run are withheld. Missing historical tools remain partial/unavailable, never an asserted zero. Steering/retry/correction classification is incomplete.
 - Just Run It correlation is imported through existing T3 thread IDs when its optional database path is configured. Originating device and submission timestamps are not invented.
-- No live provider quota adapter or retained historical quota snapshots are available in this installation. The reset-window primitive distinguishes complete and partial sample coverage; the dashboard explicitly shows no collected quota history. This does not prove T3 cannot expose live limits.
+- Quota is only as good as its sources. Meta sends no usage numbers for Muse yet, Antigravity and Grok history starts when Runtrace first checks them, and a window is complete only when T3 (or the agent) was read at least every 20 minutes across it, so a computer asleep or T3 closed leaves it partial.
 
 ## Storage, privacy and operations
 

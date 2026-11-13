@@ -1,6 +1,8 @@
 const MINUTE = 60_000;
-/** Used at or above this, a window is marked so it is seen before it refuses work. */
-export const QUOTA_HIGH = 80;
+/** With this much left or less, a window is marked so it is seen before it refuses work. */
+export const QUOTA_LOW = 20;
+/** What is left of a window, from what was used. Over-quota readings above 100 leave nothing. */
+export const leftOf = (used: number) => Math.min(100, Math.max(0, 100 - used));
 const HOUR = 60 * MINUTE;
 
 export interface QuotaReading { at: number; used: number; resetAt: number | null }
@@ -9,7 +11,7 @@ export interface Pace {
   perHour: number;
   /** How far back the readings reach, so the projection can say what it is based on. */
   basisMs: number;
-  /** When the window would be full at this pace, or null when it would last until its reset. */
+  /** When nothing would be left at this pace, or null when it would last until its reset. */
   fullAt: number | null;
 }
 
@@ -45,3 +47,116 @@ export function quotaPace(readings: QuotaReading[], windowMinutes: number | null
 
 /** A short span for a label: minutes under an hour and a half, whole hours above. */
 export const spanText = (ms: number) => (ms < 90 * MINUTE ? `${Math.max(1, Math.round(ms / MINUTE))}m` : `${Math.round(ms / HOUR)}h`);
+
+type Row = Record<string, unknown>;
+const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+const time = (v: unknown) => { const t = typeof v === 'string' ? Date.parse(v) : NaN; return Number.isFinite(t) ? t : null; };
+const text = (v: unknown) => (typeof v === 'string' && v ? v : null);
+
+/** Windows by their stored names, the way T3 labels them. */
+const WINDOW_NAMES: Record<string, string> = { five_hour: '5-hour', seven_day: 'Weekly', weekly: 'Weekly', daily: 'Daily', usage_window: 'Usage window' };
+export function windowName(w: unknown): string {
+  if (typeof w !== 'string' || !w) return 'Window';
+  const model = /^seven_day_(.+)$/.exec(w);
+  if (model) return `Weekly · ${model[1].charAt(0).toUpperCase()}${model[1].slice(1).replace(/_/g, ' ')}`;
+  return WINDOW_NAMES[w] ?? w.replace(/_/g, ' ');
+}
+
+/** A window's name: the common ones by their id, others as the harness labels them. */
+export const windowLabel = (window: string, label: string | null) => WINDOW_NAMES[window] ?? label ?? windowName(window);
+
+export interface QuotaWindow {
+  window: string;
+  /** The harness's own name for it, when it gave one. */
+  label: string | null;
+  used: number | null;
+  resetAt: number | null;
+  minutes: number | null;
+  /** When this figure was read, by T3 or by the agent itself. */
+  readAt: number | null;
+}
+export interface ResetCredits { available: number | null; nextExpiresAt: number | null; options: { label: string; description: string | null; available: number | null; expiresAt: number | null }[] }
+export interface QuotaCard {
+  /** The name quota is stored under: claude, codex, grok… */
+  key: string;
+  /** The harness that spends it, as T3 names it. */
+  harness: string;
+  plan: string | null;
+  /** When T3, or Runtrace for a harness T3 does not check, last asked this harness, if either did. */
+  checkedAt: number | null;
+  checkedBy: 't3' | 'runtrace' | null;
+  windows: QuotaWindow[];
+  credits: ResetCredits | null;
+}
+/** A harness that has no limits to show, and why: it runs locally, its provider sends no figures, or the check failed. */
+export interface SilentHarness { harness: string; why: string; kind: 'local' | 'none' | 'failed'; plan: string | null }
+
+/**
+ * One card per harness with limits. T3's live answer says which windows a harness has; each window shows the newest figure,
+ * T3's or the agent's own reading, whichever came later. A harness T3 does not know keeps the stored readings alone.
+ */
+export function quotaCards(current: Row[], live: Row[], harnessOf: (key: string) => string): { cards: QuotaCard[]; silent: SilentHarness[] } {
+  const stored = new Map<string, Row[]>();
+  for (const r of current) {
+    const key = String(r.provider ?? 'agent');
+    stored.set(key, [...(stored.get(key) ?? []), r]);
+  }
+  const fromStored = (r: Row): QuotaWindow => ({
+    window: String(r.window ?? 'window'),
+    label: null,
+    used: num(r.used_percentage) ?? (num(r.remaining_percentage) !== null ? 100 - (r.remaining_percentage as number) : null),
+    resetAt: time(r.reset_at),
+    minutes: num(r.window_minutes),
+    readAt: time(r.sampled_at),
+  });
+  const cards: QuotaCard[] = [];
+  const silent: SilentHarness[] = [];
+  const seen = new Set<string>();
+  for (const h of live) {
+    const key = text(h.quota_key) ?? String(h.harness);
+    const harness = text(h.harness) ?? key;
+    const windows = Array.isArray(h.windows) ? (h.windows as Row[]) : [];
+    if (!windows.length) {
+      const u = (h.unavailable ?? null) as Row | null;
+      const why = u?.reason === 'probeFailed' ? `The check failed${text(u.message) ? `: ${text(u.message)}` : ''}`
+        : text(u?.message) ?? (h.reports_limits === false ? 'Nothing checks its limits' : u?.reason === 'unsupported' ? 'Its limits cannot be read' : 'Reported no limits');
+      const kind = u?.reason === 'local' ? 'local' : u?.reason === 'probeFailed' ? 'failed' : 'none';
+      // A harness with stored readings still gets its card; the reason is only for those with nothing at all.
+      if (!stored.has(key)) { silent.push({ harness, why, kind, plan: text(h.plan) }); continue; }
+    }
+    seen.add(key);
+    const checkedAt = time(h.checked_at);
+    const own = new Map((stored.get(key) ?? []).map((r) => [String(r.window), r]));
+    const list = windows.length ? windows.map((w): QuotaWindow => {
+      const mine: QuotaWindow = { window: String(w.window), label: text(w.label), used: num(w.used_percentage), resetAt: time(w.reset_at), minutes: num(w.window_minutes), readAt: checkedAt };
+      const theirs = own.get(mine.window);
+      const other = theirs ? fromStored(theirs) : null;
+      return other && other.readAt !== null && (mine.readAt === null || other.readAt > mine.readAt) ? { ...other, label: mine.label } : mine;
+    }) : [...own.values()].map(fromStored);
+    const c = (h.credits ?? null) as Row | null;
+    cards.push({
+      key, harness,
+      plan: text(h.plan) ?? (stored.get(key) ?? []).map((r) => text(r.plan)).find(Boolean) ?? null,
+      checkedAt,
+      checkedBy: h.checked_by === 'runtrace' ? 'runtrace' : 't3',
+      windows: list,
+      credits: c ? {
+        available: num(c.available),
+        nextExpiresAt: time(c.next_expires_at),
+        options: (Array.isArray(c.options) ? (c.options as Row[]) : []).map((o) => ({ label: text(o.label) ?? 'Reset', description: text(o.description), available: num(o.available), expiresAt: time(o.expires_at) })),
+      } : null,
+    });
+  }
+  for (const [key, rows] of stored) {
+    if (seen.has(key)) continue;
+    cards.push({ key, harness: harnessOf(key), plan: rows.map((r) => text(r.plan)).find(Boolean) ?? null, checkedAt: null, checkedBy: null, windows: rows.map(fromStored), credits: null });
+  }
+  return { cards, silent };
+}
+
+/** How fresh the last check is: under 10 minutes is live, over an hour means nothing has been asking. */
+export function freshness(checkedAt: number | null, now: number): 'live' | 'recent' | 'stale' | 'unknown' {
+  if (checkedAt === null) return 'unknown';
+  const age = now - checkedAt;
+  return age <= 10 * MINUTE ? 'live' : age <= HOUR ? 'recent' : 'stale';
+}

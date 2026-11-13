@@ -17,6 +17,9 @@ pub struct Filter {
     pub model: Option<String>,
     /// A provider family (openai, anthropic, xai, meta, google, qwen, other), worked out per record as the dashboard does.
     pub provider: Option<String>,
+    /// The agent program that ran a record (codex, claudeAgent, grok…), as T3 names its provider instance.
+    /// A turn or run matches by its own; anything else by the thread it ran in, so prompts, tools and sub-agents follow.
+    pub harness: Option<String>,
     pub instance: Option<String>,
     pub since: Option<String>,
     pub until: Option<String>,
@@ -63,6 +66,14 @@ impl Filter {
             "provider must be a provider family"
         );
         ensure!(
+            self.harness
+                .as_ref()
+                .is_none_or(|h| (1..=64).contains(&h.len())
+                    && h.chars()
+                        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')),
+            "harness must be a provider instance name"
+        );
+        ensure!(
             self.q.as_ref().is_none_or(|q| q.len() <= 500),
             "Search must be <= 500 characters"
         );
@@ -81,11 +92,21 @@ pub fn provider_sql() -> String {
     )
 }
 
+/// Whether a record belongs to the harness given as the next three parameters. A turn or run by its own; a record of a run
+/// (a prompt, answer, tool call or sub-agent) by that run's; anything else by the harness that ran most of its thread.
+/// Each record belongs to one harness, so the counts of all harnesses add up to the whole.
+fn harness_match() -> String {
+    format!(
+        "CASE WHEN kind IN ('model_turn','run') THEN {DRIVER} IS NOT DISTINCT FROM ?          WHEN nullif(run_id,'') IS NOT NULL AND run_id IN (SELECT source_id FROM records WHERE kind='run') THEN run_id IN (SELECT source_id FROM records WHERE kind='run' AND {DRIVER}=?)          ELSE thread_id IN (SELECT thread_id FROM (SELECT thread_id,d,row_number() OVER (PARTITION BY thread_id ORDER BY n DESC,d) rn FROM (SELECT thread_id,{DRIVER} d,count(*) n FROM records WHERE kind IN ('model_turn','run') GROUP BY ALL HAVING d IS NOT NULL)) WHERE rn=1 AND d=?) END"
+    )
+}
+
 pub fn query(s: &Store, name: &str, f: &Filter) -> Result<Value> {
     f.validate()?;
     let filter = format!(
-        "(? IS NULL OR project_id=?) AND (? IS NULL OR instance_id=?) AND (? IS NULL OR try_cast(occurred_at AS TIMESTAMPTZ)>=try_cast(? AS TIMESTAMPTZ)) AND (? IS NULL OR try_cast(occurred_at AS TIMESTAMPTZ)<=try_cast(? AS TIMESTAMPTZ)) AND (? IS NULL OR model=?) AND (? IS NULL OR ({})=?)",
-        provider_sql()
+        "(? IS NULL OR project_id=?) AND (? IS NULL OR instance_id=?) AND (? IS NULL OR try_cast(occurred_at AS TIMESTAMPTZ)>=try_cast(? AS TIMESTAMPTZ)) AND (? IS NULL OR try_cast(occurred_at AS TIMESTAMPTZ)<=try_cast(? AS TIMESTAMPTZ)) AND (? IS NULL OR model=?) AND (? IS NULL OR ({})=?) AND (? IS NULL OR {})",
+        provider_sql(),
+        harness_match()
     );
     let filter = filter.as_str();
     let args: Vec<&dyn duckdb::ToSql> = vec![
@@ -101,6 +122,10 @@ pub fn query(s: &Store, name: &str, f: &Filter) -> Result<Value> {
         &f.model,
         &f.provider,
         &f.provider,
+        &f.harness,
+        &f.harness,
+        &f.harness,
+        &f.harness,
     ];
     // Quota compares resets with now, which T3UI_NOW can pin for repeatable tests.
     let now = crate::storage::now_sql();
@@ -135,7 +160,9 @@ pub fn query(s: &Store, name: &str, f: &Filter) -> Result<Value> {
  // The latest reading per provider and window. Once its reset has passed, what is left is unknown until the next reading.
  "quota/current"=>s.rows(&"SELECT json_object('provider',provider,'window',window_kind,'used_percentage',used_percent,'remaining_percentage',CASE WHEN try_cast(reset_at AS TIMESTAMPTZ)>now() THEN 100-used_percent END,'reset_at',reset_at,'reset_passed',try_cast(reset_at AS TIMESTAMPTZ)<=now(),'window_minutes',window_minutes,'sampled_at',sampled_at,'plan',plan,'source',source,'capture_quality','partial')::VARCHAR FROM (SELECT *,row_number() OVER (PARTITION BY provider,window_kind ORDER BY sampled_at DESC) rn FROM quota_samples) WHERE rn=1 ORDER BY provider,window_kind".replace("now()",&now),&[])?,
  // One row per window that reset or will reset. The last reading before a reset is the most that is known to have been used.
- "quota/windows"=>s.rows(&"WITH w AS (SELECT provider,window_kind,reset_at,max(used_percent) peak,arg_max(used_percent,sampled_at) last_used,min(sampled_at) first_at,max(sampled_at) last_at,count(*) n,any_value(window_minutes) window_minutes FROM quota_samples GROUP BY provider,window_kind,reset_at), e AS (SELECT *, try_cast(reset_at AS TIMESTAMPTZ)<=now() OR EXISTS (SELECT 1 FROM w later WHERE later.provider=w.provider AND later.window_kind=w.window_kind AND later.first_at>w.last_at AND later.reset_at<>w.reset_at) ended, CASE WHEN try_cast(reset_at AS TIMESTAMPTZ)>now() THEN (SELECT min(later.first_at) FROM w later WHERE later.provider=w.provider AND later.window_kind=w.window_kind AND later.first_at>w.last_at AND later.reset_at<>w.reset_at) END ended_early_at FROM w) SELECT json_object('provider',provider,'window',window_kind,'reset_at',reset_at,'ended',ended,'ended_early_at',ended_early_at,'peak_used_percentage',peak,'unused_percentage_before_reset',CASE WHEN ended THEN 100-last_used END,'first_sample_at',first_at,'last_sample_at',last_at,'samples',n,'limit_hits',(SELECT count(*) FROM quota_events x WHERE x.provider=e.provider AND x.reset_at=e.reset_at),'capture_quality','partial')::VARCHAR FROM e ORDER BY reset_at DESC LIMIT 200".replace("now()",&now),&[])?,
+ "quota/windows"=>s.rows(&"WITH w AS (SELECT provider,window_kind,reset_at,max(used_percent) peak,arg_max(used_percent,sampled_at) last_used,min(sampled_at) first_at,max(sampled_at) last_at,count(*) n,any_value(window_minutes) window_minutes,list(sampled_at ORDER BY sampled_at) times FROM quota_samples GROUP BY provider,window_kind,reset_at), e AS (SELECT *, try_cast(reset_at AS TIMESTAMPTZ)<=now() OR EXISTS (SELECT 1 FROM w later WHERE later.provider=w.provider AND later.window_kind=w.window_kind AND later.first_at>w.last_at AND later.reset_at<>w.reset_at) ended, CASE WHEN try_cast(reset_at AS TIMESTAMPTZ)>now() THEN (SELECT min(later.first_at) FROM w later WHERE later.provider=w.provider AND later.window_kind=w.window_kind AND later.first_at>w.last_at AND later.reset_at<>w.reset_at) END ended_early_at FROM w) SELECT json_object('provider',provider,'window',window_kind,'reset_at',reset_at,'ended',ended,'ended_early_at',ended_early_at,'peak_used_percentage',peak,'unused_percentage_before_reset',CASE WHEN ended THEN 100-last_used END,'first_sample_at',first_at,'last_sample_at',last_at,'samples',n,'window_minutes',window_minutes,'sample_times',times,'limit_hits',(SELECT count(*) FROM quota_events x WHERE x.provider=e.provider AND x.reset_at=e.reset_at))::VARCHAR FROM e ORDER BY reset_at DESC LIMIT 200".replace("now()",&now),&[]).map(window_coverage)?,
+ // What T3 last heard from every harness about its limits, as read on the last sync.
+ "quota/live"=>live_quota(s),
  // Every time a provider refused work for a reached limit, grouped by the reset it was waiting for.
  "quota/resets"=>s.rows("SELECT json_object('provider',provider,'window',window_kind,'reset_at',reset_at,'first_hit_at',min(happened_at),'last_hit_at',max(happened_at),'hits',count(*),'capture_quality','partial')::VARCHAR FROM quota_events GROUP BY provider,window_kind,reset_at ORDER BY min(happened_at) DESC LIMIT 200",&[])?,
  "quota/samples"=>s.rows("SELECT json_object('provider',provider,'window',window_kind,'sampled_at',sampled_at,'used_percentage',used_percent,'reset_at',reset_at)::VARCHAR FROM quota_samples WHERE (? IS NULL OR try_cast(sampled_at AS TIMESTAMPTZ)>=try_cast(? AS TIMESTAMPTZ)) AND (? IS NULL OR try_cast(sampled_at AS TIMESTAMPTZ)<=try_cast(? AS TIMESTAMPTZ)) ORDER BY sampled_at",&[&f.since,&f.since,&f.until,&f.until])?,
@@ -185,4 +212,70 @@ pub fn query(s: &Store, name: &str, f: &Filter) -> Result<Value> {
     Ok(
         json!({"data":rows,"limit":f.limit.unwrap_or(100),"offset":f.offset.unwrap_or(0),"timezone":"UTC","capture_quality":"partial","null_semantics":"null means unavailable, never zero"}),
     )
+}
+
+/// Readings no further apart than this, starting and ending this close to a window's edges, watched the whole window.
+const COVERED_GAP_MS: i64 = 20 * 60_000;
+
+/// A finished window is complete when its readings cover it from start to end, so the last one before the reset is close
+/// to what was really left. Anything less is partial: more may have been used between readings.
+fn window_coverage(rows: Vec<Value>) -> Vec<Value> {
+    let ms = |v: &Value| {
+        v.as_str()
+            .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
+            .map(|d| d.timestamp_millis())
+    };
+    rows.into_iter()
+        .map(|mut r| {
+            let reset = ms(&r["reset_at"]);
+            let end = ms(&r["ended_early_at"]).or(reset);
+            let start = reset
+                .zip(r["window_minutes"].as_i64())
+                .map(|(reset, m)| reset - m * 60_000);
+            let complete = r["ended"] == true
+                && start.zip(end).is_some_and(|(start, end)| {
+                    let samples: Vec<crate::quota::Sample> = r["sample_times"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(ms)
+                        .map(|at| crate::quota::Sample {
+                            sampled_at: at,
+                            reset_at: end,
+                            remaining_percentage: Some(0.0),
+                            valid: true,
+                        })
+                        .collect();
+                    crate::quota::reset_window(&samples, start, end, COVERED_GAP_MS).complete
+                });
+            if let Some(o) = r.as_object_mut() {
+                o.remove("sample_times");
+                o.insert(
+                    "capture_quality".into(),
+                    json!(if complete { "complete" } else { "partial" }),
+                );
+            }
+            r
+        })
+        .collect()
+}
+
+/// The live snapshot the collector keeps, one row per harness, each carrying when it was read.
+fn live_quota(s: &Store) -> Vec<Value> {
+    let Some(v) = s
+        .setting(crate::quota_sources::LIVE)
+        .and_then(|v| serde_json::from_str::<Value>(&v).ok())
+    else {
+        return vec![];
+    };
+    v["harnesses"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .cloned()
+        .map(|mut h| {
+            h["read_at"] = v["read_at"].clone();
+            h
+        })
+        .collect()
 }

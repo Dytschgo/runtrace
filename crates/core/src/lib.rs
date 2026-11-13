@@ -7,6 +7,7 @@ pub mod importer;
 pub mod legacy;
 pub mod privacy;
 pub mod quota;
+pub mod quota_checks;
 pub mod quota_sources;
 pub mod session_logs;
 pub mod storage;

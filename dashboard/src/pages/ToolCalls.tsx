@@ -6,7 +6,7 @@ import { StackedDays, type StackSeries } from '../components/charts';
 import { DataTable, type Column } from '../components/DataTable';
 import { AppLink, Async, ChartPanel, NoRecords, PageHeader, Panel, RankedBars, ScanNote, SelectField, Skeleton, SkeletonRows, Stat, StatRow, StatusBadge, Tag, Unknown, NotYetPage } from '../components/ui';
 import { getEntities } from '../lib/api';
-import { stackByDay, toolHeadline, toolStats, toolSummary, type ToolStat } from '../lib/analytics';
+import { stackByDay, toolHeadline, weeklyWhenLong, toolStats, toolSummary, type ToolStat } from '../lib/analytics';
 import { useFilters, useToolAggregates, useToolAnalysis, useToolHours, type ToolHour, useToolSummary } from '../lib/data';
 import { isFuture } from '../lib/filters';
 import { fmtCompact, fmtDateTime, fmtDuration, fmtInt, fmtPct, fmtShortDateTime, isKnown } from '../lib/format';
@@ -55,7 +55,8 @@ export default function ToolCalls() {
       ? stackByDay(hours.data!.flatMap((h) => STATUS_SERIES.flatMap((s) => (h[s.key as keyof ToolHour] ? [{ at: h.hour, status: s.key, n: Number(h[s.key as keyof ToolHour]) }] : []))), (r) => r.at, (r) => r.status, timezone, (r) => r.n)
       : stackByDay(filtered, (r) => r.occurred_at, (r) => r.status ?? 'unknown', timezone);
     const present = new Set(data.flatMap((d) => Object.keys(d)));
-    return { data, series: STATUS_SERIES.filter((s) => present.has(s.key)) };
+    const { rows: bars, unit } = weeklyWhenLong(data, timezone);
+    return { data: bars, unit, series: STATUS_SERIES.filter((s) => present.has(s.key)) };
   }, [fromHours, hours.data, filtered, timezone]);
   const categories = useMemo(() => {
     const m = new Map<string, number>();
@@ -111,12 +112,12 @@ export default function ToolCalls() {
             <div className="split">
               <ChartPanel
                 className="grow-2"
-                title="Calls per day"
+                title={stack.unit === 'week' ? 'Calls per week' : 'Calls per day'}
                 sub={fromHours || complete ? 'By status, in the display timezone' : `By status · ${sampleNote}`}
                 chart={stack.data.length ? <StackedDays rows={stack.data} series={stack.series} height={220} /> : <NoRecords compact />}
                 table={
                   <table>
-                    <thead><tr><th scope="col">Day</th>{stack.series.map((s) => <th key={s.key} scope="col" className="num">{s.label}</th>)}</tr></thead>
+                    <thead><tr><th scope="col">{stack.unit === 'week' ? 'Week of' : 'Day'}</th>{stack.series.map((s) => <th key={s.key} scope="col" className="num">{s.label}</th>)}</tr></thead>
                     <tbody>{stack.data.map((d) => <tr key={d.day}><td>{d.label}</td>{stack.series.map((s) => <td key={s.key} className="num">{fmtInt(Number(d[s.key] ?? 0))}</td>)}</tr>)}</tbody>
                   </table>
                 }
