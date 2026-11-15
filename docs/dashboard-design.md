@@ -34,6 +34,12 @@ The Runtrace dashboard is a local analytics app for one developer reading their 
 
 **Motion.** The logo draws once, the page rises in order, numbers count, and the trace rises from the left on load and whenever a preset, filter or new cut creates a new view. A window chosen by dragging is already on screen, so it does not replay. `prefers-reduced-motion` gets the finished state with nothing running.
 
+**Show it, then explain it in a hint.** Each page opens with one sentence computed from the data ("atlas took 22% of the reported tokens; 9 of 12 projects were active"), not a fixed tagline. Explanations of how a number is counted sit in an (i) hint beside the panel title, which opens on hover, focus or tap, instead of a caption under it. Shares are drawn as one strip with a legend, a model's token mix as one bar (hover for exact figures), and every inline bar sits after its figure at a fixed width so a column of bars lines up. Columns that are rarely read, or that hold the same value in every row, move into the CSV only; a column that would be zero in every row is replaced by one line saying so.
+
+**Four words for missing data.** "Not reported": the source sent nothing. "No complete total": only token parts came. "Not captured": Runtrace never stores this field. A blank cell (with screen-reader text): the field does not apply to this row. "n/a" and "Unknown" are not used. A gap that holds for every row is stated once above the table, not in each cell.
+
+**Phones get cards.** Below 34rem of panel width a data table turns into one labelled card per row, with a single Sort menu above it, and the first page shows 10 rows. Each page chooses which fields a card keeps. Only tables and the top navigation may scroll sideways; everything else wraps.
+
 **Charts.** The Overview's trace is plain SVG, one line per model on a shared axis, so it can follow the slider without a chart library re-render. Recharts draws the other time series. Ranked lists are HTML, because long model names wrap and rows can link. Every chart can switch to a table of the same numbers. Tooltips are shown on hover only; the table is the keyboard path. The heatmap is one tab stop with arrow-key reading.
 
 ## What is known
@@ -85,20 +91,20 @@ Measured cold, at 1440 wide, on the full history of 34 billion tokens.
 | Page | What it is for |
 |---|---|
 | Overview | Total tokens, models with share, tokens per day by model, provider, harness or project, totals, tokens by type with coverage, weekday-by-hour rhythm, recent threads with sparklines, top tools, delegation |
-| Activity | Peak hour, busiest day, weekday-by-hour heatmap, daily prompts, paged event feed |
-| Models | Ledger of tokens, turns, usage coverage, cache share and latency per model; chart by tokens, turns or threads |
+| Activity | Peak hour, busiest day, weekday-by-hour heatmap, daily prompts, and an event feed that shows each run as one block: the prompt with its model, its work folded into one line, then the answer |
+| Models | Share strip of reported tokens, a ledger of tokens, token mix, turns and turn time per model (the separate token fields are in the CSV); chart by tokens, turns or threads |
 | Harnesses | Which agent ran each turn, for all turns, the ones you started or delegated ones: balance between two harnesses (daily, or trailing week past 21 days) with limit hits marked and the change since the period before, share of every harness, a comparison of tokens per turn, cache share, turn time, failures and models, the balance while each limit held, harness by project and by hour, and turns or tokens per day (per week past 60 days) |
-| Projects | Tokens and counts per project; per-project detail with models, branches and threads |
-| Threads | Title and type filters, sort, paging, tokens per thread. Detail has facts, sub-agents, provider turns, runs and the timeline |
+| Projects | Share strip, tokens per project in its own colour with a tokens-per-day sparkline on one shared scale, last active, inactive projects folded; per-project detail with models, branches and threads |
+| Threads | Title and type filters, sort, paging, tokens per thread with model, project and branch under the title, primary versus sub-agent share; sub-agent threads follow their parent. Detail has facts, sub-agents, provider turns, runs and the timeline |
 | Agent Trees | Delegating threads ranked, keyboard tree with waterfall, node detail with full task and result |
 | Tool Calls | Failure rate, shell exit codes, latency percentiles per tool, filterable calls, linkable call dialog |
 | Quota and Resets | Live cards per harness showing what is left, from T3's usage checks or Runtrace's own (freshness, reset credits), harnesses without limits and why, what was left over time, past windows with complete/partial coverage, limits reached |
 | Storage | Records by kind, database size, stored text, span, maintenance commands |
-| Data Quality | Usage by provider, field coverage measured from records, quality by kind, redactions, known gaps |
+| Data Quality | A short verdict first (collector state, usage coverage, never-captured fields), then fields with gaps worst first, usage by provider, quality by kind, redactions, known gaps |
 | Settings | Timezone, page size, density, service health, capture instances, privacy commands |
 | Search | Redacted content search with highlighted match, reached from the search box |
 
-Accessibility and responsiveness: skip link, focus moves to the new heading on navigation, roving focus in the tree and heatmap, slider handles with keyboard support and spoken dates, native dialogs, labelled scroll regions, `aria-sort`, reduced-motion opt-in, and an icon row that scrolls sideways below 760px, with secondary filters behind one button.
+Accessibility and responsiveness: skip link, focus moves to the new heading on navigation, roving focus in the tree and heatmap, slider handles with keyboard support and spoken dates, native dialogs, labelled scroll regions, `aria-sort`, reduced-motion opt-in, an icon row that scrolls sideways below 760px, with secondary filters behind one button, and tables that turn into cards on phones. Every page passes axe and a 390px no-sideways-scroll check.
 
 ## Backend compatibility
 
