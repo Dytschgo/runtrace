@@ -1,4 +1,4 @@
-import { useDeferredValue, useEffect, useMemo, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { ArrowUpRight, Download, GitCompareArrows, ZoomOut } from 'lucide-react';
 import { ActivityHeatmap } from '../components/heatmap';
 import { Counter } from '../components/motion';
@@ -24,6 +24,22 @@ import { GROUPS, isGroup, isMetric, isRes, periodBefore, RES_OPTIONS, RES_WORDS 
 
 /** The landing page: tokens over time by model, provider or project, with the totals and panels that follow the same window. */
 export default function Overview() {
+  // A long list fades at its foot while more rows wait below, so a cut-off row reads as more to scroll, not a glitch.
+  const fadeRef = useRef<HTMLUListElement>(null);
+  const [listOpen, setListOpen] = useState(false);
+  const fadeCheck = useCallback(() => {
+    const el = fadeRef.current;
+    if (el) el.toggleAttribute('data-more', el.scrollHeight - el.scrollTop - el.clientHeight > 4);
+  }, []);
+  useEffect(() => {
+    const el = fadeRef.current;
+    fadeCheck();
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(fadeCheck);
+    ro.observe(el);
+    return () => ro.disconnect();
+  });
+
   const { hrefPage, params, set } = useUrl();
   const { timezone } = useSettings();
   const f = useFilters();
@@ -382,17 +398,18 @@ export default function Overview() {
             <Async<unknown> query={fromTurns || (turnsFailed && !listFallback) ? allTurns : models} skeleton={<SkeletonRows rows={4} label="Loading groups" />} compact empty={<></>} isEmpty={() => !lines.length && !turnsLoading}>
               {() => (
                 <>
-                  <ul className="model-lines" onKeyDown={roveTo} aria-label={`${GROUPS.find((g) => g.value === by)!.label}. Arrow keys move between rows.`} data-focus={focus ? 'true' : undefined} data-picking={picks.size ? 'true' : undefined}>
+                  <ul className="model-lines" ref={fadeRef} onScroll={fadeCheck} data-open={listOpen ? 'true' : undefined} onKeyDown={roveTo} aria-label={`${GROUPS.find((g) => g.value === by)!.label}. Arrow keys move between rows.`} data-focus={focus ? 'true' : undefined} data-picking={picks.size ? 'true' : undefined}>
                     {shownLines.map((l, i) => <GroupLine key={l.key} tabIndex={i === Math.min(rove, shownLines.length - 1) ? 0 : -1} onRove={() => setRove(i)} offChart={l.key === 'not-recorded' && !showUnnamed && !picks.has('not-recorded')} line={l} total={listTrace.total ?? total} top={topValue} by={by} unit={metricInfo.unit} draft={!!draft} focused={focus === (drawn.has(l.key) ? l.key : 'Other')} seriesKey={l.key === 'not-recorded' && !drawn.has(l.key) ? '' : drawn.has(l.key) ? l.key : 'Other'} onFocus={setFocus} selected={picks.has(l.key)} onToggle={togglePick} why={whyMissing(l.partial)} unknown={unknownWindow} />)}
                   </ul>
+                  <button type="button" className={listOpen ? 'btn btn-quiet fold-btn model-lines-more is-open' : 'btn btn-quiet fold-btn model-lines-more'} aria-expanded={listOpen} onClick={() => setListOpen((v) => !v)}>{listOpen ? 'Show fewer' : `Show all ${shownLines.length}`}</button>
                   {idle.length >= 2 && (
                     <button type="button" className="idle-toggle" aria-expanded={showIdle} onClick={() => setShowIdle((v) => !v)}>
                       {showIdle ? `Fold ${idle.length} with no turns here` : `${idle.length} more with no turns here`}
                     </button>
                   )}
                   {unnamed && !picks.size && (
-                    <button type="button" className="usage-chip unnamed-toggle" aria-pressed={showUnnamed} onClick={() => set({ nr: showUnnamed ? null : 1 })} title={showUnnamed ? 'Take turns that name no model off the chart' : 'Draw turns that name no model on the chart'}>
-                      Not recorded on chart
+                    <button type="button" className="btn btn-quiet fold-btn unnamed-toggle" aria-pressed={showUnnamed} onClick={() => set({ nr: showUnnamed ? null : 1 })} title={showUnnamed ? 'Take turns that name no model off the chart' : 'Draw turns that name no model on the chart'}>
+                      Not recorded on chart: {showUnnamed ? 'shown' : 'off'}
                     </button>
                   )}
                 </>
@@ -406,7 +423,7 @@ export default function Overview() {
             action={
               <div className="chart-controls">
                 <SelectField label="Measure" hideLabel value={metric} onChange={(v) => set({ metric: v === 'total' ? null : v })} options={METRICS.map((m) => ({ value: m.key, label: m.label }))} />
-                <Segmented label="Resolution" value={resChoice} options={resOptions} onChange={(v) => set({ res: v === 'auto' ? null : v })} />
+                <span className="res-control"><Segmented label="Resolution" value={resChoice} options={resOptions} onChange={(v) => set({ res: v === 'auto' ? null : v })} /></span>
                 {resChoice !== 'auto' && res !== resChoice && <span className="fine res-note" title={tooCoarse(resChoice) ? `${resChoice} is too long for this window` : `${resChoice} would draw too many points for this window`}>per {RES_WORDS[res]}</span>}
                 <Segmented label="Chart style" value={view} options={[{ value: 'lines', label: 'Lines' }, { value: 'stacked', label: 'Stacked' }, { value: 'cumulative', label: 'Running' }]} onChange={(v) => set({ view: v === 'lines' ? null : v })} />
                 <button type="button" className="icon-btn" disabled={!trace.rows.length || !!unknownWindow} onClick={exportCsv} aria-label="Download this chart as CSV" title="Download CSV"><Download size={15} aria-hidden="true" /></button>

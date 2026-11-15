@@ -163,6 +163,8 @@ export interface HarnessStats {
   spawned: number;
   spawnKnown: number;
   models: { model: string; turns: number }[];
+  /** Turns that reported a complete total; fewer than turns makes the token sum a lower bound. */
+  withTotal?: number;
 }
 
 export function harnessStats(turns: TurnRow[], childThreads: Set<string>): HarnessStats[] {
@@ -195,6 +197,7 @@ export function harnessStats(turns: TurnRow[], childThreads: Set<string>): Harne
     tokensPerTurn: median(totals),
     cacheShare: input ? cached / input : null,
     medianMs: median(durations),
+    withTotal: totals.length,
     models: [...models].map(([model, n]) => ({ model, turns: n })).sort((x, y) => y.turns - x.turns),
   })).sort((x, y) => y.turns - x.turns || x.key.localeCompare(y.key));
 }

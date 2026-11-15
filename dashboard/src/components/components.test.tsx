@@ -61,7 +61,7 @@ describe('token display', () => {
     render(<TokenFacts s={{ ...base, total: 1_915_041_710, input: 1_907_454_338, cached: 1_868_581_632, output: 7_587_372, reasoning: 2_826_618, turns: 737, withUsage: 735, complete: 729, noUsage: ['grok-4.7'] }} />);
     expect(screen.getByTitle('At least 1,915,041,710 tokens')).toHaveTextContent('≥at least 1.9B');
     expect(screen.getByText(/98% of input/)).toBeInTheDocument();
-    expect(screen.getByText(/735 of 737 turns reported usage, 729 of them in full/)).toBeInTheDocument();
+    expect(screen.getByText(/735 of 737 turns reported usage, 729 in full/)).toBeInTheDocument();
     expect(screen.getByText('grok-4.7')).toBeInTheDocument();
     expect(screen.queryByText('Not captured')).not.toBeInTheDocument();
   });

@@ -175,12 +175,11 @@ function FilterBar() {
           options={[{ value: '', label: 'All projects' }, ...(projects.data ?? []).map((p) => ({ value: p.source_id, label: projectName(p.source_id) })),
             ...(filters.project && !projects.data?.some((p) => p.source_id === filters.project) ? [{ value: filters.project, label: filters.project }] : [])]}
         />
-        <SelectField
+        {scope !== 'no-model' && <SelectField
           label="Model" hideLabel value={filters.model ?? ''} onChange={(v) => set({ model: v, offset: null })}
-          disabled={scope === 'no-model'} title={scope === 'no-model' ? `${page} records carry no model, so this filter does not apply here.` : undefined}
-          options={[{ value: '', label: scope === 'no-model' ? 'Model: n/a here' : 'All models' }, ...(models.data ?? []).flatMap((m) => (m.model ? [{ value: m.model, label: m.model }] : [])),
+          options={[{ value: '', label: 'All models' }, ...(models.data ?? []).flatMap((m) => (m.model ? [{ value: m.model, label: m.model }] : [])),
             ...(filters.model && !models.data?.some((m) => m.model === filters.model) ? [{ value: filters.model, label: filters.model }] : [])]}
-        />
+        />}
         {(instances.length > 1 || filters.instance) && (
           <SelectField
             label="Instance" hideLabel value={filters.instance ?? ''} onChange={(v) => set({ instance: v, offset: null })}

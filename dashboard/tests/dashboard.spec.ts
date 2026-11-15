@@ -29,7 +29,8 @@ test('real history project and thread drilldown', async ({ page, request }) => {
   await expect(page).toHaveURL(/page=Projects/);
   await expect(page.locator('tbody')).toContainText(FIXTURE.project);
 
-  await page.locator('.row-link').first().click();
+  // A project's name opens its detail here; its thread count opens its threads.
+  await page.locator('tbody a.link').first().click();
   await expect(page.getByRole('heading', { name: 'Threads', level: 1 })).toBeVisible();
   await expect(page).toHaveURL(/project=/);
   // Select a primary thread with captured conversation evidence. New primary

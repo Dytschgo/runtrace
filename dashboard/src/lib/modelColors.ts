@@ -3,7 +3,8 @@ export type Provider = 'openai' | 'anthropic' | 'xai' | 'meta' | 'google' | 'qwe
 
 export const FAMILIES: Record<Provider, string[]> = {
   openai: ['#ffffff', '#bdbdbd', '#8a8a8a', '#636363', '#dcdcdc', '#a3a3a3'],
-  anthropic: ['#ee7a33', '#f7ab78', '#bb5420', '#fbcfae', '#d76a28'],
+  // Steps far apart in lightness, so the second and third Claude models never read as the first.
+  anthropic: ['#ee7a33', '#f9b98c', '#9c3f14', '#d9672a', '#fcd8bd'],
   xai: ['#3d63e0', '#7d97f0', '#2f50c9'],
   meta: ['#6ec6ff', '#a9deff', '#3ea8ec'],
   google: ['#34c46d', '#86e3a9', '#1f9f52'],

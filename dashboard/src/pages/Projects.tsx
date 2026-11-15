@@ -1,16 +1,16 @@
 import { hasTurnUsage } from '../lib/entities';
 import { ModelName } from '../components/model';
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { ChevronRight, Folder } from 'lucide-react';
 import { ActivityChart } from '../components/charts';
 import { DataTable, type Column } from '../components/DataTable';
 import { TokenFacts } from '../components/tokens';
-import { AppLink, Async, ChartPanel, EmptyState, NoRecords, NotLoaded, PageHeader, Panel, plural, RankedBars, Skeleton, SkeletonRows, Stat, StatRow, Tag, Tokens, Unknown, NotYetPage } from '../components/ui';
-import { bucketActivity, tokensByKey, tokenSummary } from '../lib/analytics';
-import { useAgents, useFilters, useHourly, useModels, useModelTurns, useOverview, useOverviews, useProjects, useThreads, useUsage } from '../lib/data';
+import { AppLink, Async, ChartPanel, EmptyState, NoRecords, NotLoaded, PageHeader, Panel, plural, RankedBars, ShareStrip, Skeleton, Sparkline, SkeletonRows, Stat, StatRow, Tag, Tokens, Unknown, NotYetPage } from '../components/ui';
+import { bucketActivity, stackByDay, tokensByKey, tokenSummary } from '../lib/analytics';
+import { useAgents, useFilters, useHourly, useLiveTurns, useModels, useModelTurns, useOverview, useOverviews, useProjects, useThreads, useUsage } from '../lib/data';
 import type { Filters } from '../lib/filters';
 import { inTimeRange, isFuture } from '../lib/filters';
-import { fmtCompact, fmtDateTime, fmtInt, fmtRelative, fmtShortDateTime, repairText } from '../lib/format';
+import { fmtCompact, fmtDateTime, fmtDay, fmtPct, fmtInt, fmtRelative, fmtShortDateTime, repairText } from '../lib/format';
 import { projectColor } from '../lib/series';
 import { useSettings } from '../lib/settings';
 import { useUrl } from '../lib/url';
@@ -39,6 +39,33 @@ export default function Projects() {
   // Per-project counts come from one aggregate when available. Thread counts and an older service use the per-project overview.
   const needsFallback = usage.isError || (usage.data !== undefined && usage.data.some((u) => u.observed_threads === undefined));
   const stats = useOverviews(list.slice(0, PER_PROJECT).map((p) => ({ ...base, project: p.source_id })), needsFallback);
+  // The same turns the Overview reads, so each project's daily trace matches the chart there.
+  const live = useLiveTurns({ instance: f.instance });
+  // When each project last saw a turn, for the Last active column.
+  const lastSeen = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const t of live.rows) if (t.occurred_at > (m.get(t.project_id) ?? '')) m.set(t.project_id, t.occurred_at);
+    return m;
+  }, [live.rows]);
+  const trend = useMemo(() => {
+    const inWindow = live.rows.filter((t) => t.total !== null && inTimeRange(t.occurred_at, f));
+    const days = stackByDay(inWindow, (t) => t.occurred_at, (t) => t.project_id, timezone, (t) => t.total!);
+    const by = new Map<string, number[]>();
+    for (const id of new Set(inWindow.map((t) => t.project_id))) by.set(id, days.map((d) => Number(d[id] ?? 0)));
+    return by;
+  }, [live.rows, f, timezone]);
+  // All sparklines share one top, so a small project looks small.
+  const trendMax = useMemo(() => Math.max(1, ...[...trend.values()].flat()), [trend]);
+  // Projects outnumber colours. When two share one, the later id is dashed, as on the Overview chart.
+  const dashedIds = useMemo(() => {
+    const first = new Map<string, string>();
+    const out = new Set<string>();
+    for (const p of [...list].sort((a, b) => a.source_id.localeCompare(b.source_id))) {
+      const c = projectColor(p.source_id);
+      if (first.has(c)) out.add(p.source_id); else first.set(c, p.source_id);
+    }
+    return out;
+  }, [list]);
   const tokenFallback = useMemo(() => tokensByKey(turns.data?.rows ?? [], (t) => t.project_id, (t) => t.total, hasTurnUsage), [turns.data]);
 
   const rows: Row[] = useMemo(() => {
@@ -63,8 +90,13 @@ export default function Projects() {
     return raw.map((r) => ({ ...r, share: (r.tokens ?? 0) / max }));
   }, [list, usage.data, stats, tokenFallback, needsFallback]);
 
+  const [showIdle, setShowIdle] = useState(false);
+  // Projects with nothing in the window fold under one button, so the ones that ran stand out.
+  const isIdle = (r: Row) => !r.tokens && !r.threads && !r.prompts && !r.tools && !r.agents && !r.turns && r.threads !== null;
+  const active = rows.filter((r) => !isIdle(r));
+  const idle = rows.length - active.length;
   const loading = usage.isPending || (needsFallback && stats.some((q) => q.isPending));
-  const num = (v: number | null, failed = false) => (v !== null ? fmtInt(v) : failed ? <NotLoaded /> : loading ? <span className="fine" role="status" aria-label="Loading">…</span> : <Unknown label="Not counted" why={`Only the first ${PER_PROJECT} projects are counted one by one when the service has no project totals.`} />);
+  const num = (v: number | null, failed = false) => (v !== null ? (v === 0 ? <span className="dim">0</span> : fmtInt(v)) : failed ? <NotLoaded /> : loading ? <span className="fine" role="status" aria-label="Loading">…</span> : <Unknown label="Not counted" why={`Only the first ${PER_PROJECT} projects are counted one by one when the service has no project totals.`} />);
   const hasTokens = loading || rows.some((r) => r.tokens !== null);
   const columns: Column<Row>[] = [
     {
@@ -72,8 +104,8 @@ export default function Projects() {
       render: (r) => (
         <>
           {/* The same colour the project has on the Overview chart, which comes from its id alone. */}
-          <AppLink className="row-link" href={hrefPage('Threads', { project: r.id })} title="Open this project's threads"><Folder className="project-swatch" size={14} aria-hidden="true" style={{ color: projectColor(r.id) }} />{r.name}<ChevronRight size={14} aria-hidden="true" /></AppLink>
-          {r.alias && r.alias !== r.name && <span className="project-sub mono">{r.alias}</span>}
+          <AppLink className="row-link" href={hrefPatch({ project: f.project === r.id ? null : r.id })} ariaCurrent={f.project === r.id ? 'true' : undefined} title={f.project === r.id ? 'Close this project' : 'Show this project'}><Folder className="project-swatch" size={14} aria-hidden="true" style={{ color: projectColor(r.id), fill: projectColor(r.id), fillOpacity: 0.45 }} />{r.name}<ChevronRight size={14} aria-hidden="true" /></AppLink>
+          {r.alias && r.alias !== r.name && <span className="project-sub mono" title={r.alias}>{r.alias.split('/').slice(-2).join('/')}</span>}
         </>
       ),
     },
@@ -81,19 +113,21 @@ export default function Projects() {
       key: 'tokens', header: 'Tokens', align: 'end' as const, sort: (r: Row) => r.tokens,
       render: (r: Row) => (
         <span className="token-cell">
-          <span className="bar-cell-track" aria-hidden="true"><span style={{ inlineSize: `${r.share * 100}%` }} /></span>
-          {loading && r.tokens === null ? <span className="fine" role="status" aria-label="Loading">…</span> : r.tokens === null && r.turns === 0 ? <span className="fine">None</span> : <>{r.atLeast && <span className="lower-bound" title="Some turns reported no total"><span aria-hidden="true">≥</span><span className="sr-only">at least </span></span>}<Tokens v={r.tokens} /></>}
+          <span className="bar-cell-track" aria-hidden="true"><span style={{ inlineSize: `${r.share * 100}%`, background: projectColor(r.id) }} /></span>
+          {loading && r.tokens === null ? <span className="fine" role="status" aria-label="Loading">…</span> : r.tokens === null && r.turns === 0 ? <span className="dim">No activity</span> : <>{r.atLeast && <span className="lower-bound" title="Some turns reported no total"><span aria-hidden="true">≥</span><span className="sr-only">at least </span></span>}<Tokens v={r.tokens} /></>}
         </span>
       ),
     }] : []),
-    { key: 'threads', header: 'Threads', align: 'end', sort: (r) => r.threads, render: (r) => num(r.threads, r.countsFailed) },
+    { key: 'trend', header: 'Tokens per day', render: (r) => (trend.get(r.id)?.some((v) => v > 0) ? <span className="trend-cell" style={{ color: projectColor(r.id) }} title={`Peak ${fmtCompact(Math.max(...trend.get(r.id)!))} tokens in a day; all rows share one scale`}><Sparkline values={trend.get(r.id)!} max={trendMax} label={`${r.name}, tokens per day`} /></span> : <span className="dim" aria-label="No tokens in this window">·</span>) },
+    { key: 'threads', header: 'Threads', align: 'end', sort: (r) => r.threads, render: (r) => (r.threads ? <AppLink className="link" href={hrefPage('Threads', { project: r.id })} ariaLabel={`${fmtInt(r.threads)} threads in ${r.name}`}>{fmtInt(r.threads)}</AppLink> : num(r.threads, r.countsFailed)) },
     { key: 'prompts', header: 'Prompts', align: 'end', sort: (r) => r.prompts, render: (r) => num(r.prompts, r.countsFailed) },
-    { key: 'runs', header: 'Runs', align: 'end', sort: (r) => r.runs, render: (r) => num(r.runs, r.countsFailed) },
-    { key: 'turns', header: 'Provider turns', align: 'end', sort: (r) => r.turns, render: (r) => num(r.turns, r.countsFailed) },
+
     { key: 'tools', header: 'Tool calls', align: 'end', sort: (r) => r.tools, render: (r) => num(r.tools, r.countsFailed) },
     { key: 'agents', header: 'Sub-agents', align: 'end', sort: (r) => r.agents, render: (r) => num(r.agents, r.countsFailed) },
-    { key: 'created', header: 'First seen', sort: (r) => r.created, render: (r) => <time dateTime={r.created}>{fmtDateTime(r.created, timezone)}</time> },
-    { key: 'detail', header: 'Detail', render: (r) => <AppLink className="link" href={hrefPatch({ project: f.project === r.id ? null : r.id })} ariaCurrent={f.project === r.id ? 'true' : undefined} ariaLabel={`${f.project === r.id ? 'Close details for' : 'Show details for'} ${r.name}`}>{f.project === r.id ? 'Close' : 'Show'}</AppLink> },
+    { key: 'last', header: 'Last active', sort: (r) => lastSeen.get(r.id) ?? null, render: (r) => { const at = lastSeen.get(r.id); return at ? <time dateTime={at} title={fmtDateTime(at, timezone)}>{fmtRelative(at)}</time> : <span className="sr-only">No turns recorded</span>; } },
+    { key: 'created', header: 'First seen', csvOnly: true, sort: (r) => r.created, render: () => null },
+    { key: 'runs', header: 'Runs', csvOnly: true, sort: (r) => r.runs, render: () => null },
+    { key: 'turns', header: 'Provider turns', csvOnly: true, sort: (r) => r.turns, render: () => null },
   ];
 
   const focusId = f.project ?? (list.length === 1 ? list[0].source_id : undefined);
@@ -103,7 +137,11 @@ export default function Projects() {
 
   return (
     <>
-      <PageHeader title="Projects" lead="Where the work went." />
+      <PageHeader title="Projects" lead={(() => {
+        const sum = rows.reduce((a, r) => a + (r.tokens ?? 0), 0);
+        const top = [...rows].sort((a, b) => (b.tokens ?? 0) - (a.tokens ?? 0))[0];
+        return !loading && top && sum && top.tokens ? <>{top.name} took {fmtPct(top.tokens / sum)} of the reported tokens; {fmtInt(active.length)} of {fmtInt(rows.length)} projects were active.</> : 'Where the work went.';
+      })()} />
       {focus && <ProjectDetail projectId={focus.source_id} name={repairText(String(focus.data?.name ?? focus.source_id))} base={base} />}
       {f.project && projects.data && !focus && (
         // A project id from an old link or a typo matches nothing, which is said instead of looking like an ordinary full list.
@@ -113,10 +151,20 @@ export default function Projects() {
           </EmptyState>
         </Panel>
       )}
-      <Panel title="All projects" sub="Identified by T3 project id. Names come from the source and are redacted." flush>
+      {list.length > 0 && (loading || (hasTokens && rows.some((r) => (r.tokens ?? 0) > 0))) && (
+        <Panel title="Share of reported tokens" className="share-panel">
+          {!loading && <ShareStrip label="Tokens by project" legend={8} note={rows.some((r) => r.atLeast) ? 'Some projects are lower bounds (≥ below)' : undefined} items={rows.map((r) => ({ key: r.id, text: r.name, label: r.name, value: r.tokens ?? 0, color: projectColor(r.id), dashed: dashedIds.has(r.id), href: hrefPatch({ project: r.id }) }))} />}
+        </Panel>
+      )}
+      <Panel title="All projects" hint="Identified by T3 project id. Names come from the source and are redacted. Open a project for its models, branches and threads." flush>
         <Async query={projects} skeleton={<div className="pad"><SkeletonRows label="Loading projects" /></div>} isEmpty={() => !list.length} empty={<NoRecords />}>
-          {() => <DataTable rows={rows} columns={columns} rowKey={(r) => r.id} caption="Projects" defaultSort={hasTokens ? { key: 'tokens', dir: 'desc' } : { key: 'prompts', dir: 'desc' }} exportName="runtrace-projects" />}
+          {() => <DataTable rows={showIdle || !!f.project ? rows : active} columns={columns} rowKey={(r) => r.id} caption="Projects" defaultSort={hasTokens ? { key: 'tokens', dir: 'desc' } : { key: 'prompts', dir: 'desc' }} exportName="runtrace-projects" />}
         </Async>
+        {idle > 0 && !f.project && (
+          <button type="button" className="btn btn-quiet fold-btn" aria-expanded={showIdle} onClick={() => setShowIdle((v) => !v)}>
+            {showIdle ? `Hide ${plural(idle, 'project')} with no activity` : `${plural(idle, 'more project')} with no activity in this window`}
+          </button>
+        )}
       </Panel>
     </>
   );

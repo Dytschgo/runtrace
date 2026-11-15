@@ -72,7 +72,7 @@ export function TraceChart({ rows, series, focus, replay, height: tall = 400, st
     return () => ro.disconnect();
   }, []);
 
-  const height = width > 0 && width < 640 ? Math.min(tall, 280) : tall;
+  const height = width > 0 && width < 640 ? Math.min(tall, 320) : tall;
   const n = rows.length;
   const pinnedIndex = pinnedT === null ? -1 : rows.findIndex((r) => r.t === pinnedT);
   const pinned = pinnedIndex >= 0 ? pinnedIndex : null;
@@ -224,7 +224,7 @@ export function TraceChart({ rows, series, focus, replay, height: tall = 400, st
 
   return (
     <div
-      className="trace" ref={box} style={{ blockSize: height }} data-focus={focus ? 'true' : undefined} data-zoomable={onZoom ? 'true' : undefined}
+      className="trace" ref={box} style={{ blockSize: height }} data-focus={focus ? 'true' : undefined} data-stacked={stacked ? 'true' : undefined} data-many={series.length > 3 ? 'true' : undefined} data-zoomable={onZoom ? 'true' : undefined}
       onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={() => { press.current = null; setBand(null); }} onPointerLeave={(e) => { if (e.pointerType !== 'touch') setPointer(null); }}
     >
       {width > 0 && n > 0 && (
@@ -257,7 +257,7 @@ export function TraceChart({ rows, series, focus, replay, height: tall = 400, st
             const i = series.indexOf(s);
             const on = !focus || focus === s.key;
             return (
-              <g key={s.key} className="trace-series" data-on={on ? 'true' : 'false'}>
+              <g key={s.key} className="trace-series" data-on={on ? 'true' : 'false'} data-minor={i >= 3 ? 'true' : undefined}>
                 <path ref={(el) => { if (el) areas.current.set(s.key, el); else areas.current.delete(s.key); }} className="trace-area" fill={`url(#${uid}g${i})`} />
                 <path ref={(el) => { if (el) holes.current.set(s.key, el); else holes.current.delete(s.key); }} className="trace-hole" fill={`url(#${uid}gap)`} />
                 <path ref={(el) => { if (el) lines.current.set(s.key, el); else lines.current.delete(s.key); }} className="trace-line" stroke={s.color} strokeDasharray={s.key === 'Other' ? '1 4' : s.dashArray ?? (s.dash ? '3 3' : undefined)} />

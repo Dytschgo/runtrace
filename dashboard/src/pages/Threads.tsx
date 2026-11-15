@@ -3,9 +3,10 @@ import { ModelName } from '../components/model';
 import { useInfiniteQuery } from '@tanstack/react-query';
 import { ArrowLeft, ChevronRight, CornerDownRight, GitBranch, History, Network, Play } from 'lucide-react';
 import { DataTable, type Column } from '../components/DataTable';
-import { AppLink, Async, DisclosurePanel, EmptyState, ErrorState, Tokens, NoRecords, NotLoaded, PageHeader, Panel, plural, QualityBadge, ScanNote, Segmented, SkeletonRows, Stat, StatRow, StatusBadge, Tag, Unknown, NotYetPage } from '../components/ui';
+import { AppLink, Async, DisclosurePanel, EmptyState, ErrorState, Tokens, NoRecords, NotLoaded, PageHeader, Panel, plural, QualityBadge, ScanNote, Segmented, ShareStrip, SkeletonRows, Stat, StatRow, StatusBadge, Tag, Unknown, NotYetPage } from '../components/ui';
 import { getJson } from '../lib/api';
-import { useAgents, useFilters, useLiveTurns, useProjects, useThreads, useThreadTokens } from '../lib/data';
+import { useAgents, useFilters, useLiveTurns, useModelSlots, useProjects, useThreads, useThreadTokens } from '../lib/data';
+import { seriesColor } from '../lib/modelColors';
 import { windowTokens } from '../lib/analytics';
 import { contentField, parseContent, toRun, toTurn, type ThreadRow } from '../lib/entities';
 import { inTimeRange, isFuture } from '../lib/filters';
@@ -79,39 +80,77 @@ function ThreadList() {
   const manyProjects = (projects.data?.length ?? 0) > 1;
   const projectName = (id: string) => { const p = projects.data?.find((r) => r.source_id === id); return p ? repairText(String(p.data?.name ?? id)) : id; };
 
+  const slots = useModelSlots();
+  // Sorted by start, each sub-agent thread follows the thread it belongs to instead of landing among strangers.
+  const treeOrder = useMemo(() => {
+    const byId = new Map(inScope.map((t) => [t.source_id, t]));
+    const rootOf = (t: Row) => {
+      let cur: Row = t;
+      for (let i = 0; i < 8; i++) { const up = cur.parent ? byId.get(cur.parent) : undefined; if (!up) break; cur = up; }
+      return cur;
+    };
+    const groups = new Map<string, Row[]>();
+    for (const t of inScope) { const r = rootOf(t); (groups.get(r.source_id) ?? groups.set(r.source_id, []).get(r.source_id)!).push(t); }
+    const key = new Map<string, number>();
+    for (const [rootId, members] of groups) {
+      const root = byId.get(rootId)!;
+      const base = Date.parse(root.occurred_at);
+      key.set(rootId, base);
+      members.filter((m) => m.source_id !== rootId).sort((x, y) => Date.parse(x.occurred_at) - Date.parse(y.occurred_at)).forEach((m, i) => key.set(m.source_id, base - (i + 1)));
+    }
+    return key;
+  }, [inScope]);
+  const maxTokens = Math.max(1, ...inScope.map((t) => t.tokenTotal ?? 0));
   const columns: Column<Row>[] = [
     {
       key: 'title', header: 'Thread', sort: (t) => t.title, className: 'cell-title',
       render: (t) => (
-        <AppLink className="row-link" href={hrefPage('Threads', { id: t.source_id })}>
-          {t.type === 'child' && <CornerDownRight size={13} aria-hidden="true" className="row-link-lead" />}
-          <span>{t.title}</span>
-          <ChevronRight size={14} aria-hidden="true" />
-        </AppLink>
+        <>
+          <AppLink className="row-link" href={hrefPage('Threads', { id: t.source_id })} style={t.type === 'child' && (t.depth ?? 1) > 1 ? { paddingInlineStart: `${1.15 * ((t.depth ?? 1) - 1)}rem` } : undefined}>
+            {t.type === 'child' && <CornerDownRight size={13} aria-hidden="true" className="row-link-lead" />}
+            <span>{t.title}</span>
+            <ChevronRight size={14} aria-hidden="true" />
+          </AppLink>
+          <span className={t.type === 'child' ? 'thread-meta is-child' : 'thread-meta'} style={t.type === 'child' && (t.depth ?? 1) > 1 ? { paddingInlineStart: `${1.15 * (t.depth ?? 1)}rem` } : undefined}>
+            {t.model ? <ModelName model={t.model} /> : <Unknown label="Model unknown" why="The thread has no recorded model selection." />}
+            {t.type === 'child' && <span>depth {t.depth ?? '?'}</span>}
+            {manyProjects && <span>{projectName(t.project_id)}</span>}
+            {t.branch && <span className="mono cell-clip" title={t.branch}><GitBranch size={11} aria-hidden="true" /> {t.branch.length > 34 ? `${t.branch.slice(0, 16)}…${t.branch.slice(-16)}` : t.branch}</span>}
+          </span>
+        </>
       ),
     },
     {
       key: 'tokens', header: 'Tokens', align: 'end', className: 'cell-tokens', sort: (t) => t.tokenTotal,
-      render: (t) => (turnsFailed ? <NotLoaded /> : !turnsReady ? <span className="fine" aria-label="Loading">…</span> : t.tokenTotal === null && !t.turns ? <span className="fine">None here</span> : t.short && t.tokenTotal === 0 ? <Unknown label="No complete total" why="The turns with a total summed to 0, and others reported only parts or nothing." /> : <>{t.short && !!t.tokenTotal && <span className="lower-bound" title="Some turns in this thread reported no total"><span aria-hidden="true">≥</span><span className="sr-only">at least </span></span>}<Tokens v={t.tokenTotal} why={TOKEN_WHY} /></>),
+      render: (t) => (
+        <span className="token-cell">
+          {turnsReady && <span className="bar-cell-track" aria-hidden="true"><span style={{ inlineSize: `${((t.tokenTotal ?? 0) / maxTokens) * 100}%`, background: t.model ? seriesColor(slots.get(t.model)) : 'oklch(0.45 0 none)' }} /></span>}
+          {turnsFailed ? <NotLoaded /> : !turnsReady ? <span className="fine" aria-label="Loading">…</span> : t.tokenTotal === null && !t.turns ? <span className="dim">None here</span> : t.short && t.tokenTotal === 0 ? <Unknown label="No complete total" why="The turns with a total summed to 0, and others reported only parts or nothing." /> : <>{t.short && !!t.tokenTotal && <span className="lower-bound" title="Some turns in this thread reported no total"><span aria-hidden="true">≥</span><span className="sr-only">at least </span></span>}<Tokens v={t.tokenTotal} why={TOKEN_WHY} /></>}
+        </span>
+      ),
     },
+    { key: 'kids', header: 'Sub-agents', align: 'end', sort: (t) => t.kids, render: (t) => (t.kids ? <span className="kid-count"><Network size={12} aria-hidden="true" />{fmtInt(t.kids)}</span> : <span className="dim" aria-label="None">–</span>) },
+    { key: 'started', header: 'Started', sort: (t) => treeOrder.get(t.source_id) ?? Date.parse(t.occurred_at), csv: (t) => t.occurred_at, render: (t) => <time dateTime={t.occurred_at}>{fmtShortDateTime(t.occurred_at, timezone)}</time> },
+    { key: 'updated', header: 'Last update', className: 'hide-narrow', sort: (t) => t.updated_at, render: (t) => (t.updated_at ? <span title={fmtDateTime(t.updated_at, timezone)}>{fmtRelative(t.updated_at)}</span> : <span className="fine">Unknown</span>) },
     { key: 'story', header: 'Play', render: (t) => <AppLink className="icon-btn" href={hrefPage('Threads', { id: t.source_id, story: '1' })} ariaLabel={`Play the story of ${t.title}`} title="Play the story"><Play size={14} aria-hidden="true" /></AppLink> },
-    { key: 'type', header: 'Type', sort: (t) => t.type, render: (t) => <span className={`type type-${t.type}`}>{t.type === 'child' ? `Child · depth ${t.depth ?? '?'}` : t.type === 'primary' ? 'Primary' : 'Unknown'}</span> },
-    { key: 'model', header: 'Model', sort: (t) => t.model, render: (t) => (t.model ? <ModelName model={t.model} /> : <Unknown label="Unknown" why="The thread has no recorded model selection." />) },
-    { key: 'kids', header: 'Sub-agents', align: 'end', sort: (t) => t.kids, render: (t) => (t.kids ? fmtInt(t.kids) : <span className="fine">None</span>) },
-    { key: 'branch', header: 'Branch', sort: (t) => t.branch, render: (t) => (t.branch ? <span className="mono cell-clip" title={t.branch}>{t.branch}</span> : <span className="fine">None recorded</span>) },
-    ...(manyProjects ? [{ key: 'project', header: 'Project', sort: (t: Row) => projectName(t.project_id), render: (t: Row) => projectName(t.project_id) }] : []),
-    { key: 'started', header: 'Started', sort: (t) => t.occurred_at, render: (t) => <time dateTime={t.occurred_at}>{fmtShortDateTime(t.occurred_at, timezone)}</time> },
-    { key: 'updated', header: 'Last update', sort: (t) => t.updated_at, render: (t) => (t.updated_at ? <span title={fmtDateTime(t.updated_at, timezone)}>{fmtRelative(t.updated_at)}</span> : <span className="fine">Unknown</span>) },
-    { key: 'quality', header: 'Capture', sort: (t) => t.quality, render: (t) => <QualityBadge quality={t.quality} /> },
+    { key: 'type', header: 'Type', csvOnly: true, sort: (t) => t.type, render: () => null },
+    { key: 'depth', header: 'Depth', csvOnly: true, sort: (t) => t.depth ?? null, render: () => null },
+    { key: 'model', header: 'Model', csvOnly: true, sort: (t) => t.model, render: () => null },
+    { key: 'branch', header: 'Branch', csvOnly: true, sort: (t) => t.branch, render: () => null },
+    { key: 'project', header: 'Project', csvOnly: true, sort: (t) => projectName(t.project_id), render: () => null },
+    { key: 'quality', header: 'Capture', csvOnly: true, sort: (t) => t.quality, render: () => null },
   ];
 
   if (isFuture(f)) return <NotYetPage title="Threads" />;
 
   return (
     <>
-      <PageHeader title="Threads" lead="Open one to read it." />
+      <PageHeader title="Threads" lead={(() => {
+        const big = turnsReady ? [...inScope].sort((a, b) => (b.tokenTotal ?? 0) - (a.tokenTotal ?? 0))[0] : undefined;
+        return big?.tokenTotal ? <>The biggest, <AppLink className="link" href={hrefPage('Threads', { id: big.source_id })}>{big.title}</AppLink>, used {fmtCompact(big.tokenTotal)} tokens. Open any thread to read it or play it back.</> : 'Open one to read it, or play it back.';
+      })()} />
       <StatRow label="Thread summary">
-        <Stat label="In view" value={threads.isError || turnsFailed ? <NotLoaded /> : threads.isPending || !turnsReady ? '…' : fmtInt(inScope.length)} sub={threads.data ? <>{startedHere < inScope.length && <>{fmtInt(startedHere)} started here · </>}<ScanNote scanned={threads.data.scanned} complete={threads.data.complete} noun="threads" /></> : undefined} />
+        <Stat label="Threads in view" value={threads.isError || turnsFailed ? <NotLoaded /> : threads.isPending || !turnsReady ? '…' : fmtInt(inScope.length)} sub={threads.data ? <>{startedHere < inScope.length && <>{fmtInt(startedHere)} started here · </>}{threads.data.complete ? <span className="fine">of {fmtInt(threads.data.scanned)} stored</span> : <ScanNote scanned={threads.data.scanned} complete={threads.data.complete} noun="threads" />}</> : undefined} />
         <Stat label="Primary" value={threads.isError ? <NotLoaded /> : threads.isPending ? '…' : fmtInt(primary)} sub="Started directly" />
         <Stat label="Child" value={threads.isError ? <NotLoaded /> : threads.isPending ? '…' : fmtInt(child)} sub={threads.data ? `Deepest level ${fmtInt(deepest)}` : undefined} />
         <Stat
@@ -120,6 +159,19 @@ function ThreadList() {
           sub={turnsFailed ? 'Turns could not be read' : !turnsReady ? 'Reading turns' : outsideThreads ? `Used in this window · ${outsideThreads}` : 'Used in this window'}
         />
       </StatRow>
+      {/* The block keeps its height while turns load, so the list below never jumps when it fills in. */}
+      {(!turnsReady ? !turnsFailed && (threads.data?.rows.length ?? 0) > 0 : inScope.some((t) => (t.tokenTotal ?? 0) > 0)) && (
+        <div className="thread-split" aria-busy={!turnsReady}>
+          <h2 className="mini-title">Token share by thread type</h2>
+          {turnsReady && <ShareStrip
+            label="Tokens by thread type" format={fmtCompact}
+            items={[
+              { key: 'primary', text: 'Primary threads', label: 'Primary threads', value: inScope.filter((t) => t.type !== 'child').reduce((a, t) => a + (t.tokenTotal ?? 0), 0), color: 'var(--ink-1)' },
+              { key: 'child', text: 'Sub-agent threads', label: 'Sub-agent threads', value: inScope.filter((t) => t.type === 'child').reduce((a, t) => a + (t.tokenTotal ?? 0), 0), color: 'oklch(0.55 0 none)' },
+            ]}
+          />}
+        </div>
+      )}
       <Panel
         title="All threads"
         action={

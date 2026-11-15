@@ -30,7 +30,7 @@ export function ActivityHeatmap({ data }: { data: HeatmapData }) {
     root.current?.querySelector<HTMLElement>(`[data-cell="${n[0]}-${n[1]}"]`)?.focus();
   };
   const read = ([d, h]: [number, number]) => `${DAYS[d]} ${String(h).padStart(2, '0')}:00 · ${fmtInt(data.grid[d][h])} prompts`;
-  const readout = cursor ? read(cursor) : data.max ? `Peak ${read(entry)}` : 'No prompts in this window';
+  const readout = cursor ? read(cursor) : data.max ? `Busiest single hour ${read(entry)}` : 'No prompts in this window';
 
   return (
     <div className="heatmap">

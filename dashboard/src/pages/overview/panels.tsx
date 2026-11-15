@@ -1,5 +1,5 @@
 import { useMemo, type ComponentType } from 'react';
-import { Bot, MessageSquare, MessageSquareReply, MessagesSquare, Play, Repeat2, Terminal, XCircle } from 'lucide-react';
+import { Bot, MessageSquare, MessageSquareReply, MessagesSquare, Play, Repeat2, Terminal, XCircle, RefreshCw } from 'lucide-react';
 import { Counter } from '../../components/motion';
 import { ToolName } from '../../components/model';
 import { AppLink, Async, EmptyState, ErrorState, NoRecords, NotLoaded, Panel, plural, RankedBars, Segmented, SkeletonRows, Sparkline, Tag, Tokens, Unknown } from '../../components/ui';
@@ -120,7 +120,7 @@ export function RecentThreadsPanel({ threads, inWindow, activity, turns, agentsB
                       {kids > 0 && <> · <Tag>{plural(kids, 'sub-agent')}</Tag></>}
                     </small>
                   </span>
-                  <span className="trace-row-num" title="Provider turns in this window">{did ? fmtInt(did.turns) : <Unknown label="n/a" why="No provider turns were recorded for this thread in this window." />}</span>
+                  <span className="trace-row-num trace-row-turns" title="Provider turns in this window">{did ? <><RefreshCw size={11} aria-hidden="true" />{fmtInt(did.turns)}<span className="sr-only"> turns</span></> : <span className="sr-only">No provider turns here</span>}</span>
                   <span className="trace-row-num trace-row-tokens">{did?.missing && did.tokens !== null && <span title="Some turns reported no total">≥ </span>}<Tokens v={did?.tokens ?? null} why="No provider reported a token total for this thread in this window." /></span>
                   <span className="trace-row-spark">{spark && <Sparkline values={spark} />}</span>
                   <time className="trace-row-when" dateTime={did?.last ?? t.occurred_at}>{fmtRelative(did?.last ?? t.occurred_at)}</time>
@@ -187,28 +187,29 @@ export function DelegationPanel({ threads, agents, forest, window, model, pickin
       busy: stats.reduce((sum, s) => sum + s.busyMs, 0),
       returned: stats.reduce((sum, s) => sum + s.returned, 0),
       known: stats.reduce((sum, s) => sum + s.returned + s.notReturned, 0),
+      all: stats.reduce((sum, s) => sum + s.returned + s.notReturned + s.returnUnknown, 0),
     };
   }, [forest, model, window, picking, activity]);
   return (
-    <Panel title="Delegation" sub={threads.data?.complete === false || agents.data?.complete === false ? 'Latest records only, so these are lower bounds' : 'From recorded parent links only'} action={<AppLink className="link" href={hrefPage('Agent Trees')}>Agent Trees</AppLink>}>
+    <Panel title="Delegation" hint={threads.data?.complete === false || agents.data?.complete === false ? 'Latest records only, so these are lower bounds' : 'From recorded parent links only'} action={<AppLink className="link" href={hrefPage('Agent Trees')}>Agent Trees</AppLink>}>
       {threads.error ?? agents.error ? <ErrorState error={threads.error ?? agents.error} onRetry={() => { threads.refetch(); agents.refetch(); }} compact />
         : !delegation ? <SkeletonRows rows={5} label="Loading delegation" />
           : !delegation.trees ? <EmptyState title="No delegation recorded here" compact><p>No thread in this view has a recorded sub-agent.</p></EmptyState>
             : (
               <>
-                <dl className="facts">
+                <dl className="mini-stats">
                   <div><dt>Delegating threads</dt><dd>{fmtInt(delegation.trees)}</dd></div>
                   <div><dt>Deepest level</dt><dd>{fmtInt(delegation.deepest)}</dd></div>
                   <div><dt>Largest fan-out</dt><dd>{fmtInt(delegation.fanout)}</dd></div>
                   <div><dt>Peak parallel</dt><dd>{fmtInt(delegation.parallel)}</dd></div>
                   <div><dt>Sub-agent busy time</dt><dd>{fmtDuration(delegation.busy)}</dd></div>
-                  <div><dt>Results delivered</dt><dd>{delegation.known ? `${fmtInt(delegation.returned)} of ${fmtInt(delegation.known)} recorded` : <Unknown />}</dd></div>
+                  <div><dt>Results delivered</dt><dd>{delegation.known ? <>{fmtInt(delegation.returned)}<small> of {fmtInt(delegation.all)}</small></> : <Unknown />}</dd></div>
                 </dl>
                 <ol className="busiest-trees" aria-label="Busiest delegating threads">
                   {delegation.top.map((t) => (
                     <li key={t.key}>
                       <AppLink className="row-link" href={hrefPage('Agent Trees', { root: t.key, node: null })}><span>{t.title}</span></AppLink>
-                      <small>{plural(t.delegated, 'sub-agent')}{t.busy > 0 ? ` · ${fmtDuration(t.busy)} busy` : ''}</small>
+                      <small className="agent-dots"><span aria-hidden="true">{Array.from({ length: Math.min(8, t.delegated) }, (_, i) => <i key={i} />)}</span>{plural(t.delegated, 'sub-agent')}{t.busy > 0 ? ` · ${fmtDuration(t.busy)}` : ''}</small>
                     </li>
                   ))}
                 </ol>

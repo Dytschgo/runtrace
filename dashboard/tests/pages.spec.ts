@@ -77,7 +77,8 @@ test('the event feed filters by kind on the service, so a page is full', async (
     }
   });
   await page.goto('/?page=Activity&range=7d&kind=tool');
-  await expect(page.locator('.feed li')).toHaveCount(25);
+  // Records are the items with a kind; the date headings between them are not records.
+  await expect(page.locator('.feed li[data-kind]')).toHaveCount(25);
   await expect(page.locator('.feed li[data-kind="tool"]')).toHaveCount(25);
   expect(kinds).toContain('tool');
 });
@@ -92,7 +93,7 @@ test('activity never counts more active days than the window holds', async ({ pa
   await expect(stat).toBeVisible();
   const [active, span] = (await stat.locator('.stat-value').innerText()).split(' of ').map((s) => Number(s.replace(/\D/g, '')));
   expect(active).toBeLessThanOrEqual(span);
-  await expect(page.getByText('Busiest hour of day')).toBeVisible();
+  await expect(page.getByText('Busiest hour, all days')).toBeVisible();
   await expect(page.getByText('Busiest date')).toBeVisible();
 });
 
@@ -115,7 +116,7 @@ test('threads add up the tokens used in the window, like the overview', async ({
   const stat = page.locator('.stat').filter({ hasText: 'Tokens' });
   await expect(stat.locator('[title$="tokens"]').first()).toHaveAttribute('title', '1,750,000 tokens');
   await expect(stat).toContainText('from session logs');
-  await expect(page.getByRole('cell', { name: 'Started earlier', exact: true })).toBeVisible();
+  await expect(page.locator('tbody').getByRole('link', { name: 'Started earlier', exact: true })).toBeVisible();
   const row = page.getByRole('row').filter({ hasText: 'Started earlier' });
   await expect(row.locator('[title$="tokens"]')).toHaveAttribute('title', '1,000,000 tokens');
 });
@@ -130,6 +131,8 @@ test('projects show true zeros and lower bounds, never "Not loaded"', async ({ p
   });
   await page.goto('/?page=Projects&range=7d');
   await expect(page.getByRole('row').filter({ hasText: 'Busy' })).toContainText('≥');
+  // A project with nothing in the window is folded under one button, and still listed when opened.
+  await page.getByRole('button', { name: /with no activity/ }).click();
   await expect(page.getByRole('row').filter({ hasText: 'Quiet' })).toBeVisible();
   await expect(page.locator('main')).not.toContainText('Not loaded');
 });
@@ -162,8 +165,8 @@ test('a quota window with 20% or less left is marked on every page, and its pace
   const card = page.locator('[aria-label="Claude Code quota"]');
   await expect(card.locator('.quota-window[data-low]')).toHaveCount(1);
   await expect(card.locator('.quota-line b')).toHaveText('15% left');
-  await expect(card.locator('.quota-pace')).toContainText('At this pace, runs out around');
-  await expect(card.locator('.quota-pace')).toContainText('projection from 59m');
+  await expect(card.locator('.quota-pace')).toContainText('Runs out around');
+  await expect(card.locator('.quota-pace')).toHaveAttribute('title', /readings of the last 59m, not a reading/);
 });
 
 test('no warning when every window has more than 20% left or has reset', async ({ page }) => {

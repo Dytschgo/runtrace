@@ -114,8 +114,9 @@ test('richer optional data appears without a frontend change', async ({ page }) 
     return undefined;
   });
   await page.goto('/?page=Models');
-  await expect(page.getByRole('columnheader', { name: 'Input', exact: true })).toBeVisible();
-  await expect(page.locator('tbody')).toContainText('1,000');
+  // The token parts are drawn as one mix bar per model, with every exact figure on hover.
+  await expect(page.getByRole('columnheader', { name: 'Token mix', exact: true })).toBeVisible();
+  await expect(page.locator('tbody .mix-cell').first()).toHaveAttribute('title', /Input: 1,000 tokens/);
   await page.goto('/?range=all');
   await expect(page.locator('.tokens-hero')).toContainText('1,200');
   await expect(page.locator('.gaps')).not.toContainText('Tokens');
@@ -139,14 +140,14 @@ test('models show verified tokens, name those without usage, and never count tur
     return undefined;
   });
   await page.goto('/?page=Models');
-  await expect(page.getByRole('columnheader', { name: 'Input', exact: true })).toBeVisible();
+  await expect(page.getByRole('columnheader', { name: 'Token mix', exact: true })).toBeVisible();
   const grok = page.locator('tbody tr', { hasText: 'grok-4.7' });
   await expect(grok.locator('.unknown').first()).toBeVisible();
   await expect(grok).toContainText('None reported usage');
   await expect(grok).toContainText('4.0 s');
   const gpt = page.locator('tbody tr', { hasText: 'gpt-x' });
   await expect(gpt).toContainText('9,500');
-  await expect(gpt).toContainText('90%');
+  await expect(gpt).toContainText('90% of input cached');
   await expect(gpt).toContainText('12 reported, 10 in full');
   // Calls are null for every model: stated once, and turns never appear under that heading.
   await expect(page.getByRole('columnheader', { name: 'Model calls' })).toBeHidden();
@@ -203,7 +204,8 @@ test('projects use the usage aggregate and fall back when it fails', async ({ pa
   await page.goto('/?page=Projects');
   const alpha = page.locator('tbody tr', { hasText: 'alpha' });
   await expect(alpha).toContainText('110');
-  await expect(alpha).toContainText('github.com/acme/alpha');
+  // The row shows the last part of the remote; the whole remote is on hover.
+  await expect(alpha.locator('.project-sub')).toHaveAttribute('title', 'github.com/acme/alpha');
   usageWorks = false;
   await page.reload();
   await expect(page.locator('tbody tr', { hasText: 'alpha' })).toContainText('7');
@@ -246,13 +248,13 @@ test('the display timezone setting persists and changes the buckets', async ({ p
     return undefined;
   });
   await page.goto('/?page=Activity');
-  await expect(page.locator('.stat', { hasText: 'Busiest hour of day' }).locator('.stat-value')).toHaveText('00:00');
+  await expect(page.locator('.stat', { hasText: 'Busiest hour, all days' }).locator('.stat-value')).toHaveText('00:00');
   await page.getByRole('link', { name: 'Settings', exact: true }).click();
   await page.getByRole('combobox', { name: 'Display timezone' }).selectOption('UTC');
   await page.getByRole('link', { name: 'Activity', exact: true }).click();
-  await expect(page.locator('.stat', { hasText: 'Busiest hour of day' }).locator('.stat-value')).toHaveText('23:00');
+  await expect(page.locator('.stat', { hasText: 'Busiest hour, all days' }).locator('.stat-value')).toHaveText('23:00');
   await page.reload();
-  await expect(page.locator('.stat', { hasText: 'Busiest hour of day' }).locator('.stat-value')).toHaveText('23:00');
+  await expect(page.locator('.stat', { hasText: 'Busiest hour, all days' }).locator('.stat-value')).toHaveText('23:00');
 });
 
 
@@ -268,13 +270,14 @@ test('partial-only models explain totals and retain recorded cache fields', asyn
   const row=page.locator('tbody tr',{hasText:'partial-model'}).first();
   await expect(row.locator('.token-cell .unknown')).toHaveAttribute('title','Total is only computed for turns with complete usage.');
   await expect(row).not.toContainText('None reported usage');
-  await expect(row).toContainText('2 of 3 recorded');
+  await expect(row.locator('.mix-cell')).toHaveAttribute('title', /Cache writes: 0 tokens \(2 of 3 turns recorded\)/);
   await expect(page.locator('tbody tr',{hasText:'never-ran'}).first()).not.toContainText('0 of 0');
   await expect(page.locator('.tokens-hero .unknown')).toBeVisible();
-  await expect(page.getByText('Total covers only turns with complete usage, so input can exceed it.',{exact:true})).toBeVisible();
+  await expect(page.locator('.tokens-hero .hint')).toContainText('Total covers only turns with complete usage, so input can exceed it.');
   await expect(page.getByText('No complete token totals. Partial token fields are shown in the ledger.',{exact:true})).toBeVisible();
-  await expect(page.getByText('Most requested',{exact:true})).toBeVisible();
-  await expect(page.getByLabel('Model summary')).toContainText('of runs');
+  // With no complete totals the page ranks by runs, and says so.
+  await expect(page.getByRole('heading', { name: 'Share of runs' })).toBeVisible();
+  await expect(page.locator('.page-head')).toContainText('of the runs');
 });
 
 

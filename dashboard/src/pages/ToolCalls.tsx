@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef } from 'react';
 import { ModelName } from '../components/model';
 import { useQuery } from '@tanstack/react-query';
-import { X } from 'lucide-react';
+import { X, XCircle } from 'lucide-react';
 import { StackedDays, type StackSeries } from '../components/charts';
 import { DataTable, type Column } from '../components/DataTable';
 import { AppLink, Async, ChartPanel, NoRecords, PageHeader, Panel, RankedBars, ScanNote, SelectField, Skeleton, SkeletonRows, Stat, StatRow, StatusBadge, Tag, Unknown, NotYetPage } from '../components/ui';
@@ -14,6 +14,7 @@ import type { ToolRow } from '../lib/entities';
 import { useSettings } from '../lib/settings';
 import type { Entity } from '../lib/types';
 import { useUrl } from '../lib/url';
+import { toolIcon } from '../lib/icons';
 import { ToolContent } from './Threads';
 
 const STATUS_SERIES: StackSeries[] = [
@@ -66,24 +67,30 @@ export default function ToolCalls() {
   }, [aggregate.data, rows]);
   const categoryTotal = categories.reduce((t, [, n]) => t + n, 0);
 
+  const maxCalls = Math.max(1, ...stats.map((x) => x.calls));
   const statColumns: Column<ToolStat>[] = [
-    { key: 'name', header: 'Tool', sort: (s) => s.name, render: (s) => <AppLink className="mono row-link" href={hrefPatch({ tool: tool === s.name ? null : s.name, offset: null })} ariaCurrent={tool === s.name ? 'true' : undefined}>{s.name}</AppLink> },
-    { key: 'calls', header: 'Calls', align: 'end', sort: (s) => s.calls, render: (s) => fmtInt(s.calls) },
-    { key: 'failed', header: 'Failed', align: 'end', sort: (s) => (s.statusKnown ? s.failed / s.statusKnown : null), render: (s) => (s.failed ? <>{fmtInt(s.failed)} <small className="fine">{fmtPct(s.failed / s.calls, 1)}</small></> : <span className="fine">0</span>) },
-    { key: 'p50', header: 'Median', align: 'end', sort: (s) => s.p50, render: (s) => (s.p50 === null ? <Unknown label="Unknown" /> : fmtDuration(s.p50)) },
-    { key: 'p95', header: 'p95', align: 'end', sort: (s) => s.p95, render: (s) => (s.p95 === null ? <Unknown label="Unknown" /> : fmtDuration(s.p95)) },
-    { key: 'max', header: 'Slowest', align: 'end', sort: (s) => s.max, render: (s) => (s.max === null ? <Unknown label="Unknown" /> : fmtDuration(s.max)) },
-    { key: 'chars', header: 'Stored characters', align: 'end', sort: (s) => s.chars, render: (s) => fmtCompact(s.chars) },
+    { key: 'name', header: 'Tool', sort: (s) => s.name, render: (s) => { const Icon = toolIcon(s.name); return <AppLink className="mono row-link" href={hrefPatch({ tool: tool === s.name ? null : s.name, offset: null })} ariaCurrent={tool === s.name ? 'true' : undefined}><Icon size={13} aria-hidden="true" className="row-link-lead" />{s.name}</AppLink>; } },
+    { key: 'calls', header: 'Calls', align: 'end', sort: (s) => s.calls, render: (s) => <span className="token-cell"><span className="bar-cell-track" aria-hidden="true"><span style={{ inlineSize: `${(s.calls / maxCalls) * 100}%` }} /></span>{fmtInt(s.calls)}</span> },
+    {
+      key: 'failed', header: 'Failed', align: 'end', sort: (s) => (s.statusKnown ? s.failed / s.statusKnown : null),
+      render: (s) => (s.failed
+        ? <AppLink className="fail-cell" href={hrefPatch({ tool: s.name, status: 'failed', offset: null })} title={`Show the failed ${s.name} calls`}><span className="fail-track" aria-hidden="true"><span style={{ inlineSize: `${(s.failed / s.calls) * 100}%` }} /></span><b><XCircle size={11} aria-hidden="true" /> {fmtPct(s.failed / s.calls, 1)}</b><small>{fmtInt(s.failed)}</small></AppLink>
+        : <span className="dim">0</span>),
+    },
+    { key: 'p50', header: 'Time', align: 'end', sort: (s) => s.p50, render: (s) => (s.p50 === null ? <Unknown label="Unknown" /> : <span className="cell-pair"><span title="Median">{fmtDuration(s.p50)}</span>{s.p95 !== null && <small title="95th percentile">p95 {fmtDuration(s.p95)}</small>}</span>) },
+    { key: 'p95', header: 'p95', csvOnly: true, sort: (s) => s.p95, render: () => null },
+    { key: 'max', header: 'Slowest', csvOnly: true, sort: (s) => s.max, render: () => null },
+    { key: 'chars', header: 'Stored characters', csvOnly: true, sort: (s) => s.chars, render: () => null },
   ];
 
   const callColumns: Column<ToolRow>[] = [
-    { key: 'name', header: 'Tool', sort: (r) => r.name, render: (r) => <AppLink className="mono row-link" href={hrefPatch({ call: r.source_id })}>{r.name}</AppLink> },
-    { key: 'preview', header: 'Arguments', className: 'cell-preview', csv: (r) => r.preview, render: (r) => (r.preview ? <span className="mono cell-clip" title={r.preview}>{r.preview}</span> : <span className="fine">None recorded</span>) },
-    { key: 'model', header: 'Model', sort: (r) => r.model, render: (r) => (r.model ? <ModelName model={r.model} /> : <span className="fine">Not recorded</span>) },
+    { key: 'name', header: 'Tool', sort: (r) => r.name, render: (r) => { const Icon = toolIcon(r.name); return <AppLink className="mono row-link" href={hrefPatch({ call: r.source_id })}><Icon size={13} aria-hidden="true" className="row-link-lead" />{r.name}</AppLink>; } },
+    { key: 'preview', header: 'Arguments', className: 'cell-preview wide-narrow', csv: (r) => r.preview, render: (r) => (r.preview ? <span className="mono cell-clip" title={r.preview}>{middle(r.preview)}</span> : <span className="fine">None recorded</span>) },
+    { key: 'model', header: 'Model', className: 'wide-narrow', sort: (r) => r.model, render: (r) => (r.model ? <ModelName model={r.model} /> : <Unknown label="Not recorded" why="The call did not record which model made it." />) },
     { key: 'status', header: 'Status', sort: (r) => r.status, render: (r) => <StatusBadge status={r.status} /> },
-    { key: 'exit', header: 'Exit', align: 'end', sort: (r) => r.exit, render: (r) => (r.exit === null ? (r.category === 'shell' ? <Unknown label="Unknown" why="No exit code recorded." /> : <span className="fine">n/a</span>) : r.exit === 0 ? '0' : <Tag tone="crit">{r.exit}</Tag>) },
+    { key: 'exit', header: 'Exit', align: 'end', sort: (r) => r.exit, render: (r) => (r.exit === null ? (r.category === 'shell' ? <Unknown label="Unknown" why="No exit code recorded." /> : <span className="dim" aria-label="Does not apply" title="Only shell commands have an exit code">–</span>) : r.exit === 0 ? '0' : <Tag tone="crit">{r.exit}</Tag>) },
     { key: 'duration', header: 'Time', align: 'end', sort: (r) => r.duration, render: (r) => (r.duration === null ? <Unknown label="Unknown" why="No completion time recorded." /> : fmtDuration(r.duration)) },
-    { key: 'thread', header: 'Thread', render: (r) => (r.thread_id ? <AppLink className="link" href={hrefPage('Threads', { id: r.thread_id })}>Open</AppLink> : <span className="fine">None</span>) },
+    { key: 'thread', header: 'Thread', render: (r) => (r.thread_id ? <AppLink className="link" href={hrefPage('Threads', { id: r.thread_id })}>Open thread</AppLink> : <span className="fine">None</span>) },
     { key: 'time', header: 'Started', sort: (r) => r.occurred_at, render: (r) => <time dateTime={r.occurred_at}>{fmtShortDateTime(r.occurred_at, timezone)}</time> },
   ];
 
@@ -95,7 +102,10 @@ export default function ToolCalls() {
     <>
       <PageHeader
         title="Tool Calls"
-        lead="What ran and what failed."
+        lead={(() => {
+          const worst = [...stats].filter((x) => x.failed > 0 && x.calls >= 5).sort((a, b) => b.failed / b.calls - a.failed / a.calls)[0];
+          return worst ? <><span className="mono">{worst.name}</span> fails about 1 in {Math.max(1, Math.round(worst.calls / worst.failed))} calls; {stats.filter((x) => x !== worst).some((x) => x.failed) ? 'the others fail less often' : 'no other tool recorded a failure in this window'}.</> : stats.length ? 'No tool failed in this view.' : 'What ran and what failed.';
+        })()}
         action={scan.data && <ScanNote scanned={scan.data.scanned} complete={scan.data.complete} noun="calls" total={totalTools} reading={reading} progress={progress} failed={scanFailed} onRetry={retryFull} onExpand={() => set({ scan: 'all' })} />}
       />
 
@@ -104,8 +114,7 @@ export default function ToolCalls() {
           <>
             <StatRow label="Tool call summary">
               <Stat label="Calls" value={fmtInt(sum.calls)} sub={sum.sampled.calls ? sampleNote : `${fmtInt(stats.length)} distinct tools`} />
-              <Stat label="Failed" value={sum.statusKnown ? fmtPct(sum.failed / sum.statusKnown, 1) : <Unknown label="Unknown" />} sub={`${fmtInt(sum.failed)} calls${sum.sampled.calls ? ` ${sampleNote}` : ''}`} tone={sum.failed ? 'crit' : undefined} />
-              <Stat label="Shell non-zero exit" value={sum.exitKnown ? fmtPct(sum.nonZero / sum.exitKnown, 1) : <span className="stat-text fine">n/a</span>} sub={sum.shell ? `${fmtInt(sum.nonZero)} of ${fmtInt(sum.exitKnown)} with an exit code${sum.sampled.exit ? ` ${sampleNote}` : ''}` : sum.sampled.exit ? `No shell calls ${sampleNote}` : 'No shell calls here'} />
+              <Stat label="Failed" value={sum.statusKnown ? (sum.failed ? <AppLink className="stat-link" href={hrefPatch({ status: status === 'failed' ? null : 'failed', offset: null })} title="Show only failed calls"><XCircle size={16} aria-hidden="true" className="stat-icon" />{fmtPct(sum.failed / sum.statusKnown, 1)}</AppLink> : fmtPct(0, 1)) : <Unknown label="Unknown" />} sub={<>{fmtInt(sum.failed)} calls{sum.sampled.calls ? ` ${sampleNote}` : ''}{sum.exitKnown ? <> · {fmtPct(sum.nonZero / sum.exitKnown, 1)} of shell commands exit non-zero</> : null}</>} tone={sum.failed ? 'crit' : undefined} />
               <Stat label="Median time" value={sum.p50 === null ? <Unknown label="Unknown" /> : fmtDuration(sum.p50)} sub={[sum.p95 === null ? '' : `p95 ${fmtDuration(sum.p95)}`, sum.sampled.time ? sampleNote : ''].filter(Boolean).join(' · ') || undefined} />
             </StatRow>
 
@@ -122,7 +131,7 @@ export default function ToolCalls() {
                   </table>
                 }
               />
-              <Panel className="grow-1" title="By category" sub={aggregate.data || complete ? 'Only built-in item types are classified' : `Only built-in item types are classified · ${sampleNote}`}>
+              <Panel className="grow-1" title="By category" hint={aggregate.data || complete ? 'Only built-in item types are classified' : `Only built-in item types are classified · ${sampleNote}`}>
                 <RankedBars
                   label="Calls by category" total={categoryTotal}
                   items={categories.map(([c, n]) => ({
@@ -133,7 +142,7 @@ export default function ToolCalls() {
               </Panel>
             </div>
 
-            <Panel title="Tools" sub={aggregate.data ? 'All matching stored calls. Select a tool to filter the loaded calls below.' : 'Loaded calls only. Select a tool to filter the calls below.'} flush>
+            <Panel title="Tools" hint={aggregate.data ? 'All matching stored calls. Select a tool to filter the loaded calls below.' : 'Loaded calls only. Select a tool to filter the calls below.'} flush>
               <DataTable rows={stats} columns={statColumns} rowKey={(s) => s.name} caption="Statistics by tool" prefix="ts" defaultLimit={10} defaultSort={{ key: 'calls', dir: 'desc' }} exportName="runtrace-tools" />
             </Panel>
 
@@ -201,4 +210,9 @@ function CallDialog({ id, onClose }: { id: string; onClose: () => void }) {
       </div>
     </dialog>
   );
+}
+
+/** Long arguments keep both ends, where the command and its target usually are. */
+function middle(text: string, max = 64) {
+  return text.length <= max ? text : `${text.slice(0, max - 22)}…${text.slice(-20)}`;
 }

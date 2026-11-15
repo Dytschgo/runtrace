@@ -291,7 +291,7 @@ export function tokensByKey<T>(turns: T[], key: (t: T) => string, total: (t: T) 
   return m;
 }
 
-export interface ProviderUsage { provider: string; turns: number; complete: number; partial: number; unavailable: number; total: number | null }
+export interface ProviderUsage { provider: string; turns: number; complete: number; partial: number; unavailable: number; total: number | null; withTotal?: number }
 
 export function usageByProvider(turns: TurnRow[]): ProviderUsage[] {
   const m = new Map<string, ProviderUsage>();
@@ -303,7 +303,7 @@ export function usageByProvider(turns: TurnRow[]): ProviderUsage[] {
     if (t.usage === 'complete') p.complete += 1;
     else if (t.usage === 'partial') p.partial += 1;
     else p.unavailable += 1;
-    if (t.total !== null) p.total = (p.total ?? 0) + t.total;
+    if (t.total !== null) { p.total = (p.total ?? 0) + t.total; p.withTotal = (p.withTotal ?? 0) + 1; }
     m.set(name, p);
   }
   return [...m.values()].sort((a, b) => b.turns - a.turns);

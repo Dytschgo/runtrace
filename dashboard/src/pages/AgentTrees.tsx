@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { ModelName } from '../components/model';
 import { useQuery } from '@tanstack/react-query';
-import { ChevronDown, ChevronRight, ExternalLink, Network, TriangleAlert } from 'lucide-react';
+import { ChevronDown, ChevronRight, ExternalLink, Network, TriangleAlert , XCircle } from 'lucide-react';
 import { DataTable, type Column } from '../components/DataTable';
 import { AppLink, EmptyState, ErrorState, NotLoaded, PageHeader, Panel, SkeletonRows, Stat, StatRow, StatusBadge, Tag, Tokens, Unknown } from '../components/ui';
 import { windowTokens, type ThreadTokens } from '../lib/analytics';
@@ -52,17 +52,18 @@ export default function AgentTrees() {
   const scanIncomplete = threads.data?.complete === false || agents.data?.complete === false;
 
   type Row = (typeof trees)[number];
+  const maxBusy = Math.max(1, ...trees.map((t) => t.stats.busyMs ?? 0));
   const columns: Column<Row>[] = [
     {
       key: 'title', header: 'Root thread', sort: (t) => t.root.title, className: 'cell-title',
       render: (t) => <AppLink className="row-link" href={hrefPatch({ root: t.root.key, node: null })} ariaCurrent={t === selected ? 'true' : undefined}><span>{t.root.title}</span></AppLink>,
     },
-    { key: 'agents', header: 'Sub-agents', align: 'end', sort: (t) => t.stats.delegated, render: (t) => (t.stats.wholeTree !== t.stats.delegated ? <span title={`${fmtInt(t.stats.delegated)} started in this window, of ${fmtInt(t.stats.wholeTree)} in the whole tree`}>{fmtInt(t.stats.delegated)} <small className="fine">of {fmtInt(t.stats.wholeTree)}</small></span> : fmtInt(t.stats.delegated)) },
-    { key: 'depth', header: 'Depth', align: 'end', sort: (t) => t.stats.maxDepth, render: (t) => fmtInt(t.stats.maxDepth) },
-    { key: 'fanout', header: 'Fan-out', align: 'end', sort: (t) => t.stats.maxFanout, render: (t) => fmtInt(t.stats.maxFanout) },
-    { key: 'parallel', header: 'Peak parallel', align: 'end', sort: (t) => t.stats.peakParallel, render: (t) => fmtInt(t.stats.peakParallel) },
-    { key: 'busy', header: 'Busy time', align: 'end', sort: (t) => t.stats.busyMs, render: (t) => fmtDuration(t.stats.busyMs) },
-    { key: 'tokens', header: windowed ? 'Tokens here' : 'Tokens', align: 'end', sort: (t) => treeTokens(t.root), render: (t) => { if (coverage === 'failed') return <NotLoaded />; if (!turnsReady) return <span className="fine" aria-label="Loading">…</span>; const v = treeTokens(t.root); const ran = flatten(t.root).some((n) => (tokens.get(n.key)?.turns ?? 0) > 0); return v === null && windowed && !ran ? <span className="fine">None here</span> : v === null || (v === 0 && treeShort(t.root)) ? <Unknown label="No complete total" why="Turns ran here but none with a total, or those with one summed to 0 while others reported none." /> : <>{v !== null && treeShort(t.root) && <span className="lower-bound" title="Some turns reported no total"><span aria-hidden="true">≥</span><span className="sr-only">at least </span></span>}<Tokens v={v} /></>; } },
+    { key: 'agents', header: 'Sub-agents', align: 'end', sort: (t) => t.stats.delegated, render: (t) => <span className="agent-dots"><span aria-hidden="true">{Array.from({ length: Math.min(8, t.stats.delegated) }, (_, i) => <i key={i} />)}</span>{t.stats.wholeTree !== t.stats.delegated ? <span title={`${fmtInt(t.stats.delegated)} started in this window, of ${fmtInt(t.stats.wholeTree)} in the whole tree`}>{fmtInt(t.stats.delegated)} <small className="fine">of {fmtInt(t.stats.wholeTree)}</small></span> : fmtInt(t.stats.delegated)}</span> },
+    { key: 'depth', header: 'Depth', align: 'end', className: 'hide-narrow', sort: (t) => t.stats.maxDepth, render: (t) => fmtInt(t.stats.maxDepth) },
+    { key: 'fanout', header: 'Fan-out', align: 'end', className: 'hide-narrow', sort: (t) => t.stats.maxFanout, render: (t) => fmtInt(t.stats.maxFanout) },
+    { key: 'parallel', header: 'Peak parallel', align: 'end', className: 'hide-narrow', sort: (t) => t.stats.peakParallel, render: (t) => fmtInt(t.stats.peakParallel) },
+    { key: 'busy', header: 'Busy time', align: 'end', sort: (t) => t.stats.busyMs, render: (t) => <span className="token-cell"><span className="bar-cell-track" aria-hidden="true"><span style={{ inlineSize: `${((t.stats.busyMs ?? 0) / maxBusy) * 100}%` }} /></span>{fmtDuration(t.stats.busyMs)}</span> },
+    { key: 'tokens', header: 'Tree tokens', align: 'end', sort: (t) => treeTokens(t.root), render: (t) => { if (coverage === 'failed') return <NotLoaded />; if (!turnsReady) return <span className="fine" aria-label="Loading">…</span>; const v = treeTokens(t.root); const ran = flatten(t.root).some((n) => (tokens.get(n.key)?.turns ?? 0) > 0); return v === null && windowed && !ran ? <span className="fine">None here</span> : v === null || (v === 0 && treeShort(t.root)) ? <Unknown label="No complete total" why="Turns ran here but none with a total, or those with one summed to 0 while others reported none." /> : <>{v !== null && treeShort(t.root) && <span className="lower-bound" title="Some turns reported no total"><span aria-hidden="true">≥</span><span className="sr-only">at least </span></span>}<Tokens v={v} /></>; } },
     { key: 'start', header: 'Started', sort: (t) => t.root.start, render: (t) => (t.root.start ? <time dateTime={new Date(t.root.start).toISOString()}>{fmtDay(new Date(t.root.start).toISOString(), timezone)}</time> : <span className="fine">Unknown</span>) },
   ];
 
@@ -72,12 +73,13 @@ export default function AgentTrees() {
     returned: trees.reduce((s, t) => s + t.stats.returned, 0),
     notReturned: trees.reduce((s, t) => s + t.stats.notReturned, 0),
     unknown: trees.reduce((s, t) => s + t.stats.returnUnknown, 0),
+    failed: trees.reduce((s, t) => s + flatten(t.root).filter((n) => n.depth > 0 && n.agent?.status === 'failed').length, 0),
     deepest: Math.max(0, ...trees.map((t) => t.stats.maxDepth)),
   }), [trees]);
 
   return (
     <>
-      <PageHeader title="Agent Trees" lead="Recorded parent links only." />
+      <PageHeader title="Agent Trees" lead={trees.length ? <>{fmtInt(trees.length)} {trees.length === 1 ? 'thread' : 'threads'} handed work to {fmtInt(totals.agents)} sub-agents, up to {fmtInt(totals.deepest)} {totals.deepest === 1 ? 'level' : 'levels'} deep.</> : 'Recorded parent links only.'} />
       {error ? <Panel><ErrorState error={error} onRetry={() => { threads.refetch(); agents.refetch(); }} /></Panel>
         : !forest ? <Panel><SkeletonRows rows={8} label="Loading agent trees" /></Panel>
           : !trees.length ? (
@@ -95,12 +97,12 @@ export default function AgentTrees() {
           ) : (
             <>
               <StatRow label="Delegation summary">
-                <Stat label="Delegating threads" value={fmtInt(trees.length)} sub={`${fmtInt((view?.standalone ?? 0) + quietTrees)} other threads in view did not delegate here`} />
-                <Stat label="Sub-agents" value={fmtInt(totals.agents)} sub={f.since || f.until ? 'Started in this window' : 'Each one a recorded parent link'} />
+                <Stat label="Delegating threads" value={fmtInt(trees.length)} sub={`${fmtInt((view?.standalone ?? 0) + quietTrees)} others did not delegate`} />
+                <Stat label="Sub-agents" value={fmtInt(totals.agents)} sub={totals.failed ? <span className="status status-crit"><XCircle size={12} aria-hidden="true" />{fmtInt(totals.failed)} failed</span> : f.since || f.until ? 'Started in this window' : 'Each one a recorded parent link'} />
                 <Stat label="Deepest level" value={fmtInt(totals.deepest)} />
                 <Stat
-                  label="Results delivered" value={`${fmtInt(totals.returned)} of ${fmtInt(totals.returned + totals.notReturned)}`}
-                  sub={totals.unknown ? <>{fmtInt(totals.unknown)} <span className="unknown unknown-inline">not recorded</span></> : 'All recorded'}
+                  label="Results delivered" value={`${fmtInt(totals.returned)} of ${fmtInt(totals.returned + totals.notReturned + totals.unknown)}`}
+                  sub={totals.unknown || totals.notReturned || totals.failed ? <>{totals.notReturned ? `${fmtInt(totals.notReturned)} not delivered · ` : ''}{totals.unknown ? <>{fmtInt(totals.unknown)} <span className="unknown unknown-inline">not recorded</span></> : null}</> : 'All recorded'}
                 />
               </StatRow>
 
@@ -116,7 +118,7 @@ export default function AgentTrees() {
                 </div>
               )}
 
-              <Panel title="Delegating threads" sub="Select one to inspect it below" flush>
+              <Panel title="Delegating threads" sub="Pick one to inspect" flush id="trees-list">
                 <DataTable rows={trees} columns={columns} rowKey={(t) => t.root.key} caption="Threads that delegated" prefix="tr" defaultSort={{ key: 'start', dir: 'desc' }} />
               </Panel>
 
@@ -189,15 +191,16 @@ function TreeView({ root, tz, tokens, win }: { root: TreeNode; tz: string; token
   const agentText = fullAgent.data ?? selected.agent;
 
   return (
-    <div className="split split-tree">
+    <div className="split split-tree" ref={(el) => {
+      // A phone lists the trees above the chosen one, so picking a row scrolls to its tree.
+      if (el && typeof matchMedia === 'function' && matchMedia('(max-width: 760px)').matches && document.activeElement?.closest('.data-table')) el.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    }}>
       <Panel
         className="grow-3"
         title={root.title}
-        sub={
-          hasTimes
-            ? <>Sub-agent timeline, {fmtDateTime(new Date(axis.start).toISOString(), tz)} to {fmtDateTime(new Date(axis.end).toISOString(), tz)}. {axis.gaps.length ? `Idle gaps are shortened (${fmtInt(axis.gaps.length)} marked).` : ''}</>
-            : 'No completion times recorded, so no timeline can be drawn.'
-        }
+        sub={hasTimes ? <>{fmtDateTime(new Date(axis.start).toISOString(), tz)} – {fmtDateTime(new Date(axis.end).toISOString(), tz)}</> : 'No completion times recorded, so no timeline can be drawn.'}
+        hint={<>Each bar is one sub-agent's run on a shared time line.{axis.gaps.length ? ` Idle stretches are shortened so short runs stay visible; ${fmtInt(axis.gaps.length)} ${axis.gaps.length === 1 ? 'break is' : 'breaks are'} marked ≈ above the bars.` : ''} The outlined bar is the span of the root's sub-agents; the root's own run time is not recorded here. Hatched is a run with no recorded end.</>}
+        action={<button type="button" className="link-btn choose-tree" onClick={() => document.getElementById('trees-list')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}>Choose another tree ↑</button>}
         flush
       >
         <div className="tree-stats">
@@ -240,7 +243,9 @@ function TreeView({ root, tz, tokens, win }: { root: TreeNode; tz: string; token
                       {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                     </button>
                   ) : <span className="tree-leaf" aria-hidden="true" />}
+                  {(n.thread?.model ?? n.agent?.model) && <ModelName model={(n.thread?.model ?? n.agent?.model)!} showName={false} />}
                   <span className="tree-title">{n.title}</span>
+                  {n.agent?.status === 'failed' && <span className="tree-failed" title="This sub-agent failed"><XCircle size={12} aria-hidden="true" /><span className="sr-only">, failed</span></span>}
                 </span>
                 <span className="tree-track" aria-hidden="true">
                   {n.depth === 0 && hasTimes && <span className="tree-bar tree-bar-envelope" style={{ insetInlineStart: 0, inlineSize: '100%' }} />}
@@ -260,14 +265,14 @@ function TreeView({ root, tz, tokens, win }: { root: TreeNode; tz: string; token
         <p className="fine pad tree-legend">
           <span className="tree-key" /> Recorded run
           <span className="tree-key tree-key-open" /> No recorded end
-          <span className="tree-key tree-key-envelope" /> Span of the root's sub-agents. The root's own run time is not recorded here.
+          <span className="tree-key tree-key-envelope" /> Root span
         </p>
       </Panel>
 
       <Panel className="grow-1 tree-detail" title={selected.depth === 0 ? 'Root thread' : 'Sub-agent'} sub={selected.title}>
         <dl className="facts">
           <div><dt>Model</dt><dd>{selected.agent?.model ?? selected.thread?.model ? <ModelName model={String(selected.agent?.model ?? selected.thread?.model)} /> : <Unknown label="Unknown" />}</dd></div>
-          <div><dt>Status</dt><dd>{selected.depth === 0 && !selected.agent ? <span className="fine">See thread runs</span> : <StatusBadge status={selected.agent?.status} />}</dd></div>
+          {!(selected.depth === 0 && !selected.agent) && <div><dt>Status</dt><dd><StatusBadge status={selected.agent?.status} /></dd></div>}
           <div><dt>Started</dt><dd>{selected.start ? `${fmtDay(new Date(selected.start).toISOString(), tz)} ${fmtClock(new Date(selected.start).toISOString(), tz)}` : <Unknown label="Unknown" />}</dd></div>
           {selected.depth > 0 && <div><dt>Time</dt><dd>{selected.agent?.duration != null ? fmtDuration(selected.agent.duration) : <Unknown label="Unknown" why="No completion time recorded." />}</dd></div>}
           {selected.depth > 0 && <div><dt>Result delivered</dt><dd>{selected.agent?.returned == null ? <Unknown label="Not recorded" why="No explicit delivery record. This does not mean the result was lost." /> : selected.agent.returned ? <Tag>Acknowledged</Tag> : <Tag tone="warn">Not acknowledged</Tag>}</dd></div>}

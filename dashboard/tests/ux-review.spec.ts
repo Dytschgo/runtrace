@@ -7,7 +7,7 @@ const failApi = (page: Page) => page.route('**/api/v1/**', (r) => r.fulfill({ st
 
 test('a failed load is never shown as zero on Storage, Threads or Data Quality', async ({ page }) => {
   await failApi(page);
-  for (const [name, stats] of [['Storage', ['Current records']], ['Threads', ['In view', 'Primary', 'Child']], ['Data Quality', ['Records', 'Marked complete']]] as const) {
+  for (const [name, stats] of [['Storage', ['Current records']], ['Threads', ['In view', 'Primary', 'Child']], ['Data Quality', ['Records', 'Fields fully known']]] as const) {
     await page.goto(`/?page=${encodeURIComponent(name)}`);
     await expect(page.getByRole('heading', { name, level: 1 })).toBeVisible();
     for (const label of stats) {

@@ -1,5 +1,6 @@
+import { ModelName } from '../components/model';
 import { useId, useMemo, useState, type KeyboardEvent, type PointerEvent } from 'react';
-import { StackedDays, type StackSeries } from '../components/charts';
+import { StackedDays, type StackSeries, Legend } from '../components/charts';
 import { DataTable, type Column } from '../components/DataTable';
 import { Async, ChartPanel, NoRecords, NotYetPage, PageHeader, Panel, RankedBars, Segmented, SelectField, SkeletonRows, Unknown } from '../components/ui';
 import { stackByDay, weeklyWhenLong, type DayStack } from '../lib/analytics';
@@ -20,7 +21,7 @@ const WHO: { value: Who; label: string; title: string }[] = [
   { value: 'started', label: 'You started', title: 'Turns in threads a person started' },
   { value: 'delegated', label: 'Delegated', title: 'Turns in sub-agent threads, started by another agent' },
 ];
-const WINDOW_NAMES: Record<string, string> = { five_hour: '5-hour limit', seven_day: '7-day limit', weekly: 'weekly limit' };
+const WINDOW_NAMES: Record<string, string> = { five_hour: '5-hour limit', seven_day: '7-day limit', weekly: 'weekly limit', primary: '5-hour limit', secondary: 'weekly limit' };
 const PROJECTS_SHOWN = 12;
 
 export default function Harnesses() {
@@ -113,7 +114,11 @@ export default function Harnesses() {
     <>
       <PageHeader
         title="Harnesses"
-        lead="Which agent ran your turns: Codex, Claude Code, Grok and the rest."
+        lead={(() => {
+          const sum = totals.reduce((a, t) => a + t.value, 0);
+          const lead0 = [...totals].sort((x, y) => y.value - x.value)[0];
+          return lead0 && sum ? <>{harnessName(lead0.key)} ran {fmtPct(lead0.value / sum)} of the {unit}{totals.length > 1 ? `, ${totals.length - 1} other ${totals.length === 2 ? 'harness' : 'harnesses'} the rest` : ''}.</> : 'Which agent ran your turns.';
+        })()}
         action={
           <>
             <Segmented label="Who started the turn" value={who} onChange={(v) => set({ who: v === 'all' ? null : v }, { replace: true })} options={WHO} />
@@ -128,7 +133,7 @@ export default function Harnesses() {
               <Panel
                 className="grow-2 balance"
                 title="Balance"
-                sub={`${span === 1 ? 'Daily share' : `Share over the ${SMOOTH_DAYS} days to each day`} of ${unit}, ${harnessName(a)} minus ${harnessName(b)}`}
+                hint={`${span === 1 ? 'Daily share' : `Share over the ${SMOOTH_DAYS} days to each day`} of ${unit}, ${harnessName(a)} minus ${harnessName(b)}. Even is 50/50; +20pp means ${harnessName(a)} 60%, ${harnessName(b)} 40%.`}
                 action={keys.length > 2 && (
                   <>
                     <SelectField label="First harness" hideLabel value={a} onChange={(v) => set({ ha: v, hb: v === b ? a : b }, { replace: true })} options={options} />
@@ -140,7 +145,7 @@ export default function Harnesses() {
                 <div className="balance-head" aria-live="polite">
                   <Side id={a} share={shown?.a} />
                   <div className="balance-lead">
-                    <small>{focus ? `${focus.covers > 1 ? `${focus.covers} days to ` : ''}${dayLabel(focus.day, timezone)}` : 'This window'}</small>
+                    <small>{focus ? `${focus.covers > 1 ? `${focus.covers} days to ` : ''}${dayLabel(focus.day, timezone)}` : 'This window'} · share between these two</small>
                     {lead === null ? <b className="fine">No {unit}</b> : <b>{lead >= 0 ? '+' : '−'}{Math.abs(lead).toFixed(1)}<i>pp</i></b>}
                     <small>{lead === null ? '' : Math.abs(lead) < 0.05 ? 'Even' : `${harnessName(lead > 0 ? a : b)} leads`}</small>
                     {moved !== null && Math.abs(moved) >= 0.05 && (
@@ -155,11 +160,11 @@ export default function Harnesses() {
                   ? <BalanceChart days={days} a={a} b={b} tz={timezone} gaps={gapRuns(daily)} episodes={episodes} hover={hover} onHover={setHover} show={show} />
                   : <p className="fine">The balance needs at least two days with {unit} from either harness. Widen the time range.</p>}
                 <p className="balance-foot fine">
-                  <span>0 = 50/50 · +20 = {harnessName(a)} 60%, {harnessName(b)} 40%{episodes.length ? ' · ▾ a limit was reached' : ''}</span>
+                  <span>{episodes.length ? '▾ a limit was reached' : ''}</span>
                   <span>{harnessName(a)} led {fmtInt(aDays)} days, {harnessName(b)} {fmtInt(bDays)}</span>
                 </p>
               </Panel>
-              <Panel className="grow-1" title="All harnesses" sub={`Share of all ${unit} in this window`}>
+              <Panel className="grow-1" title="All harnesses" sub={`Share of all ${unit} in this window`} hint="Tokens count only turns that reported a complete total. Session-log hours add tokens, never turns.">
                 <RankedBars
                   label={`Harnesses by ${unit}`}
                   total={all}
@@ -169,11 +174,10 @@ export default function Harnesses() {
                     note: measure === 'tokens' ? `${fmtInt(t.turns)} turns` : undefined,
                   }))}
                 />
-                <p className="fine">Tokens count only turns that reported a complete total. Session-log hours add tokens, never turns.</p>
               </Panel>
             </div>
 
-            <Panel title="How they compare" sub="Per harness, over the turns in this view. Medians, so one huge turn does not set the number." flush>
+            <Panel title="How they compare" hint="Per harness, over the turns in this view. Medians, so one huge turn does not set the number." flush>
               <CompareTable stats={stats} />
             </Panel>
 
@@ -181,14 +185,15 @@ export default function Harnesses() {
 
             <div className="split">
               <Panel className="grow-2" title="By project" sub={`Each project's ${unit}, split by harness`}>
-                <ProjectSplits rows={byProject.slice(0, PROJECTS_SHOWN)} name={projectName} show={show} />
+                <Legend items={keys.map((k) => ({ label: harnessName(k), color: harnessColor(k) }))} />
+                <ProjectSplits rows={byProject.slice(0, PROJECTS_SHOWN)} name={projectName} show={show} order={keys} />
                 {byProject.length > PROJECTS_SHOWN && <p className="fine">{fmtInt(byProject.length - PROJECTS_SHOWN)} more projects not shown</p>}
               </Panel>
               <ChartPanel
                 className="grow-1"
                 title="By hour of day"
                 sub="In the display timezone"
-                chart={<StackedDays rows={hourRows} series={series} height={220} compactValues={measure === 'tokens'} />}
+                chart={<StackedDays legendFirstOnTop rows={hourRows} series={series} height={220} compactValues={measure === 'tokens'} />}
                 table={<StackTable rows={hourRows} series={series} first="Hour" />}
               />
             </div>
@@ -196,7 +201,7 @@ export default function Harnesses() {
             <ChartPanel
               title={`${measure === 'turns' ? 'Turns' : 'Tokens'} per ${stack.unit}, by harness`}
               sub={stack.unit === 'week' ? 'Weeks start on Monday, in the display timezone' : 'In the display timezone'}
-              chart={<StackedDays rows={stack.rows} series={series} compactValues={measure === 'tokens'} />}
+              chart={<StackedDays legendFirstOnTop rows={stack.rows} series={series} compactValues={measure === 'tokens'} />}
               table={<StackTable rows={stack.rows} series={series} first={stack.unit === 'week' ? 'Week of' : 'Day'} />}
             />
           </>
@@ -231,6 +236,7 @@ function Side({ id, share, end }: { id: string; share?: number; end?: boolean })
     <div className={end ? 'balance-side is-end' : 'balance-side'}>
       <HarnessLabel id={id} swatch />
       <b>{share === undefined ? '–' : fmtPct(share, 1)}</b>
+      <small className="balance-pair">of the pair</small>
       <i className="balance-side-bar" style={{ background: harnessColor(id) }} aria-hidden="true" />
     </div>
   );
@@ -249,50 +255,60 @@ const rate = (n: number, of: number) => (of ? fmtPct(n / of, n && n / of < 0.01 
 
 function CompareTable({ stats }: { stats: HarnessStats[] }) {
   const none = (why: string) => <Unknown label="n/a" why={why} />;
+  // A rate that is zero for every harness says nothing, so it moves to the download and the note says so.
+  const allZero = (get: (s: HarnessStats) => number) => stats.every((s) => get(s) === 0);
+  const quietFailed = allZero((s) => s.failed);
+  const quietStopped = allZero((s) => s.stopped);
+  const maxPer = Math.max(1, ...stats.map((s) => s.tokensPerTurn ?? 0));
   const columns: Column<HarnessStats>[] = [
     { key: 'harness', header: 'Harness', sort: (s) => harnessName(s.key), csv: (s) => harnessName(s.key), render: (s) => <HarnessLabel id={s.key} swatch /> },
     { key: 'turns', header: 'Turns', align: 'end', sort: (s) => s.turns, render: (s) => fmtInt(s.turns) },
-    { key: 'tokens', header: 'Tokens', align: 'end', sort: (s) => s.tokens, render: (s) => (s.tokens === null ? none('No turn reported a complete total.') : fmtCompact(s.tokens)) },
-    { key: 'per-turn', header: 'Tokens per turn', align: 'end', sort: (s) => s.tokensPerTurn, render: (s) => (s.tokensPerTurn === null ? none('No turn reported a complete total.') : fmtCompact(s.tokensPerTurn)) },
-    { key: 'cache', header: 'Cached input', align: 'end', sort: (s) => s.cacheShare, render: (s) => (s.cacheShare === null ? none('No turn reported both input and cached input.') : fmtPct(s.cacheShare)) },
+    { key: 'tokens', header: 'Tokens', align: 'end', sort: (s) => s.tokens, render: (s) => (s.tokens === null ? <Unknown label="Not reported" why="No turn reported a complete total." /> : <>{(s.withTotal ?? s.turns) < s.turns && <span className="lower-bound" title={`${fmtInt(s.withTotal ?? 0)} of ${fmtInt(s.turns)} turns reported a total`}><span aria-hidden="true">≥ </span><span className="sr-only">at least </span></span>}{fmtCompact(s.tokens)}</>) },
+    { key: 'per-turn', header: 'Median tokens per turn', align: 'end', sort: (s) => s.tokensPerTurn, render: (s) => (s.tokensPerTurn === null ? <Unknown label="Not reported" why="No turn reported a complete total." /> : <span className="token-cell"><span className="bar-cell-track" aria-hidden="true"><span style={{ inlineSize: `${(s.tokensPerTurn / maxPer) * 100}%`, background: harnessColor(s.key) }} /></span>{fmtCompact(s.tokensPerTurn)}</span>) },
+    { key: 'cache', header: 'Cached input', align: 'end', sort: (s) => s.cacheShare, render: (s) => (s.cacheShare === null ? <Unknown label="Not reported" why="No turn reported both input and cached input." /> : fmtPct(s.cacheShare)) },
     { key: 'time', header: 'Median turn', align: 'end', sort: (s) => s.medianMs, render: (s) => (s.medianMs === null ? none('No turn was timed.') : fmtDuration(s.medianMs)) },
-    { key: 'failed', header: 'Failed', align: 'end', sort: (s) => (s.statusKnown ? s.failed / s.statusKnown : null), render: (s) => rate(s.failed, s.statusKnown) ?? none('No turn reported a status.') },
-    { key: 'stopped', header: 'Stopped', align: 'end', sort: (s) => (s.statusKnown ? s.stopped / s.statusKnown : null), render: (s) => <span title="Cancelled or interrupted">{rate(s.stopped, s.statusKnown) ?? none('No turn reported a status.')}</span> },
-    { key: 'delegated', header: 'Delegated', align: 'end', sort: (s) => s.delegated / s.turns, render: (s) => <span title="Turns that ran in a sub-agent thread">{rate(s.delegated, s.turns)}</span> },
-    { key: 'spawned', header: 'Started sub-agents', align: 'end', sort: (s) => (s.spawnKnown ? s.spawned / s.spawnKnown : null), render: (s) => rate(s.spawned, s.spawnKnown) ?? none('No turn said whether it started sub-agents.') },
+    { key: 'failed', header: 'Failed', csvOnly: quietFailed, align: 'end', sort: (s) => (s.statusKnown ? s.failed / s.statusKnown : null), render: (s) => rate(s.failed, s.statusKnown) ?? none('No turn reported a status.') },
+    { key: 'stopped', header: 'Stopped', csvOnly: quietStopped, align: 'end', sort: (s) => (s.statusKnown ? s.stopped / s.statusKnown : null), render: (s) => <span title="Cancelled or interrupted">{rate(s.stopped, s.statusKnown) ?? none('No turn reported a status.')}</span> },
+    { key: 'delegated', header: 'Turns in sub-agents', align: 'end', sort: (s) => s.delegated / s.turns, render: (s) => <span title="Turns that ran in a sub-agent thread">{rate(s.delegated, s.turns)}</span> },
+    { key: 'spawned', header: 'Turns starting sub-agents', align: 'end', sort: (s) => (s.spawnKnown ? s.spawned / s.spawnKnown : null), render: (s) => rate(s.spawned, s.spawnKnown) ?? none('No turn said whether it started sub-agents.') },
     {
-      key: 'models', header: 'Models', sort: (s) => s.models[0]?.model ?? null, csv: (s) => s.models.map((m) => `${m.model} ${m.turns}`).join('; '),
+      key: 'models', header: 'Models', className: 'wide-narrow', sort: (s) => s.models[0]?.model ?? null, csv: (s) => s.models.map((m) => `${m.model} ${m.turns}`).join('; '),
       render: (s) => (s.models.length
-        ? <span className="compare-models">{s.models.slice(0, 2).map((m) => <span key={m.model} className="mono">{m.model} <small>{fmtPct(m.turns / s.turns)}</small></span>)}{s.models.length > 2 && <small>+{s.models.length - 2} more</small>}</span>
+        ? <span className="compare-models">{s.models.slice(0, 2).map((m) => <span key={m.model}><ModelName model={m.model} /> <small>{fmtPct(m.turns / s.turns)}</small></span>)}{s.models.length > 2 && <small title={s.models.slice(2).map((m) => m.model).join(', ')}>+{s.models.length - 2} more</small>}</span>
         : none('No turn named its model.')),
     },
   ];
-  return <DataTable rows={stats} columns={columns} rowKey={(s) => s.key} caption="Harnesses compared" defaultSort={{ key: 'turns', dir: 'desc' }} paged={false} exportName="runtrace-harnesses" />;
+ return (
+    <>
+      {(quietFailed || quietStopped) && <p className="table-gap"><small>No turn {quietFailed && quietStopped ? 'failed or was stopped' : quietFailed ? 'failed' : 'was stopped'} in this view.</small></p>}
+      <DataTable rows={stats} columns={columns} rowKey={(s) => s.key} caption="Harnesses compared" defaultSort={{ key: 'turns', dir: 'desc' }} paged={false} exportName="runtrace-harnesses" />
+    </>
+  );
 }
 
 const LIMITS_SHOWN = 6;
 
 function LimitPanel({ episodes, a, b, tz }: { episodes: LimitEpisode[]; a: string; b: string; tz: string }) {
-  const pct = (v: number | null) => (v === null ? '–' : fmtPct(v));
+  const pct = (v: number | null) => (v === null ? <span className="sr-only">Does not apply: neither harness ran in this span</span> : fmtPct(v));
   const [open, setOpen] = useState(false);
   const newest = [...episodes].reverse();
   const shown = open ? newest : newest.slice(0, LIMITS_SHOWN);
   return (
-    <Panel title="While a limit held" sub={`${harnessName(a)}'s share of ${harnessName(a)} and ${harnessName(b)} until the reset, against the same length of time just before`} flush>
-      <div className="table-scroll" tabIndex={0} role="region" aria-label="Limits reached">
+    <Panel title="While a limit held" hint={`${harnessName(a)}'s share of ${harnessName(a)} and ${harnessName(b)} until the reset, against the same length of time just before`} flush>
+      <div className="table-scroll card-table" tabIndex={0} role="region" aria-label="Limits reached">
         <table>
-          <thead><tr><th scope="col">Reached</th><th scope="col">Limit</th><th scope="col" className="num">Refusals</th><th scope="col" className="num">Before</th><th scope="col" className="num">Until reset</th><th scope="col" className="num">Waited</th></tr></thead>
+          <thead><tr><th scope="col">Reached</th><th scope="col">Limit</th><th scope="col" className="num">Refusals</th><th scope="col" className="num" title={`${harnessName(a)}'s share of ${harnessName(a)} and ${harnessName(b)} in the same length of time before the limit`}>Share before</th><th scope="col" className="num" title={`${harnessName(a)}'s share of the two until the reset`}>Share until reset</th><th scope="col" className="num">Waited</th></tr></thead>
           <tbody>
             {shown.map((e) => {
               const change = e.before !== null && e.during !== null ? (e.during - e.before) * 100 : null;
               return (
                 <tr key={`${e.harness}-${e.at}`}>
-                  <td>{fmtShortDateTime(new Date(e.at).toISOString(), tz)}</td>
-                  <td><HarnessLabel id={e.harness} swatch /> <small className="fine">{WINDOW_NAMES[e.window] ?? e.window}</small></td>
-                  <td className="num">{fmtInt(e.hits)}</td>
-                  <td className="num">{pct(e.before)}</td>
-                  <td className="num">{pct(e.during)}{change !== null && Math.abs(change) >= 1 && <small className="fine"> {change > 0 ? '+' : '−'}{Math.abs(change).toFixed(0)}pp</small>}</td>
-                  <td className="num">{fmtDuration(e.until - e.at)}</td>
+                  <td data-label="Reached">{fmtShortDateTime(new Date(e.at).toISOString(), tz)}</td>
+                  <td data-label="Limit" className="wide-narrow"><HarnessLabel id={e.harness} swatch /> <small className="fine">{WINDOW_NAMES[e.window] ?? e.window}</small></td>
+                  <td className="num" data-label="Refusals">{fmtInt(e.hits)}</td>
+                  <td className="num" data-label="Share before">{pct(e.before)}</td>
+                  <td className="num" data-label="Share until reset">{pct(e.during)}{change !== null && Math.abs(change) >= 1 && <small className="fine"> {change > 0 ? '+' : '−'}{Math.abs(change).toFixed(0)}pp</small>}</td>
+                  <td className="num" data-label="Waited">{e.until > e.at ? fmtDuration(e.until - e.at) : <Unknown label="Not recorded" why="The reset time of this limit was not recorded, so the wait cannot be measured." />}</td>
                 </tr>
               );
             })}
@@ -308,14 +324,17 @@ function LimitPanel({ episodes, a, b, tz }: { episodes: LimitEpisode[]; a: strin
   );
 }
 
-function ProjectSplits({ rows, name, show }: { rows: ReturnType<typeof harnessByProject>; name: (id: string) => string; show: (n: number) => string }) {
+function ProjectSplits({ rows, name, show, order }: { rows: ReturnType<typeof harnessByProject>; name: (id: string) => string; show: (n: number) => string; order: string[] }) {
+  // Every bar stacks the harnesses in the same order, so a colour sits in the same place on each row.
+  const rank = (k: string) => { const i = order.indexOf(k); return i < 0 ? order.length : i; };
+  const top = Math.max(1, ...rows.map((r) => r.total));
   return (
     <ol className="project-splits" aria-label="Projects by harness">
       {rows.map((p) => (
         <li key={p.project}>
           <div className="project-split-meta"><span className="project-split-name">{name(p.project)}</span><span className="num">{show(p.total)}</span></div>
-          <div className="project-split-bar" role="img" aria-label={p.parts.map((x) => `${harnessName(x.key)} ${fmtPct(x.value / p.total)}`).join(', ')}>
-            {p.parts.map((x) => <span key={x.key} title={`${harnessName(x.key)}: ${show(x.value)} (${fmtPct(x.value / p.total)})`} style={{ flexGrow: x.value, background: harnessColor(x.key) }} />)}
+          <div className="project-split-bar" style={{ inlineSize: `${Math.max(4, (p.total / top) * 100)}%` }} role="img" aria-label={p.parts.map((x) => `${harnessName(x.key)} ${fmtPct(x.value / p.total)}`).join(', ')}>
+            {[...p.parts].sort((x1, x2) => rank(x1.key) - rank(x2.key)).map((x) => <span key={x.key} title={`${harnessName(x.key)}: ${show(x.value)} (${fmtPct(x.value / p.total)})`} style={{ flexGrow: x.value, background: harnessColor(x.key) }} />)}
           </div>
         </li>
       ))}
@@ -325,13 +344,16 @@ function ProjectSplits({ rows, name, show }: { rows: ReturnType<typeof harnessBy
 
 const W = 1000;
 const H = 300;
-const y = (diff: number) => H / 2 - (diff / 100) * (H / 2);
 
 function BalanceChart({ days, a, b, tz, gaps, episodes, hover, onHover, show }: {
   days: BalanceDay[]; a: string; b: string; tz: string; gaps: [number, number][]; episodes: LimitEpisode[];
   hover: number | null; onHover: (i: number | null) => void; show: (n: number) => string;
 }) {
   const uid = useId().replace(/:/g, '');
+  // The scale fits the widest lead in view, so a close race does not hug the middle of a ±100 axis.
+  const widest = Math.max(0, ...days.map((d) => Math.abs(d.diff ?? 0)));
+  const lim = Math.min(100, Math.max(20, Math.ceil(widest / 20) * 20));
+  const y = (diff: number) => H / 2 - (diff / lim) * (H / 2);
   const colorA = harnessColor(a);
   const colorB = harnessColor(b);
   const x = (i: number) => (i / (days.length - 1)) * W;
@@ -375,7 +397,7 @@ function BalanceChart({ days, a, b, tz, gaps, episodes, hover, onHover, show }: 
         <span>↓ {harnessName(b)} leads<i className="swatch" style={{ background: colorB }} /></span>
       </div>
       <div className="balance-plot">
-        <div className="balance-y" aria-hidden="true"><span>+100</span><span>+50</span><span>Even</span><span>−50</span><span>−100</span></div>
+        <div className="balance-y" aria-hidden="true" title="Percentage points away from 50/50"><span>+{lim}pp</span><span>+{lim / 2}</span><span>Even</span><span>−{lim / 2}</span><span>−{lim}</span></div>
         <div
           className="balance-svg" tabIndex={0} role="img"
           aria-label={`Daily balance of ${harnessName(a)} against ${harnessName(b)}. Use the arrow keys to read each day.`}

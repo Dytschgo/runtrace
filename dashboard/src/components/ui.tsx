@@ -1,6 +1,6 @@
-import { useEffect, useId, useRef, useState, type MouseEvent, type ReactNode } from 'react';
+import { useEffect, useId, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from 'react';
 import type { UseQueryResult } from '@tanstack/react-query';
-import { AlertTriangle, Check, CheckCircle2, ChevronRight, CircleDashed, CircleSlash, Copy, Inbox, Loader, RefreshCw, TableProperties, XCircle } from 'lucide-react';
+import { AlertTriangle, Check, CheckCircle2, ChevronRight, CircleDashed, CircleSlash, Copy, Inbox, Info, Loader, RefreshCw, TableProperties, XCircle } from 'lucide-react';
 import { ApiError } from '../lib/api';
 import { fmtCompact, fmtInt, fmtPct, isKnown } from '../lib/format';
 import { focusRequest, pushSearch } from '../lib/url';
@@ -8,19 +8,19 @@ import { fromQuery, type Load } from '../lib/load';
 import { smoothPath } from './TraceChart';
 
 /** A client-side link: real href for new tabs and copying, history navigation for plain clicks. */
-export function AppLink({ href, className, children, title, ariaCurrent, ariaLabel, tabIndex }: {
-  href: string; className?: string; children: ReactNode; title?: string; ariaCurrent?: 'page' | 'true'; ariaLabel?: string; tabIndex?: number;
+export function AppLink({ href, className, children, title, ariaCurrent, ariaLabel, tabIndex, style }: {
+  href: string; className?: string; children: ReactNode; title?: string; ariaCurrent?: 'page' | 'true'; ariaLabel?: string; tabIndex?: number; style?: CSSProperties;
 }) {
   const onClick = (e: MouseEvent<HTMLAnchorElement>) => {
     if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
     e.preventDefault();
     pushSearch(href);
   };
-  return <a href={href} className={className} onClick={onClick} title={title} aria-current={ariaCurrent} aria-label={ariaLabel} tabIndex={tabIndex}>{children}</a>;
+  return <a href={href} className={className} style={style} onClick={onClick} title={title} aria-current={ariaCurrent} aria-label={ariaLabel} tabIndex={tabIndex}>{children}</a>;
 }
 
-export function Panel({ title, sub, action, children, className = '', flush, id }: {
-  title?: ReactNode; sub?: ReactNode; action?: ReactNode; children: ReactNode; className?: string; flush?: boolean; id?: string;
+export function Panel({ title, sub, hint, action, children, className = '', flush, id }: {
+  title?: ReactNode; sub?: ReactNode; hint?: ReactNode; action?: ReactNode; children: ReactNode; className?: string; flush?: boolean; id?: string;
 }) {
   return (
     <section className={`panel ${className}`} id={id}>
@@ -28,6 +28,7 @@ export function Panel({ title, sub, action, children, className = '', flush, id 
         <header className="panel-head">
           <div className="panel-title">
             {title && <h2>{title}</h2>}
+            {hint && <Hint>{hint}</Hint>}
             {sub && <p>{sub}</p>}
           </div>
           {action && <div className="panel-action">{action}</div>}
@@ -36,6 +37,68 @@ export function Panel({ title, sub, action, children, className = '', flush, id 
       <div className={flush ? 'panel-body panel-body-flush' : 'panel-body'}>{children}</div>
     </section>
   );
+}
+
+/** Explanations stay one hover or focus away instead of filling the page. The text is in the page for screen readers. */
+export function Hint({ children, label = 'How to read this' }: { children: ReactNode; label?: string }) {
+  const id = useId();
+  const [open, setOpen] = useState(false);
+  // Hover and keyboard focus open it; a tap toggles it, so touch screens can read it too.
+  return (
+    <span className="hint" tabIndex={0} role="button" aria-label={label} aria-describedby={id} aria-expanded={open} data-open={open ? 'true' : undefined}
+      onClick={(e) => { e.preventDefault(); e.stopPropagation(); setOpen((o) => !o); }} onBlur={() => setOpen(false)}
+      onKeyDown={(e) => { if (e.key === 'Escape') setOpen(false); }}>
+      <Info size={13} aria-hidden="true" />
+      <span className="hint-pop" role="tooltip" id={id}>{children}</span>
+    </span>
+  );
+}
+
+export interface ShareItem { key: string; label: ReactNode; text: string; value: number; color: string; href?: string; display?: ReactNode; muted?: boolean; dashed?: boolean }
+
+/** Who has the most of a whole, as one bar: each part's width is its share. The largest parts are named underneath. */
+export function ShareStrip({ items, label, legend = 6, format = fmtCompact, note }: { items: ShareItem[]; label: string; legend?: number; format?: (n: number) => string; note?: ReactNode }) {
+  const total = items.reduce((s, i) => s + Math.max(0, i.value), 0);
+  if (!total) return null;
+  const sorted = [...items].filter((i) => i.value > 0).sort((a, b) => b.value - a.value);
+  const named = sorted.slice(0, legend);
+  const rest = sorted.length - named.length;
+  return (
+    <div className="share">
+      <div className="share-bar" role="img" aria-label={`${label}: ${sorted.map((i) => `${i.text} ${fmtPct(i.value / total)}`).join(', ')}`}>
+        {sorted.map((i) => (
+          <span key={i.key} className={i.muted ? 'share-seg is-muted' : 'share-seg'} style={{ flexGrow: i.value, background: i.muted ? undefined : i.color, boxShadow: i.dashed ? 'inset 0 0 0 1.5px var(--bg)' : undefined }} title={`${i.text}: ${format(i.value)} (${fmtPct(i.value / total)})`} />
+        ))}
+      </div>
+      <ul className="share-legend" aria-label={`${label}, largest first`}>
+        {named.map((i) => (
+          <li key={i.key}>
+            <span className={i.muted ? 'swatch is-muted' : 'swatch'} style={{ background: i.muted ? undefined : i.color, boxShadow: i.dashed ? 'inset 0 0 0 1.5px var(--bg), 0 0 0 1px ' + i.color : undefined }} />
+            <span className="share-name">{i.href ? <AppLink href={i.href}>{i.label}</AppLink> : i.label}</span>
+            <b>{fmtPct(i.value / total)}</b>
+          </li>
+        ))}
+        {rest > 0 && <li className="share-more" title={sorted.slice(legend).map((i) => `${i.text} ${fmtPct(i.value / total)}`).join(', ')}>+{rest} more</li>}
+        {note && <li className="share-note">{note}</li>}
+      </ul>
+    </div>
+  );
+}
+
+export interface SplitPart { key: string; value: number; tone: 'solid' | 'soft' | 'faint' | 'missing'; name: string }
+
+/** One whole split into measured, partly measured and missing parts. Solid is measured, hatched is missing. */
+export function SplitBar({ parts, label }: { parts: SplitPart[]; label: string }) {
+  const total = parts.reduce((s, p) => s + p.value, 0);
+  return (
+    <span className="split-bar" role="img" aria-label={`${label}: ${parts.filter((p) => p.value).map((p) => `${p.name} ${fmtInt(p.value)}`).join(', ') || 'none'}`}>
+      {total ? parts.filter((p) => p.value).map((p) => <i key={p.key} className={`split-${p.tone}`} style={{ flexGrow: p.value }} title={`${p.name}: ${fmtInt(p.value)} (${fmtPct(p.value / total)})`} />) : <i className="split-missing" style={{ flexGrow: 1 }} />}
+    </span>
+  );
+}
+
+export function SplitKey({ parts }: { parts: Pick<SplitPart, 'key' | 'tone' | 'name'>[] }) {
+  return <ul className="mix-key" aria-hidden="true">{parts.map((p) => <li key={p.key}><i className={`split-${p.tone}`} />{p.name}</li>)}</ul>;
 }
 
 /** The one mark for missing telemetry: hatched, labelled and explained, never a zero or a dash. */
@@ -168,9 +231,10 @@ export function Tag({ children, tone }: { children: ReactNode; tone?: 'accent' |
 export interface RankedItem { key: string; label: ReactNode; value: number; href?: string; display?: ReactNode; swatch?: string; note?: ReactNode; active?: boolean }
 
 /** A ranked list in HTML rather than an SVG chart: long labels wrap, rows can link, and it reads as text. */
-export function RankedBars({ items, total, label, limit }: { items: RankedItem[]; total?: number; label: string; limit?: number }) {
+export function RankedBars({ items, total, label, limit, byShare }: { items: RankedItem[]; total?: number; label: string; limit?: number; byShare?: boolean }) {
   const shown = limit ? items.slice(0, limit) : items;
-  const max = Math.max(1, ...items.map((i) => i.value));
+  // With byShare a bar's length is its share of the total, matching the percentage beside it.
+  const max = byShare && total ? total : Math.max(1, ...items.map((i) => i.value));
   const hidden = items.length - shown.length;
   return (
     <>
@@ -222,9 +286,10 @@ export function StatRow({ children, label }: { children: ReactNode; label?: stri
 }
 
 /** A thread or series as a small trace that draws itself. Colour comes from the surrounding text colour. */
-export function Sparkline({ values, label }: { values: number[]; label?: string }) {
+export function Sparkline({ values, label, max: shared }: { values: number[]; label?: string; max?: number }) {
   if (values.length < 2) return null;
-  const max = Math.max(1, ...values);
+  // A shared top lets several sparklines be compared; without one each is scaled to its own peak.
+  const max = shared ?? Math.max(1, ...values);
   const d = smoothPath(values.map((v, i) => [(i / (values.length - 1)) * 104, 21 - (v / max) * 19]));
   return (
     <svg className="sparkline" viewBox="0 0 104 22" role={label ? 'img' : undefined} aria-label={label} aria-hidden={label ? undefined : true}>
@@ -246,7 +311,7 @@ export function Command({ text }: { text: string }) {
   };
   return (
     <div className="command">
-      <code>{text}</code>
+      <code>{text.split(' ').map((word, i) => <span key={i} className="nowrap">{i > 0 ? ' ' : ''}{word}</span>)}</code>
       <button type="button" className="icon-btn" onClick={copy} aria-label={copied ? `Copied ${text}` : `Copy ${text}`}>
         {copied ? <Check size={14} aria-hidden="true" /> : <Copy size={14} aria-hidden="true" />}
       </button>
@@ -287,14 +352,15 @@ export function SelectField({ label, value, onChange, options, disabled, title, 
 }
 
 /** Lets any chart switch to the same numbers as a table, for screen readers and for reading exact values. */
-export function ChartPanel({ title, sub, chart, table, className, action }: {
-  title: ReactNode; sub?: ReactNode; chart: ReactNode; table: ReactNode; className?: string; action?: ReactNode;
+export function ChartPanel({ title, sub, hint, chart, table, className, action }: {
+  title: ReactNode; sub?: ReactNode; hint?: ReactNode; chart: ReactNode; table: ReactNode; className?: string; action?: ReactNode;
 }) {
   const [showTable, setShowTable] = useState(false);
   return (
     <Panel
       title={title}
       sub={sub}
+      hint={hint}
       className={className}
       action={
         <>

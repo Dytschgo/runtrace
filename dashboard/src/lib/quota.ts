@@ -54,7 +54,7 @@ const time = (v: unknown) => { const t = typeof v === 'string' ? Date.parse(v) :
 const text = (v: unknown) => (typeof v === 'string' && v ? v : null);
 
 /** Windows by their stored names, the way T3 labels them. */
-const WINDOW_NAMES: Record<string, string> = { five_hour: '5-hour', seven_day: 'Weekly', weekly: 'Weekly', daily: 'Daily', usage_window: 'Usage window' };
+const WINDOW_NAMES: Record<string, string> = { five_hour: '5-hour', seven_day: 'Weekly', weekly: 'Weekly', daily: 'Daily', usage_window: 'Usage window', primary: '5-hour', secondary: 'Weekly' };
 export function windowName(w: unknown): string {
   if (typeof w !== 'string' || !w) return 'Window';
   const model = /^seven_day_(.+)$/.exec(w);

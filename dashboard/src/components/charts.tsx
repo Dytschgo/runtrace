@@ -71,33 +71,37 @@ export function ColumnChart({ points, tz, height = 200, unit = 'prompts' }: { po
   );
 }
 
-export interface StackSeries { key: string; label: string; color: string }
+export interface StackSeries { key: string; label: string; color: string; hatched?: boolean }
 
-export function StackedDays({ rows, series, height = 240, compactValues }: { rows: DayStack[]; series: StackSeries[]; height?: number; compactValues?: boolean }) {
+export function StackedDays({ rows, series, height = 240, compactValues, legendFirstOnTop, legendByTotal }: { rows: DayStack[]; series: StackSeries[]; height?: number; compactValues?: boolean; legendFirstOnTop?: boolean; legendByTotal?: boolean }) {
+  const totals = new Map(series.map((s) => [s.key, rows.reduce((t, r) => t + Number(r[s.key] ?? 0), 0)]));
+  const legend = legendFirstOnTop ? [...series].reverse() : legendByTotal ? [...series].sort((a, b) => (totals.get(b.key) ?? 0) - (totals.get(a.key) ?? 0)) : series;
   return (
     <>
       <div className="chart" style={{ blockSize: height }}>
         <ResponsiveContainer width="100%" height="100%">
           <BarChart data={rows} margin={{ top: 8, right: 4, left: 0, bottom: 0 }}>
+            <defs><pattern id="stack-hatch" width="5" height="5" patternUnits="userSpaceOnUse" patternTransform="rotate(135)"><rect width="5" height="5" fill="oklch(0.2 0 none)" /><rect width="1.2" height="5" fill="oklch(0.6 0 none)" /></pattern></defs>
             <CartesianGrid stroke="var(--line)" vertical={false} />
             <XAxis dataKey="label" minTickGap={24} tick={axisTick} axisLine={{ stroke: 'var(--line-strong)' }} tickLine={false} />
             <YAxis allowDecimals={false} width={36} tick={axisTick} axisLine={false} tickLine={false} tickFormatter={fmtCompact} />
             <Tooltip cursor={{ fill: 'var(--wash)' }} content={<ChartTip compact={compactValues} title={(p) => String(p.label)} />} isAnimationActive={false} />
             {series.map((s) => (
-              <Bar key={s.key} dataKey={s.key} name={s.label} stackId="a" fill={s.color} stroke="var(--bg)" strokeWidth={2} maxBarSize={28} isAnimationActive={false} />
+              <Bar key={s.key} dataKey={s.key} name={s.label} stackId="a" fill={s.hatched ? 'url(#stack-hatch)' : s.color} stroke="var(--bg)" strokeWidth={2} maxBarSize={28} isAnimationActive={false} />
             ))}
           </BarChart>
         </ResponsiveContainer>
       </div>
-      <Legend items={series} />
+      {/* The legend can list the top of the stack first, matching a ranked list beside it. */}
+      <Legend items={legend} />
     </>
   );
 }
 
-export function Legend({ items }: { items: { label: string; color: string }[] }) {
+export function Legend({ items }: { items: { label: string; color: string; hatched?: boolean }[] }) {
   return (
     <ul className="legend">
-      {items.map((s) => <li key={s.label}><span className="swatch" style={{ background: s.color }} aria-hidden="true" />{s.label}</li>)}
+      {items.map((s) => <li key={s.label}><span className={s.hatched ? 'swatch is-muted' : 'swatch'} style={{ background: s.hatched ? undefined : s.color }} aria-hidden="true" />{s.label}</li>)}
     </ul>
   );
 }

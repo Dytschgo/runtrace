@@ -14,6 +14,8 @@ export interface Column<R> {
   csv?: (r: R) => string | number | null;
   align?: 'end';
   className?: string;
+  /** Kept in the CSV download but not drawn, so the table can stay short while the export keeps every figure. */
+  csvOnly?: boolean;
 }
 
 const LIMITS = [25, 50, 100];
@@ -50,7 +52,9 @@ export function DataTable<R>({ rows, columns, rowKey, caption, defaultSort, page
   const { pageSize } = useSettings();
   const sortKey = params.get(`${prefix}sort`) ?? defaultSort?.key;
   const dir = (params.get(`${prefix}dir`) ?? defaultSort?.dir ?? 'desc') as 'asc' | 'desc';
-  const limit = Math.min(500, Number(params.get(`${prefix}limit`)) || defaultLimit || pageSize);
+  // A phone shows cards, which are tall, so its first page is shorter unless a size was chosen.
+  const phone = typeof matchMedia === 'function' && matchMedia('(max-width: 760px)').matches;
+  const limit = Math.min(500, Number(params.get(`${prefix}limit`)) || defaultLimit || (phone ? Math.min(10, pageSize) : pageSize));
   const rawOffset = Math.max(0, Number(params.get(`${prefix}offset`)) || 0);
   const col = columns.find((c) => c.key === sortKey);
   const sorted = useMemo(() => sortRows(rows, col, dir), [rows, col, dir]);
@@ -62,20 +66,34 @@ export function DataTable<R>({ rows, columns, rowKey, caption, defaultSort, page
     const nextDir = sortKey === c.key && dir === 'desc' ? 'asc' : 'desc';
     set({ [`${prefix}sort`]: c.key, [`${prefix}dir`]: nextDir, [`${prefix}offset`]: null }, { replace: true });
   };
+  const shown = columns.filter((c) => !c.csvOnly);
   const exportCsv = () => {
     const cols = columns.filter((c) => c.csv || c.sort);
     downloadCsv(`${exportName}.csv`, toCsv(cols.map((c) => c.header), sorted.map((r) => cols.map((c) => (c.csv ?? c.sort)!(r)))));
   };
 
   if (!rows.length && empty) return <>{empty}</>;
+  const sortable = shown.filter((c) => c.sort);
   return (
     <div className="data-table">
+      {/* On a phone the headers give way to one sort menu above the cards. */}
+      {sortable.length > 1 && (
+        <label className="field sort-narrow">
+          <span className="field-label">Sort</span>
+          <select value={`${sortKey ?? ''}:${dir}`} onChange={(e) => { const [k, d] = e.target.value.split(':'); set({ [`${prefix}sort`]: k, [`${prefix}dir`]: d, [`${prefix}offset`]: null }, { replace: true }); }}>
+            {sortable.flatMap((c) => [
+              <option key={`${c.key}:desc`} value={`${c.key}:desc`}>{c.header}, {c.align === 'end' ? 'largest' : 'last'} first</option>,
+              <option key={`${c.key}:asc`} value={`${c.key}:asc`}>{c.header}, {c.align === 'end' ? 'smallest' : 'first'} first</option>,
+            ])}
+          </select>
+        </label>
+      )}
       <div className="table-scroll" tabIndex={0} role="region" aria-label={caption}>
         <table className={stickyFirst ? 'sticky-first' : undefined}>
           <caption className="sr-only">{caption}</caption>
           <thead>
             <tr>
-              {columns.map((c) => {
+              {shown.map((c) => {
                 const active = sortKey === c.key;
                 return (
                   <th key={c.key} scope="col" className={`${c.align === 'end' ? 'num' : ''} ${c.className ?? ''}`} aria-sort={active ? (dir === 'asc' ? 'ascending' : 'descending') : undefined}>
@@ -93,7 +111,7 @@ export function DataTable<R>({ rows, columns, rowKey, caption, defaultSort, page
           <tbody>
             {visible.map((r) => (
               <tr key={rowKey(r)}>
-                {columns.map((c) => <td key={c.key} className={`${c.align === 'end' ? 'num' : ''} ${c.className ?? ''}`}>{c.render(r)}</td>)}
+                {shown.map((c) => <td key={c.key} data-label={c.header} className={`${c.align === 'end' ? 'num' : ''} ${c.className ?? ''}`}>{c.render(r)}</td>)}
               </tr>
             ))}
           </tbody>
@@ -117,14 +135,14 @@ export function DataTable<R>({ rows, columns, rowKey, caption, defaultSort, page
   );
 }
 
-export function Pager({ offset, limit, shown, total, hasMore, onLimit, onPage, label = 'Pagination' }: {
-  offset: number; limit: number; shown: number; total?: number; hasMore?: boolean; onLimit?: (n: number) => void; onPage: (offset: number) => void; label?: string;
+export function Pager({ offset, limit, shown, total, hasMore, onLimit, onPage, label = 'Pagination', unit }: {
+  offset: number; limit: number; shown: number; total?: number; hasMore?: boolean; onLimit?: (n: number) => void; onPage: (offset: number) => void; label?: string; unit?: string;
 }) {
   const more = total !== undefined ? offset + limit < total : !!hasMore;
   return (
     <nav className="pager" aria-label={label}>
       <span className="pager-range" aria-live="polite">
-        {shown ? `${fmtInt(offset + 1)}–${fmtInt(offset + shown)}` : '0'}{total !== undefined ? ` of ${fmtInt(total)}` : ''}
+        {shown ? `${fmtInt(offset + 1)}–${fmtInt(offset + shown)}` : '0'}{total !== undefined ? ` of ${fmtInt(total)}` : ''}{unit ? ` ${unit}` : ''}
       </span>
       <button type="button" className="icon-btn" disabled={offset <= 0} onClick={() => onPage(Math.max(0, offset - limit))} aria-label="Previous page"><ChevronLeft size={15} aria-hidden="true" /></button>
       <button type="button" className="icon-btn" disabled={!more} onClick={() => onPage(offset + limit)} aria-label="Next page"><ChevronRight size={15} aria-hidden="true" /></button>

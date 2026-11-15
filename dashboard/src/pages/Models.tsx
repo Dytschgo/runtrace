@@ -2,12 +2,13 @@ import { useMemo } from 'react';
 import { modelIcon } from '../lib/icons';
 import { OTHER_COLOR, seriesColor, StackedDays, type StackSeries } from '../components/charts';
 import { DataTable, type Column } from '../components/DataTable';
-import { CHART_MODELS, TokenFacts, useTokenStack } from '../components/tokens';
-import { AppLink, Async, ChartPanel, CoverageBar, NoRecords, PageHeader, Panel, Segmented, Skeleton, SkeletonRows, Stat, StatRow, Tag, Tokens, Unknown, Val, NotYetPage } from '../components/ui';
+import { CHART_MODELS, MixBar, MixKey, TokenFacts, useTokenStack } from '../components/tokens';
+import { ModelName } from '../components/model';
+import { AppLink, Async, ChartPanel, CoverageBar, NoRecords, PageHeader, Panel, Segmented, ShareStrip, Skeleton, SkeletonRows, Stat, StatRow, Tokens, Unknown, NotYetPage } from '../components/ui';
 import { percentile, stackByDay, tokenSummary, weeklyWhenLong } from '../lib/analytics';
 import { useAgents, useFilters, useModels, useModelSlots, useModelTurns, useThreads } from '../lib/data';
 import { inTimeRange, isFuture } from '../lib/filters';
-import { fmtCompact, fmtDuration, fmtInt, fmtPct, isKnown } from '../lib/format';
+import { fmtDuration, fmtInt, fmtPct, isKnown } from '../lib/format';
 import { useSettings } from '../lib/settings';
 import type { ModelRow } from '../lib/types';
 import { useUrl } from '../lib/url';
@@ -75,9 +76,20 @@ export default function Models() {
   }, [daily, timezone]);
   const per = stack.unit === 'week' ? 'week' : 'day';
 
+  const turnsKnown = rows.some((r) => isKnown(r.observed_provider_turns));
+  const latencyKnown = rows.some((r) => isKnown(r.median_latency_ms));
+  const mixKnown = rows.some((r) => isKnown(r.input_tokens) || isKnown(r.output_tokens));
+  // Fields no model reported are said once, above the table, instead of a hatched cell in every row.
+  const absent = [
+    ['Model calls', rows.some((r) => isKnown(r.calls)), CALLS_WHY],
+    ['Provider turns', turnsKnown, 'This service does not report provider turns yet.'],
+    ['Input', rows.some((r) => isKnown(r.input_tokens)), NO_USAGE],
+    ['Output', rows.some((r) => isKnown(r.output_tokens)), NO_USAGE],
+    ['Turn time', latencyKnown, 'No completed turn with timing.'],
+  ].filter(([, known]) => !known) as [string, boolean, string][];
   const columns: Column<Row>[] = [
     {
-      key: 'model', header: 'Requested model', sort: (r) => r.name,
+      key: 'model', header: 'Model', sort: (r) => r.name,
       render: (r) => (
         <span className="cell-model">
           <ModelGlyph model={r.model} color={seriesColor(r.model ? slots.get(r.model) : undefined)} />
@@ -91,58 +103,56 @@ export default function Models() {
       key: 'tokens', header: 'Total tokens', align: 'end', sort: (r) => r.total_tokens ?? null,
       render: (r) => (
         <span className="token-cell">
-          <span className="bar-cell-track" aria-hidden="true"><span style={{ inlineSize: `${r.share * 100}%` }} /></span>
+          {isKnown(r.total_tokens) && <span className="bar-cell-track" aria-hidden="true"><span style={{ inlineSize: `${r.share * 100}%`, background: seriesColor(r.model ? slots.get(r.model) : undefined) }} /></span>}
           {isKnown(r.total_tokens) && (r.complete_usage_turns ?? r.turns_with_usage ?? 0) < (r.observed_provider_turns ?? 0) && <span className="lower-bound" title="Some turns reported no complete total"><span aria-hidden="true">≥</span><span className="sr-only">at least </span></span>}
-          <Tokens v={r.total_tokens} why={(r.turns_with_usage ?? 0) > 0 ? 'Total is only computed for turns with complete usage.' : NO_USAGE} />
+          {isKnown(r.total_tokens) ? <Tokens v={r.total_tokens} /> : (r.turns_with_usage ?? 0) > 0 ? <Unknown label="No complete total" why="Total is only computed for turns with complete usage." /> : <Unknown label="Not reported" why={NO_USAGE} />}
         </span>
       ),
     },
-    { key: 'runs', header: 'Runs', align: 'end', sort: (r) => r.observed_runs, render: (r) => fmtInt(r.observed_runs) },
-    { key: 'threads', header: 'Threads', align: 'end', sort: (r) => r.threads, render: (r) => <CountCell row={r} v={r.threads} /> },
-    { key: 'agents', header: 'Sub-agents', align: 'end', sort: (r) => r.agents, render: (r) => <CountCell row={r} v={r.agents} /> },
-    { key: 'subtime', header: 'Median sub-agent time', align: 'end', sort: (r) => r.median, render: (r) => (r.median === null ? <span className="fine">None timed</span> : fmtDuration(r.median)) },
-  ];
-  // Newer measures join the ledger when the service reports them. Hidden when all rows are null, and then stated once.
-  const measures: { key: string; header: string; get: (r: Row) => number | null | undefined; why: string; render?: (r: Row) => React.ReactNode }[] = [
-    { key: 'calls', header: 'Model calls', get: (r) => r.calls, why: CALLS_WHY },
-    {
-      key: 'turns', header: 'Provider turns', get: (r) => r.observed_provider_turns, why: 'This service does not report provider turns yet.',
-      render: (r) => {
+    ...(mixKnown ? [{
+      key: 'mix', header: 'Token mix', className: 'wide-narrow', sort: (r: Row) => (isKnown(r.cached_input_tokens) && r.input_tokens ? r.cached_input_tokens / r.input_tokens : null), csv: () => null,
+      render: (r: Row) => (
+        <span className="mix-cell" title={mixTitle(r)}>
+          <MixBar input={r.input_tokens} cached={r.cached_input_tokens} output={r.output_tokens} reasoning={r.reasoning_tokens} label={`${r.name} token mix`} />
+          {isKnown(r.input_tokens) && <small>{isKnown(r.cached_input_tokens) && r.input_tokens ? `${fmtPct(r.cached_input_tokens / r.input_tokens)} of input cached` : 'No cache reported'}</small>}
+        </span>
+      ),
+    }] : []),
+    ...(turnsKnown ? [{
+      key: 'turns', header: 'Provider turns', align: 'end' as const, sort: (r: Row) => r.observed_provider_turns ?? null,
+      render: (r: Row) => {
         const n = r.observed_provider_turns ?? 0;
         const usage = r.turns_with_usage ?? 0;
         const complete = r.complete_usage_turns ?? 0;
         return (
           <span className="usage-cell">
             {n === 0 && (r.session_log_blocks ?? 0) > 0 ? <span className="fine" title="Tokens were read from session logs, by the hour. Those are not provider turns.">None · {fmtInt(r.session_log_blocks!)} log hours</span> : fmtInt(n)}
-            {n > 0 && <CoverageBar known={usage} total={n} label={`${r.name}, turns reporting usage`} />}
-            {n > 0 && (usage === 0
+            {n > 0 && (usage < n || complete < usage) && (usage === 0
               ? <small>None reported usage</small>
-              : complete < usage ? <small>{fmtInt(usage)} reported, {fmtInt(complete)} in full</small> : <small>{fmtInt(usage)} reported</small>)}
+              : <small>{fmtInt(usage)} reported{complete < usage ? `, ${fmtInt(complete)} in full` : ''}</small>)}
           </span>
         );
       },
-    },
-    { key: 'input', header: 'Input', get: (r) => r.input_tokens, why: NO_USAGE, render: (r) => <Tokens v={r.input_tokens} why={NO_USAGE} /> },
-    {
-      key: 'cached', header: 'Cached input', get: (r) => r.cached_input_tokens, why: NO_USAGE,
-      render: (r) => (isKnown(r.cached_input_tokens)
-        ? <span title={`${fmtInt(r.cached_input_tokens)} tokens`}>{r.input_tokens ? fmtPct(r.cached_input_tokens / r.input_tokens) : fmtCompact(r.cached_input_tokens)}</span>
-        : <Unknown label="n/a" why={NO_USAGE} />),
-    },
-    {
-      key: 'cache-write', header: 'Cache writes', get: (r) => r.cache_write_tokens, why: 'No cache-write usage was reported.',
-      render: (r) => <span className="usage-cell"><Tokens v={r.cache_write_tokens} why="No cache-write usage was reported." />{isKnown(r.cache_write_observed_turns) && isKnown(r.observed_provider_turns) && r.observed_provider_turns > 0 && <small>{fmtInt(r.cache_write_observed_turns)} of {fmtInt(r.observed_provider_turns)} recorded</small>}</span>,
-    },
-    { key: 'output', header: 'Output', get: (r) => r.output_tokens, why: NO_USAGE, render: (r) => <Tokens v={r.output_tokens} why={NO_USAGE} /> },
-    { key: 'reasoning', header: 'Reasoning', get: (r) => r.reasoning_tokens, why: NO_USAGE, render: (r) => <Tokens v={r.reasoning_tokens} why={NO_USAGE} /> },
-    { key: 'median', header: 'Median turn', get: (r) => r.median_latency_ms, why: 'No completed turn with timing.', render: (r) => (isKnown(r.median_latency_ms) ? fmtDuration(r.median_latency_ms) : <Unknown label="n/a" why="No completed turn with timing." />) },
-    { key: 'p95', header: 'p95 turn', get: (r) => r.p95_latency_ms, why: 'No completed turn with timing.', render: (r) => (isKnown(r.p95_latency_ms) ? fmtDuration(r.p95_latency_ms) : <Unknown label="n/a" why="No completed turn with timing." />) },
+    }] : []),
+    ...(latencyKnown ? [{
+      key: 'median', header: 'Turn time', align: 'end' as const, sort: (r: Row) => r.median_latency_ms ?? null,
+      render: (r: Row) => (isKnown(r.median_latency_ms)
+        ? <span className="cell-pair"><span title="Median turn">{fmtDuration(r.median_latency_ms)}</span>{isKnown(r.p95_latency_ms) && <small title="95th percentile turn">p95 {fmtDuration(r.p95_latency_ms)}</small>}</span>
+        : <Unknown label="n/a" why="No completed turn with timing." />),
+    }] : []),
+    { key: 'threads', header: 'Threads', align: 'end', className: 'hide-narrow', sort: (r) => r.threads, render: (r) => <CountCell row={r} v={r.threads} /> },
+    { key: 'agents', header: 'Sub-agents', align: 'end', className: 'hide-narrow', sort: (r) => r.agents, render: (r) => <CountCell row={r} v={r.agents} /> },
+    // Every figure stays in the download.
+    { key: 'runs', header: 'Runs', csvOnly: true, render: () => null, sort: (r) => r.observed_runs },
+    { key: 'input', header: 'Input', csvOnly: true, render: () => null, sort: (r) => r.input_tokens ?? null },
+    { key: 'cached', header: 'Cached input', csvOnly: true, render: () => null, sort: (r) => r.cached_input_tokens ?? null },
+    { key: 'cache-write', header: 'Cache writes', csvOnly: true, render: () => null, sort: (r) => r.cache_write_tokens ?? null },
+    { key: 'output', header: 'Output', csvOnly: true, render: () => null, sort: (r) => r.output_tokens ?? null },
+    { key: 'reasoning', header: 'Reasoning', csvOnly: true, render: () => null, sort: (r) => r.reasoning_tokens ?? null },
+    { key: 'p95', header: 'p95 turn', csvOnly: true, render: () => null, sort: (r) => r.p95_latency_ms ?? null },
+    { key: 'subtime', header: 'Median sub-agent time', csvOnly: true, render: () => null, sort: (r) => r.median },
+    { key: 'calls', header: 'Model calls', csvOnly: true, render: () => null, sort: (r) => r.calls ?? null },
   ];
-  const absent = measures.filter((m) => !rows.some((r) => isKnown(m.get(r))));
-  const insertAt = 2;
-  columns.splice(insertAt, 0, ...measures.filter((m) => !absent.includes(m)).map((m): Column<Row> => ({
-    key: m.key, header: m.header, align: 'end', sort: (r) => m.get(r) ?? null, render: m.render ?? ((r) => <Val v={m.get(r)} why={m.why} />),
-  })));
 
   const top = rows.reduce<Row | undefined>((best, r) => (r.model && (!best || (hasTotals ? (r.total_tokens ?? -1) > (best.total_tokens ?? -1) : r.observed_runs > best.observed_runs)) ? r : best), undefined);
 
@@ -150,21 +160,32 @@ export default function Models() {
 
   return (
     <>
-      <PageHeader title="Models" lead="Tokens are per provider turn, not per model call." />
+      <PageHeader title="Models" lead={top && top.share > 0 ? <><span className="mono">{top.name}</span> did {fmtPct(top.share)} of the {hasTotals ? 'reported tokens' : 'runs'}{rows.filter((r) => r.model).length > 1 ? `, across ${fmtInt(rows.filter((r) => r.model).length)} models` : ''}.</> : 'Which models did the work.'} />
       <Async query={models} skeleton={<Skeleton height="6rem" label="Loading models" />} isEmpty={(d) => !d.length} empty={<Panel><NoRecords /></Panel>}>
         {() => (
           <>
-            <StatRow label="Model summary">
-              <Stat label="Models requested" value={fmtInt(rows.filter((r) => r.model).length)} sub={`across ${fmtInt(rows.reduce((s, r) => s + r.observed_runs, 0))} observed runs`} />
-              <Stat label={hasTotals ? 'Most tokens' : 'Most requested'} value={<span className="stat-text mono">{top?.name}</span>} sub={top ? `${fmtPct(top.share)} of ${hasTotals ? 'complete-turn tokens' : 'runs'}` : undefined} />
-              <Stat label="Resolved model" value={resolvedKnown ? fmtInt(resolvedKnown) : <Unknown why="Only the requested model is recorded." />} sub={resolvedKnown ? 'Turns with a resolved model' : 'A provider can serve a different model'} />
-              <Stat label="Model calls" value={rows.some((r) => isKnown(r.calls)) ? 'Partial' : <Unknown why={CALLS_WHY} />} sub="Not the same as provider turns" />
-            </StatRow>
+            <Panel title={hasTotals ? 'Share of reported tokens' : 'Share of runs'} hint={hasTotals ? 'Complete-turn totals per requested model. A provider can serve a different model; only the requested one is recorded.' : 'Observed runs per requested model.'}>
+              <ShareStrip
+                label="Share by model" legend={8}
+                note={hasTotals && rows.some((r) => (r.observed_provider_turns ?? 0) > (r.complete_usage_turns ?? 0)) ? `${fmtInt(rows.reduce((a, r) => a + (r.complete_usage_turns ?? 0), 0))} of ${fmtInt(rows.reduce((a, r) => a + (r.observed_provider_turns ?? 0), 0))} turns reported a total` : undefined}
+                items={rows.map((r) => ({
+                  key: r.name, text: r.name, value: hasTotals ? r.total_tokens ?? 0 : r.observed_runs, color: seriesColor(r.model ? slots.get(r.model) : undefined), muted: !r.model,
+                  label: r.model ? <ModelName model={r.model} /> : <span className="mono">Not recorded</span>,
+                }))}
+              />
+              <StatRow label="Model summary">
+                <Stat label="Models" value={fmtInt(rows.filter((r) => r.model).length)} sub={`${fmtInt(rows.reduce((s, r) => s + r.observed_runs, 0))} runs`} />
+                {(() => {
+                  const fast = rows.filter((r) => r.model && isKnown(r.median_latency_ms) && (r.observed_provider_turns ?? 0) >= 3).sort((a, b) => a.median_latency_ms! - b.median_latency_ms!)[0];
+                  return <Stat label="Fastest median turn" value={fast ? <span className="stat-text mono">{fast.name}</span> : <Unknown label="n/a" why="No model has three or more timed turns." />} sub={fast ? fmtDuration(fast.median_latency_ms!) : undefined} />;
+                })()}
+                <Stat label="Cached input" value={isKnown(summary.cached) && summary.input ? fmtPct(summary.cached / summary.input) : <Unknown why={NO_USAGE} />} sub="of all input tokens" />
+                <Stat label="Turns with a total" value={(() => { const t = rows.reduce((a, r) => a + (r.observed_provider_turns ?? 0), 0); const c = rows.reduce((a, r) => a + (r.complete_usage_turns ?? 0), 0); return t ? fmtPct(c / t) : <Unknown why={NO_USAGE} />; })()} sub={resolvedKnown ? `${fmtInt(resolvedKnown)} with a resolved model` : 'Requested model only'} />
+              </StatRow>
+            </Panel>
 
-            <Panel title="Model ledger" sub="Counts follow the current filters. Total counts only turns that reported one, so input can exceed it." flush>
-              {absent.length > 0 && (
-                <p className="table-gap">{absent.map((m) => <span key={m.key}>{m.header} <Unknown why={m.why} /></span>)}<small>for every model</small></p>
-              )}
+            <Panel title="Model ledger" hint={<>Tokens are per provider turn, not per model call; model calls are not captured. Totals count only turns that reported one, so input can exceed them. The CSV holds every field.</>} action={mixKnown ? <MixKey /> : undefined} flush>
+              {absent.length > 0 && <p className="table-gap">{absent.map(([name, , why]) => <span key={name}>{name} <Unknown why={why} /></span>)}<small>for every model</small></p>}
               <DataTable rows={rows} columns={columns} rowKey={(r) => r.name} caption="Usage by requested model" defaultSort={hasTokens ? { key: 'tokens', dir: 'desc' } : { key: 'runs', dir: 'desc' }} paged={false} exportName="runtrace-models" />
             </Panel>
 
@@ -172,8 +193,8 @@ export default function Models() {
               <ChartPanel
                 className="grow-2"
                 title={metric === 'tokens' && hasTokens ? `Tokens per ${per}, by model` : metric === 'turns' && hasTokens ? `Provider turns per ${per}, by model` : `Threads started per ${per}, by model`}
-                sub={metric === 'tokens' && hasTokens ? 'Complete-turn totals only; partial token fields are shown in the ledger' : 'In the display timezone'}
-                chart={metric === 'tokens' && hasTokens && !hasTotals ? <p className="fine">No complete token totals. Partial token fields are shown in the ledger.</p> : <Async query={metric === 'threads' || !hasTokens ? threads : turns as unknown as typeof threads} skeleton={<SkeletonRows label="Loading chart" />} isEmpty={() => !stack.data.length} compact>{() => <StackedDays rows={stack.data} series={stack.series} compactValues={metric === 'tokens'} />}</Async>}
+                hint={metric === 'tokens' && hasTokens ? 'Complete-turn totals only, in the display timezone. Partial token fields are in the ledger.' : 'In the display timezone.'}
+                chart={metric === 'tokens' && hasTokens && !hasTotals ? <p className="fine">No complete token totals. Partial token fields are shown in the ledger.</p> : <Async query={metric === 'threads' || !hasTokens ? threads : turns as unknown as typeof threads} skeleton={<SkeletonRows label="Loading chart" />} isEmpty={() => !stack.data.length} compact>{() => <StackedDays rows={stack.data} series={stack.series} compactValues={metric === 'tokens'} legendByTotal />}</Async>}
                 table={
                   <table>
                     <thead><tr><th scope="col">{per === 'week' ? 'Week of' : 'Day'}</th>{stack.series.map((s) => <th key={s.key} scope="col" className="num">{s.label}</th>)}</tr></thead>
@@ -186,7 +207,7 @@ export default function Models() {
                       <Segmented label="Chart measure" value={metric} onChange={(v) => set({ metric: v === 'tokens' ? null : v }, { replace: true })}
                         options={[{ value: 'tokens', label: 'Tokens' }, { value: 'turns', label: 'Turns' }, { value: 'threads', label: 'Threads' }]} />
                     )}
-                    <AppLink className="link" href={hrefPage('Threads')}>Threads</AppLink>
+                    <AppLink className="link" href={hrefPage('Threads')}>All threads</AppLink>
                   </>
                 }
               />
@@ -194,7 +215,6 @@ export default function Models() {
                 <TokenFacts s={summary} />
               </Panel>
             </div>
-            {hasTokens && <p className="fine">Unattributed turns are counted in totals but have no model. <Tag>Provider turn</Tag> is one main-agent turn as the provider reported it.</p>}
           </>
         )}
       </Async>
@@ -202,8 +222,15 @@ export default function Models() {
   );
 }
 
+const exact = (v: number | null | undefined) => (isKnown(v) ? `${fmtInt(v)} tokens` : 'not reported');
+/** Every token field of a row, exact, for the mix bar's hover. */
+function mixTitle(r: Row) {
+  const writes = isKnown(r.cache_write_observed_turns) && isKnown(r.observed_provider_turns) && r.observed_provider_turns > 0 ? ` (${fmtInt(r.cache_write_observed_turns)} of ${fmtInt(r.observed_provider_turns)} turns recorded)` : '';
+  return [`Input: ${exact(r.input_tokens)}`, `Cached input: ${exact(r.cached_input_tokens)}`, `Cache writes: ${exact(r.cache_write_tokens)}${writes}`, `Output: ${exact(r.output_tokens)}`, `Reasoning: ${exact(r.reasoning_tokens)}`].join('\n');
+}
+
 function CountCell({ row, v }: { row: Row; v: number | null }) {
-  if (!row.model) return <span className="fine" title="This cannot be counted without a model.">n/a</span>;
+  if (!row.model) return <span className="sr-only">Does not apply: turns that name no model have no threads to count</span>;
   return v === null ? <span className="fine" aria-label="Loading">…</span> : <>{fmtInt(v)}</>;
 }
 

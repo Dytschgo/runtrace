@@ -12,19 +12,16 @@ test('cache writes expose real API values and coverage across token panels', asy
   const display = (n: number) => n.toLocaleString('en-US');
   await page.goto('/?page=Models&range=all');
   const panel = page.locator('dl.facts').getByText('Cache writes', {exact:true}).locator('..');
-  await expect(panel.locator('dd span')).toHaveAttribute('title', `${display(total)} tokens`);
+  await expect(panel.locator('dd span[title$="tokens"]')).toHaveAttribute('title', `${display(total)} tokens`);
   await expect(panel).toContainText(`recorded for ${display(covered)} of ${display(turns)} turns`);
-  await expect(page.getByRole('columnheader', {name:'Cache writes',exact:true})).toBeVisible();
+  // Each model's cache writes, with how many turns recorded them, are exact on the mix bar's hover.
   const named = values.find((m) => m.model)!;
   const table = page.getByRole('table', {name:'Usage by requested model'});
-  const headers = await table.getByRole('columnheader').allTextContents();
-  const cacheColumn = headers.findIndex((h) => h.trim() === 'Cache writes');
-  expect(cacheColumn).toBeGreaterThanOrEqual(0);
-  const cell = table.locator('tbody tr', {hasText:named.model!}).first().locator('td').nth(cacheColumn);
-  await expect(cell.locator('[title$="tokens"]')).toHaveAttribute('title',`${display(named.cache_write_tokens!)} tokens`);
-  await expect(cell).toContainText(`${display(named.cache_write_observed_turns)} of ${display(named.observed_provider_turns)} recorded`);
+  const cell = table.locator('tbody tr', {hasText:named.model!}).first().locator('.mix-cell');
+  await expect(cell).toHaveAttribute('title', new RegExp(`Cache writes: ${display(named.cache_write_tokens!)} tokens \\(${display(named.cache_write_observed_turns)} of ${display(named.observed_provider_turns)} turns recorded\\)`));
 
-  await expect(page.getByText('Cached input and cache writes are included in input. Reasoning is included in output.', {exact:true})).toBeVisible();
+  // The rule is one hover away, beside the headline.
+  await expect(page.locator('.tokens-hero .hint')).toContainText('Cached input and cache writes are included in input. Reasoning is included in output.');
   await expect(page.getByLabel('Loading chart')).toHaveCount(0, {timeout:15000});
   await page.screenshot({path:testInfo.outputPath('models-cache-desktop.png'),fullPage:true});
   await page.setViewportSize({width:390,height:844});

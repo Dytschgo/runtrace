@@ -200,9 +200,9 @@ describe('analytics', () => {
   it('measures provider usage from turns rather than assuming it', () => {
     const turn = (provider: string | null, usage: string, total: number | null) => toTurn(entity({ provider, usage_status: usage, total_tokens: total }));
     expect(usageByProvider([turn('codex', 'complete', 10), turn('codex', 'partial', 5), turn('grok', 'unavailable', null), turn(null, 'complete', 1)])).toEqual([
-      { provider: 'codex', turns: 2, complete: 1, partial: 1, unavailable: 0, total: 15 },
+      { provider: 'codex', turns: 2, complete: 1, partial: 1, unavailable: 0, total: 15, withTotal: 2 },
       { provider: 'grok', turns: 1, complete: 0, partial: 0, unavailable: 1, total: null },
-      { provider: 'Not recorded', turns: 1, complete: 1, partial: 0, unavailable: 0, total: 1 },
+      { provider: 'Not recorded', turns: 1, complete: 1, partial: 0, unavailable: 0, total: 1, withTotal: 1 },
     ]);
   });
   it('counts partial and cache-only usage without inventing a total', () => {

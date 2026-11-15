@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { ArrowDownRight, ArrowUpRight, Cpu, Folder, Minus } from 'lucide-react';
 import { Counter } from '../../components/motion';
-import { CoverageBar, plural, Tokens, Unknown } from '../../components/ui';
+import { CoverageBar, plural, Tokens, Unknown, Hint } from '../../components/ui';
 import type { TokenSummary } from '../../lib/analytics';
 import { fmtInt, fmtPct, isKnown } from '../../lib/format';
 import { modelIcon, providerIcon } from '../../lib/icons';
@@ -27,7 +27,8 @@ export function GroupLine({ line, total, top, by, unit, draft, focused, seriesKe
   // Tokens with no turns behind them come from session-log hours, which are never turns. The row says so instead of reading as tokens from nothing.
   // When grouped by provider a row can hold turns that reported nothing next to session-log hours, so "nothing reported" is the test, not "no turns".
   const logOnly = reported === 0 && value > 0;
-  const Icon = by === 'project' ? Folder : info.model ? modelIcon(info.model) : info.provider ? providerIcon(info.provider) : Cpu;
+  // Turns that name no model are not any one provider's, so the model list gives them a neutral chip.
+  const Icon = by === 'project' ? Folder : info.model ? modelIcon(info.model) : by !== 'model' && info.provider ? providerIcon(info.provider) : Cpu;
   const share = isKnown(total) && total > 0 ? value / total : 0;
   const body: ReactNode = (
     <>
@@ -45,7 +46,7 @@ export function GroupLine({ line, total, top, by, unit, draft, focused, seriesKe
   );
 }
 
-const TYPE_TONES = ['oklch(0.55 0 none)', 'oklch(0.3 0 none)', 'oklch(0.75 0 none)', 'oklch(1 0 none)'];
+const TYPE_TONES = ['oklch(0.62 0 none)', 'oklch(0.27 0 none)', 'oklch(0.8 0 none)', 'oklch(1 0 none)'];
 
 /** Where the tokens went. Cache reads and writes sit inside input, so the bar shows input without them. A missing field stays hatched. */
 export function TokenTypes({ s, partsOnly = 0 }: { s: TokenSummary; partsOnly?: number }) {
@@ -57,7 +58,7 @@ export function TokenTypes({ s, partsOnly = 0 }: { s: TokenSummary; partsOnly?: 
   const cached = s.cached ?? 0;
   const writes = s.cacheWrite ?? 0;
   const parts = [
-    { field: 'input' as const, label: 'Input', value: s.input === null ? null : Math.max(0, s.input - cached - writes), why: 'Input not read from cache.' },
+    { field: 'input' as const, label: 'New input', value: s.input === null ? null : Math.max(0, s.input - cached - writes), why: 'Input not read from cache.' },
     { field: 'cached' as const, label: 'Cache read', value: s.cached, why: 'Input served from cache.' },
     { field: 'cacheWrite' as const, label: 'Cache write', value: s.cacheWrite ?? null, why: 'Input written to cache. Some providers report no writes.' },
     { field: 'output' as const, label: 'Output', value: s.output, why: 'Text and reasoning the model produced.' },
@@ -80,7 +81,7 @@ export function TokenTypes({ s, partsOnly = 0 }: { s: TokenSummary; partsOnly?: 
       {s.turns !== null && s.withUsage !== null && (
         <div className="type-coverage">
           <CoverageBar known={s.withUsage} total={s.turns} label="Provider turns reporting usage" />
-          <small>{fmtInt(s.withUsage)} of {fmtInt(s.turns)} turns reported usage{partsOnly > 0 && <span title="These turns reported token fields but no total, so they are left out of the parts above, which add up to the total."> · {plural(partsOnly, 'turn')} with parts but no total left out</span>}</small>
+          <small>{fmtInt(s.withUsage)} of {fmtInt(s.turns)} turns reported usage{partsOnly > 0 && <> · {plural(partsOnly, 'turn')} with parts but no total left out <Hint label="Turns left out">These turns reported token fields but no total, so they are left out of the parts above, which add up to the total.</Hint></>}</small>
         </div>
       )}
     </>
