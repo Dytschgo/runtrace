@@ -2,7 +2,7 @@
 
 Runtrace is a local analytics dashboard where one developer reads their own AI coding history: which models ran, how many tokens they used, what tools and sub-agents they called. The current UI is a sober dark table-and-chart page (`docs/screenshots/overview.png`). The owner thinks it looks bad and wants an **ultra-modern, high-end, almost cinematic** interface.
 
-Mood reference: `C:\Users\DylanFerraro\.t3\userdata\attachments\c088e951-cd47-4e3f-8ae1-6f486ce9b2cf-de523067-a33c-4e5a-9d0f-1cc0c124e0d3.png`. Charcoal surfaces, amber light, rounded pill bars, dial gauges, glowing orbs, big thin numerals, icon-only rail. Take its level of finish, not its content. Its text is gibberish. Only concept A follows its palette closely.
+Mood reference: a private image omitted from this repository. Charcoal surfaces, amber light, rounded pill bars, dial gauges, glowing orbs, big thin numerals, icon-only rail. Take its level of finish, not its content. Its text is gibberish. Only concept A follows its palette closely.
 
 ## The owner's requirements
 

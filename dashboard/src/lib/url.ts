@@ -7,7 +7,7 @@ export const PAGES = [
 export type PageName = (typeof PAGES)[number] | 'Search';
 
 /** Parameters that survive moving between pages. Everything else belongs to one page. */
-export const GLOBAL_KEYS = ['project', 'model', 'instance', 'range', 'since', 'until', 'zs', 'ze', 'track', 'rp', 'up'] as const;
+export const GLOBAL_KEYS = ['project', 'model', 'instance', 'run_status', 'range', 'since', 'until', 'zs', 'ze', 'track', 'rp', 'up'] as const;
 
 export type Patch = Record<string, string | number | null | undefined>;
 

@@ -2,8 +2,10 @@ use crate::{config::Config, privacy::hash};
 use anyhow::Result;
 use duckdb::{Connection, params};
 use serde_json::{Value, json};
+use sha2::Digest;
 pub struct Store {
     pub conn: Connection,
+    pub(crate) content_retention_days: i64,
     purge_ledger: Option<std::path::PathBuf>,
     /// Where records being written came from. Only a one-time import of an older source changes this.
     pub capture_source: std::cell::Cell<&'static str>,
@@ -21,15 +23,16 @@ pub fn clock() -> chrono::DateTime<chrono::Utc> {
 pub fn now() -> String {
     clock().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
-/// "Now" in SQL. Exactly `now()` unless the clock is pinned, then that instant as a literal.
+/// One integer instant per query, evaluated by Rust (or the pinned test clock).
 pub fn now_sql() -> String {
-    match pinned_now() {
-        Some(t) => format!(
-            "TIMESTAMPTZ '{}'",
-            t.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
-        ),
-        None => "now()".into(),
-    }
+    clock().timestamp_micros().to_string()
+}
+fn mark_migration(conn: &Connection, version: i32) -> Result<()> {
+    conn.execute(
+        "INSERT INTO schema_migrations(version,applied_at) VALUES(?,?) ON CONFLICT DO NOTHING",
+        params![version, now()],
+    )?;
+    Ok(())
 }
 pub fn id(instance: &str, kind: &str, source: &str) -> String {
     hash(&format!("{instance}\0{kind}\0{source}"))
@@ -39,7 +42,7 @@ impl Store {
         if let Some(p) = std::path::Path::new(&c.storage.duckdb_path).parent() {
             std::fs::create_dir_all(p)?;
         }
-        // The JSON, Parquet and ICU extensions are built into the program. DuckDB would otherwise fetch missing ones from
+        // JSON and Parquet are built into the program. DuckDB would otherwise fetch missing extensions from
         // the internet the first time a query needs them, which fails offline and runs code nobody shipped.
         let conn = Connection::open_with_flags(
             &c.storage.duckdb_path,
@@ -47,8 +50,12 @@ impl Store {
                 .with("autoinstall_known_extensions", "false")?
                 .with("autoload_known_extensions", "false")?,
         )?;
+        crate::time_sql::register(&conn)?;
         conn.execute_batch(include_str!("../../../migrations/001_initial.sql"))?;
+        conn.execute_batch("ALTER TABLE schema_migrations ALTER COLUMN applied_at DROP DEFAULT")?;
+        mark_migration(&conn, 1)?;
         conn.execute_batch(include_str!("../../../migrations/002_revision_cache.sql"))?;
+        mark_migration(&conn, 2)?;
         conn.execute_batch(&format!(
             "SET threads=4; SET memory_limit='{}MB'",
             c.storage.memory_limit_mb
@@ -78,11 +85,14 @@ impl Store {
                     .parent()
                     .map(|p| p.join("purges.jsonl"))
             });
+        conn.execute_batch(include_str!("../../../migrations/008_cold_segments.sql"))?;
         let store = Self {
             conn,
+            content_retention_days: c.storage.content_retention_days,
             purge_ledger,
             capture_source: std::cell::Cell::new("t3_sqlite_v2"),
         };
+        crate::cold::anchor_relative_segments(c, &store)?;
         store.apply_purge_ledger()?;
         let conn = &store.conn;
         // Added before the first analytic pass, which fills these too.
@@ -97,19 +107,15 @@ impl Store {
         if analytic_version == 0 {
             conn.execute_batch(include_str!("../../../migrations/003_analytic_columns.sql"))?;
             hydrate_facts(conn)?;
-            conn.execute(
-                "INSERT INTO schema_migrations(version) VALUES(3) ON CONFLICT DO NOTHING",
-                [],
-            )?;
+            mark_migration(conn, 3)?;
         }
         conn.execute_batch(include_str!("../../../migrations/004_search_cache.sql"))?;
         conn.execute_batch(include_str!("../../../migrations/005_quota.sql"))?;
         hydrate_more_facts(conn)?;
         hydrate_search(conn)?;
-        conn.execute(
-            "INSERT INTO schema_migrations(version) VALUES(4) ON CONFLICT DO NOTHING",
-            [],
-        )?;
+        for version in [4, 5, 6, 7, 8] {
+            mark_migration(conn, version)?;
+        }
         Ok(store)
     }
     pub fn setting(&self, k: &str) -> Option<String> {
@@ -120,6 +126,7 @@ impl Store {
     pub fn try_clone(&self) -> Result<Self> {
         Ok(Self {
             conn: self.conn.try_clone()?,
+            content_retention_days: self.content_retention_days,
             purge_ledger: self.purge_ledger.clone(),
             capture_source: std::cell::Cell::new(self.capture_source.get()),
         })
@@ -129,9 +136,8 @@ impl Store {
         instance: &str,
         project: Option<&str>,
     ) -> Result<std::collections::HashMap<(String, String), String>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT kind,source_id,revision FROM source_revisions s WHERE instance_id=? AND (? IS NULL OR EXISTS (SELECT 1 FROM records r WHERE r.instance_id=s.instance_id AND r.project_id=? AND r.source_id=s.source_id AND (r.kind=s.kind OR (s.kind='message' AND r.kind IN ('prompt','answer')))))")?;
+        let index = crate::cold::record_index_source(&self.conn)?;
+        let mut stmt = self.conn.prepare(&format!("SELECT kind,source_id,revision FROM source_revisions s WHERE instance_id=? AND (? IS NULL OR EXISTS (SELECT 1 FROM {index} r WHERE r.instance_id=s.instance_id AND r.project_id=? AND r.source_id=s.source_id AND (r.kind=s.kind OR (s.kind='message' AND r.kind IN ('prompt','answer')))))"))?;
         let rows = stmt.query_map(params![instance, project, project], |r| {
             Ok(((r.get(0)?, r.get(1)?), r.get(2)?))
         })?;
@@ -172,35 +178,46 @@ impl Store {
         updated: &str,
         quality: &str,
         version: &str,
-        data: Value,
+        mut data: Value,
     ) -> Result<bool> {
+        if ["prompt", "answer", "tool", "agent"].contains(&kind)
+            && parse_time(date)
+                .is_some_and(|t| t < clock() - chrono::Duration::days(self.content_retention_days))
+            && let Some(object) = data.as_object_mut()
+        {
+            object.remove("content_redacted");
+            object.remove("content_ciphertext");
+        }
         let key = id(instance, kind, source);
-        let payload = data.to_string();
-        let mut canonical = data.clone();
-        if let Some(o) = canonical.as_object_mut() {
-            o.insert(
+        let digest = {
+            let mut canonical = data.clone();
+            if let Some(o) = canonical.as_object_mut() {
+                o.insert(
                 "_source_attribution".into(),
                 json!({"project_id":project,"thread_id":thread,"run_id":run,"occurred_at":date}),
             );
-            o.remove("content_ciphertext");
-            o.remove("repository_path_encrypted");
-            o.insert(
-                "_encrypted_repository_path_present".into(),
-                json!(
-                    data.get("repository_path_encrypted")
-                        .is_some_and(|v| !v.is_null())
-                ),
-            );
-            o.insert(
-                "_encrypted_content_present".into(),
-                json!(data.get("content_ciphertext").is_some_and(|v| !v.is_null())),
-            );
-        }
-        let digest = hash(&canonical.to_string());
+                o.remove("content_ciphertext");
+                o.remove("repository_path_encrypted");
+                o.insert(
+                    "_encrypted_repository_path_present".into(),
+                    json!(
+                        data.get("repository_path_encrypted")
+                            .is_some_and(|v| !v.is_null())
+                    ),
+                );
+                o.insert(
+                    "_encrypted_content_present".into(),
+                    json!(data.get("content_ciphertext").is_some_and(|v| !v.is_null())),
+                );
+            }
+            let mut digest = sha2::Sha256::new();
+            serde_json::to_writer(&mut digest, &canonical)?;
+            hex::encode(digest.finalize())
+        };
         let old: Option<(String, String)> = self
             .conn
-            .prepare_cached("SELECT payload_hash,source_updated_at FROM records WHERE id=?")?
-            .query_row([&key], |r| Ok((r.get(0)?, r.get(1)?)))
+            .prepare_cached("SELECT payload_hash,source_updated_at FROM records WHERE id=? UNION ALL SELECT payload_hash,source_updated_at FROM cold_record_keys WHERE id=? AND NOT EXISTS(SELECT 1 FROM records WHERE id=?)")?
+            .query_row(params![key,key,key], |r| Ok((r.get(0)?, r.get(1)?)))
             .ok();
         if let Some((old_hash, old_updated)) = old.as_ref()
             && old_hash == &digest
@@ -215,17 +232,21 @@ impl Store {
                         "UPDATE records SET source_updated_at=?,source_version=? WHERE id=?",
                     )?
                     .execute(params![updated, version, key])?;
+                self.conn.prepare_cached("UPDATE cold_record_keys SET source_updated_at=?,source_version=? WHERE id=? AND payload_hash=?")?.execute(params![updated,version,key,digest])?;
             }
             return Ok(false);
         }
+        // Hashing no longer overlaps the payload string or native write buffers.
+        let payload = data.to_string();
         let captured = now();
         self.conn.prepare_cached("INSERT INTO records (id,kind,instance_id,source_id,project_id,thread_id,run_id,occurred_at,source_updated_at,capture_quality,capture_source,source_version,captured_at,payload_hash,data,model,status,tool_name,tool_category,duration_ms,input_tokens,cached_input_tokens,output_tokens,reasoning_tokens,total_tokens,usage_status,redacted_characters,json_characters,facts_version,search_text,search_version,cache_write_tokens,exit_code,agent_provider,resolved_model,usage_scope,usage_source,has_subagents,elapsed_ms,preview_doc) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,lower(json_extract_string(?,'$.content_redacted')),?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data,payload_hash=excluded.payload_hash,source_updated_at=excluded.source_updated_at,captured_at=excluded.captured_at,capture_quality=excluded.capture_quality,source_version=excluded.source_version,project_id=excluded.project_id,thread_id=excluded.thread_id,run_id=excluded.run_id,occurred_at=excluded.occurred_at,model=excluded.model,status=excluded.status,tool_name=excluded.tool_name,tool_category=excluded.tool_category,duration_ms=excluded.duration_ms,input_tokens=excluded.input_tokens,cached_input_tokens=excluded.cached_input_tokens,output_tokens=excluded.output_tokens,reasoning_tokens=excluded.reasoning_tokens,total_tokens=excluded.total_tokens,usage_status=excluded.usage_status,redacted_characters=excluded.redacted_characters,json_characters=excluded.json_characters,facts_version=excluded.facts_version,search_text=excluded.search_text,search_version=excluded.search_version,cache_write_tokens=excluded.cache_write_tokens,exit_code=excluded.exit_code,agent_provider=excluded.agent_provider,resolved_model=excluded.resolved_model,usage_scope=excluded.usage_scope,usage_source=excluded.usage_source,has_subagents=excluded.has_subagents,elapsed_ms=excluded.elapsed_ms,preview_doc=excluded.preview_doc")?.execute(params![key,kind,instance,source,project,thread,run,date,updated,quality,self.capture_source.get(),version,captured,digest,payload,data.get("model").and_then(Value::as_str).or_else(||data.get("requested_model").and_then(Value::as_str)),data.get("status").and_then(Value::as_str),data.get("tool_name").and_then(Value::as_str),data.get("tool_category").and_then(Value::as_str),data.get("duration_ms").and_then(Value::as_i64),data.get("input_tokens").and_then(Value::as_i64),data.get("cached_input_tokens").and_then(Value::as_i64),data.get("output_tokens").and_then(Value::as_i64),data.get("reasoning_tokens").and_then(Value::as_i64),data.get("total_tokens").and_then(Value::as_i64),data.get("usage_status").and_then(Value::as_str),data.get("content_redacted").and_then(Value::as_str).map(|s|s.chars().count() as i64),payload.chars().count() as i64,FACTS_CURRENT,payload,SEARCH_CURRENT,data.get("cache_write_tokens").and_then(Value::as_i64),data.get("exit_code").and_then(Value::as_i64),data.get("provider").and_then(Value::as_str).filter(|s|!s.is_empty()).or_else(||data.get("provider_thread_id").and_then(Value::as_str).and_then(provider_in_id)),data.get("resolved_model").and_then(Value::as_str).filter(|s|!s.is_empty()),data.get("usage_scope").and_then(Value::as_str),data.get("usage_source").and_then(Value::as_str),data.get("has_subagents").and_then(Value::as_bool),elapsed_ms(&data),preview_doc(&data)])?;
+        let event_id = hash(&format!("{key}:{digest}"));
         self.conn
             .prepare_cached(
-                "INSERT INTO events VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING",
+                "INSERT INTO events SELECT ?,?,?,?,?,?,?,?,?,?,?,?,? WHERE NOT EXISTS(SELECT 1 FROM cold_event_keys WHERE event_id=?) ON CONFLICT DO NOTHING",
             )?
             .execute(params![
-                hash(&format!("{key}:{digest}")),
+                event_id,
                 key,
                 format!("{kind}.observed"),
                 date,
@@ -237,7 +258,8 @@ impl Store {
                 quality,
                 self.capture_source.get(),
                 version,
-                updated
+                updated,
+                event_id
             ])?;
         Ok(true)
     }
@@ -247,6 +269,11 @@ impl Store {
         mapped.map(|r| Ok(serde_json::from_str(&r?)?)).collect()
     }
     pub fn stats(&self) -> Result<Value> {
+        let read = self.try_clone()?;
+        let _snapshot = crate::cold::read_snapshot(&read)?;
+        read.logical_stats()
+    }
+    fn logical_stats(&self) -> Result<Value> {
         let counts=self.rows("SELECT json_object('table',kind,'rows',count(*))::VARCHAR FROM records GROUP BY kind ORDER BY kind",&[])?;
         let db_bytes = self
             .conn
@@ -254,8 +281,19 @@ impl Store {
             .and_then(|p| std::fs::metadata(p).ok())
             .map(|m| m.len());
         let content=self.conn.query_row("SELECT coalesce(sum(redacted_characters),0),coalesce(sum(json_characters),0),min(occurred_at) FILTER(WHERE kind<>'instance'),max(occurred_at) FILTER(WHERE kind<>'instance') FROM records",[],|r|Ok((r.get::<_,i64>(0)?,r.get::<_,i64>(1)?,r.get::<_,Option<String>>(2)?,r.get::<_,Option<String>>(3)?)))?;
+        let segments: Vec<String> = self
+            .conn
+            .prepare("SELECT path FROM cold_segments")?
+            .query_map([], |r| r.get(0))?
+            .collect::<duckdb::Result<_>>()?;
+        let archive_bytes = segments
+            .iter()
+            .map(|p| std::fs::metadata(p).map(|m| m.len()))
+            .collect::<std::io::Result<Vec<_>>>()?
+            .into_iter()
+            .sum::<u64>();
         Ok(
-            json!({"rows":counts,"events":self.conn.query_row("SELECT count(*) FROM events",[],|r|r.get::<_,i64>(0))?,"duckdb_bytes":db_bytes,"redacted_content_characters":content.0,"normalized_json_characters":content.1,"oldest_at":content.2,"newest_at":content.3,"capture_source":"t3_sqlite_v2"}),
+            json!({"rows":counts,"events":self.conn.query_row("SELECT count(*) FROM events",[],|r|r.get::<_,i64>(0))?,"duckdb_bytes":db_bytes,"archive_bytes":archive_bytes,"cold_segments":segments.len(),"maintenance":self.setting("storage:maintenance").and_then(|v|serde_json::from_str::<Value>(&v).ok()),"redacted_content_characters":content.0,"normalized_json_characters":content.1,"oldest_at":content.2,"newest_at":content.3,"capture_source":"t3_sqlite_v2"}),
         )
     }
 
@@ -274,48 +312,97 @@ impl Store {
             None
         };
         let source = cutoff.as_deref().unwrap_or(source);
-        if let Some(path) = self.purge_ledger_path() {
-            use std::io::Write;
-            let mut file = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(path)?;
-            writeln!(
-                file,
-                "{}",
-                json!({"scope":scope,"source_id":source,"purged_at":now()})
-            )?;
-            file.sync_all()?;
-        }
         self.conn.execute_batch("BEGIN")?;
         let result = (|| {
-            self.conn.execute(
-                "INSERT INTO tombstones VALUES (?,?,?) ON CONFLICT DO NOTHING",
-                params![scope, source, now()],
-            )?;
-            let column = match scope {
-                "thread" => "thread_id",
-                "project" => "project_id",
-                _ => "occurred_at",
-            };
-            let op = if scope == "before" { "<" } else { "=" };
-            let condition = if scope == "before" {
-                "try_cast(occurred_at AS TIMESTAMPTZ)<try_cast(? AS TIMESTAMPTZ)".into()
-            } else {
-                format!("{column}{op}?")
-            };
-            self.conn
-                .execute(&format!("DELETE FROM events WHERE {condition}"), [source])?;
-            self.conn
-                .execute(&format!("DELETE FROM records WHERE {condition}"), [source])?;
-            Ok::<_, anyhow::Error>(())
+            let condition = Self::purge_condition(scope, source)?;
+            let index = crate::cold::record_index_source(&self.conn)?;
+            let record_ids: Vec<String> = self
+                .conn
+                .prepare(&format!("SELECT id FROM {index} WHERE {condition}"))?
+                .query_map([source], |row| row.get(0))?
+                .collect::<duckdb::Result<_>>()?;
+            let purged_at = now();
+            if let Some(path) = self.purge_ledger_path() {
+                use std::io::Write;
+                let mut file = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(path)?;
+                // Persist the identities before committing deletion, so older
+                // snapshots with obsolete attribution cannot reintroduce them.
+                writeln!(
+                    file,
+                    "{}",
+                    json!({"scope":scope,"source_id":source,"purged_at":purged_at,"record_ids":record_ids})
+                )?;
+                file.sync_all()?;
+            }
+            self.apply_purge_entry(scope, source, &purged_at, &record_ids)
         })();
         if result.is_ok() {
             self.conn.execute_batch("COMMIT; CHECKPOINT")?
         } else {
-            self.conn.execute_batch("ROLLBACK")?
+            let _ = self.conn.execute_batch("ROLLBACK");
         }
         result
+    }
+    fn purge_condition(scope: &str, source: &str) -> Result<&'static str> {
+        Ok(match scope {
+            "thread" => "thread_id=?",
+            "project" => "project_id=?",
+            "before" => {
+                anyhow::ensure!(parse_time(source).is_some(), "Invalid purge date in ledger");
+                "runtrace_time_us(occurred_at)<runtrace_time_us(?)"
+            }
+            _ => anyhow::bail!("Invalid purge scope in ledger"),
+        })
+    }
+    fn apply_purge_entry(
+        &self,
+        scope: &str,
+        source: &str,
+        purged_at: &str,
+        record_ids: &[String],
+    ) -> Result<()> {
+        let condition = Self::purge_condition(scope, source)?;
+        let selected_ids: Vec<String>;
+        let record_ids = if record_ids.is_empty() {
+            // A legacy scope-only ledger can still protect matching identities
+            // present now, even when their cold revision had different attribution.
+            let index = crate::cold::record_index_source(&self.conn)?;
+            selected_ids = self
+                .conn
+                .prepare(&format!("SELECT id FROM {index} WHERE {condition}"))?
+                .query_map([source], |r| r.get(0))?
+                .collect::<duckdb::Result<_>>()?;
+            selected_ids.as_slice()
+        } else {
+            record_ids
+        };
+        self.conn.execute(
+            "INSERT INTO tombstones VALUES (?,?,?) ON CONFLICT DO NOTHING",
+            params![scope, source, purged_at],
+        )?;
+        // Cold indexes describe immutable physical files, including purged
+        // identities. Keep them verifiable; durable tombstones control visibility.
+        for record_id in record_ids {
+            self.conn
+                .prepare_cached(
+                    "INSERT INTO tombstones VALUES ('record',?,?) ON CONFLICT DO NOTHING",
+                )?
+                .execute(params![record_id, purged_at])?;
+            self.conn
+                .prepare_cached("DELETE FROM records WHERE id=?")?
+                .execute([record_id])?;
+            self.conn
+                .prepare_cached("DELETE FROM events WHERE entity_id=?")?
+                .execute([record_id])?;
+        }
+        self.conn
+            .execute(&format!("DELETE FROM records WHERE {condition}"), [source])?;
+        self.conn
+            .execute(&format!("DELETE FROM events WHERE {condition}"), [source])?;
+        Ok(())
     }
     fn purge_ledger_path(&self) -> Option<std::path::PathBuf> {
         self.purge_ledger.clone()
@@ -334,23 +421,24 @@ impl Store {
             let source = entry["source_id"]
                 .as_str()
                 .ok_or_else(|| anyhow::anyhow!("Invalid purge ledger"))?;
-            let condition = match scope {
-                "thread" => "thread_id=?",
-                "project" => "project_id=?",
-                "before" => {
-                    anyhow::ensure!(parse_time(source).is_some(), "Invalid purge date in ledger");
-                    "try_cast(occurred_at AS TIMESTAMPTZ)<try_cast(? AS TIMESTAMPTZ)"
-                }
-                _ => anyhow::bail!("Invalid purge scope in ledger"),
+            let record_ids: Vec<String> = match entry.get("record_ids") {
+                None => Vec::new(), // Older ledgers retain their original scope semantics.
+                Some(Value::Array(ids)) => ids
+                    .iter()
+                    .map(|id| {
+                        id.as_str().map(str::to_owned).ok_or_else(|| {
+                            anyhow::anyhow!("Invalid record identity in purge ledger")
+                        })
+                    })
+                    .collect::<Result<_>>()?,
+                _ => anyhow::bail!("Invalid record identities in purge ledger"),
             };
-            self.conn.execute(
-                "INSERT INTO tombstones VALUES (?,?,?) ON CONFLICT DO NOTHING",
-                params![scope, source, entry["purged_at"].as_str().unwrap_or("")],
+            self.apply_purge_entry(
+                scope,
+                source,
+                entry["purged_at"].as_str().unwrap_or(""),
+                &record_ids,
             )?;
-            self.conn
-                .execute(&format!("DELETE FROM records WHERE {condition}"), [source])?;
-            self.conn
-                .execute(&format!("DELETE FROM events WHERE {condition}"), [source])?;
         }
         Ok(())
     }
@@ -359,6 +447,12 @@ pub fn parse_time(value: &str) -> Option<chrono::DateTime<chrono::Utc>> {
     chrono::DateTime::parse_from_rfc3339(value)
         .ok()
         .map(|d| d.with_timezone(&chrono::Utc))
+        .or_else(|| {
+            ["%Y-%m-%d %H:%M:%S%.f", "%Y-%m-%dT%H:%M:%S%.f"]
+                .into_iter()
+                .find_map(|format| chrono::NaiveDateTime::parse_from_str(value, format).ok())
+                .map(|d| d.and_utc())
+        })
         .or_else(|| {
             chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d")
                 .ok()
@@ -433,10 +527,7 @@ pub fn hydrate_more_facts(conn: &Connection) -> Result<()> {
         return Ok(());
     }
     // In slices of rows, because one pass over every document can exceed the service's query memory.
-    let end: i64 = conn.query_row("SELECT coalesce(max(rowid),-1)+1 FROM records", [], |r| {
-        r.get(0)
-    })?;
-    let sql = "UPDATE records SET  cache_write_tokens=try_cast(json_extract_string(data,'$.cache_write_tokens') AS BIGINT),  exit_code=try_cast(json_extract_string(data,'$.exit_code') AS BIGINT),  agent_provider=coalesce(nullif(json_extract_string(data,'$.provider'),''),nullif(regexp_extract(coalesce(json_extract_string(data,'$.provider_thread_id'),''),'(?:^|:)provider:([^:]+)',1),'')),  resolved_model=nullif(json_extract_string(data,'$.resolved_model'),''),  usage_scope=json_extract_string(data,'$.usage_scope'),  usage_source=json_extract_string(data,'$.usage_source'),  has_subagents=try_cast(json_extract_string(data,'$.has_subagents') AS BOOLEAN),  elapsed_ms=CASE WHEN duration_ms>=0 THEN duration_ms WHEN (epoch_ms(try_cast(json_extract_string(data,'$.completed_at') AS TIMESTAMPTZ))-epoch_ms(try_cast(json_extract_string(data,'$.started_at') AS TIMESTAMPTZ)))>=0 THEN (epoch_ms(try_cast(json_extract_string(data,'$.completed_at') AS TIMESTAMPTZ))-epoch_ms(try_cast(json_extract_string(data,'$.started_at') AS TIMESTAMPTZ))) END,  preview_doc=json_merge_patch(json_merge_patch(data,'{\"content_ciphertext\":null,\"repository_path_encrypted\":null,\"content_redacted\":null}'),json_object('content_redacted',left(json_extract_string(data,'$.content_redacted'),512),'content_truncated',length(json_extract_string(data,'$.content_redacted'))>512))::VARCHAR,  facts_version={FACTS_CURRENT} WHERE facts_version IN ({FACTS_BASE},{FACTS_OLD_SECOND})";
+    let sql = "UPDATE records SET  cache_write_tokens=try_cast(json_extract_string(data,'$.cache_write_tokens') AS BIGINT),  exit_code=try_cast(json_extract_string(data,'$.exit_code') AS BIGINT),  agent_provider=coalesce(nullif(json_extract_string(data,'$.provider'),''),nullif(regexp_extract(coalesce(json_extract_string(data,'$.provider_thread_id'),''),'(?:^|:)provider:([^:]+)',1),'')),  resolved_model=nullif(json_extract_string(data,'$.resolved_model'),''),  usage_scope=json_extract_string(data,'$.usage_scope'),  usage_source=json_extract_string(data,'$.usage_source'),  has_subagents=try_cast(json_extract_string(data,'$.has_subagents') AS BOOLEAN),  elapsed_ms=CASE WHEN duration_ms>=0 THEN duration_ms WHEN (runtrace_epoch_ms(json_extract_string(data,'$.completed_at'))-runtrace_epoch_ms(json_extract_string(data,'$.started_at')))>=0 THEN (runtrace_epoch_ms(json_extract_string(data,'$.completed_at'))-runtrace_epoch_ms(json_extract_string(data,'$.started_at'))) END,  preview_doc=json_merge_patch(json_merge_patch(data,'{\"content_ciphertext\":null,\"repository_path_encrypted\":null,\"content_redacted\":null}'),json_object('content_redacted',left(json_extract_string(data,'$.content_redacted'),512),'content_truncated',length(json_extract_string(data,'$.content_redacted'))>512))::VARCHAR,  facts_version={FACTS_CURRENT} WHERE facts_version IN ({FACTS_BASE},{FACTS_OLD_SECOND})";
     let sql = stages(sql);
     // The bounds are written into the statement: as parameters they are not used to narrow the scan, and every slice reads the whole table.
     tracing::info!(
@@ -444,16 +535,25 @@ pub fn hydrate_more_facts(conn: &Connection) -> Result<()> {
         pending_rows = pending,
         "Filling analytic columns"
     );
-    for start in (0..end).step_by(10_000) {
-        conn.execute_batch(&format!(
-            "{sql} AND rowid>={start} AND rowid<{}",
-            start + 10_000
-        ))?;
-        if start % 50_000 == 0 {
+    let mut done = 0;
+    loop {
+        // Restored rows can have transaction-local rowids near 2^62. Advance
+        // between actual pending rows instead of walking the empty numeric gap.
+        let start: Option<i64> = conn.query_row(
+            &stages("SELECT min(rowid) FROM records WHERE facts_version IN ({FACTS_BASE},{FACTS_OLD_SECOND})"),
+            [],
+            |r| r.get(0),
+        )?;
+        let Some(start) = start else { break };
+        done += conn.execute(
+            &format!("{sql} AND rowid>={start} AND rowid<{}", start + 10_000),
+            [],
+        )?;
+        if done % 50_000 < 10_000 {
             tracing::info!(
                 operation = "hydrate_more_facts",
-                done_rows = (start + 10_000).min(end),
-                total_rows = end
+                done_rows = done,
+                total_rows = pending
             );
         }
     }
@@ -567,6 +667,6 @@ pub fn retain_content(conn: &Connection, days: i64) -> Result<()> {
     // The cutoff is worked out here: date arithmetic on time-zone-aware values needs DuckDB's ICU extension, which is not built in.
     let now = pinned_now().unwrap_or_else(chrono::Utc::now);
     let cutoff = (now - chrono::Duration::days(days)).to_rfc3339();
-    conn.execute(&stages("UPDATE records SET data=json_merge_patch(data,'{\"content_redacted\":null,\"content_ciphertext\":null}'),search_text=NULL,search_version={SEARCH_CURRENT},facts_version={FACTS_NONE} WHERE kind IN ('prompt','answer','tool','agent') AND try_cast(occurred_at AS TIMESTAMPTZ) < try_cast(? AS TIMESTAMPTZ)"), [cutoff])?;
+    conn.execute(&stages("UPDATE records SET data=json_merge_patch(data,'{\"content_redacted\":null,\"content_ciphertext\":null}'),search_text=NULL,search_version={SEARCH_CURRENT},facts_version={FACTS_NONE} WHERE kind IN ('prompt','answer','tool','agent') AND runtrace_time_us(occurred_at) < runtrace_time_us(?) AND (json_extract_string(data,'$.content_redacted') IS NOT NULL OR json_extract_string(data,'$.content_ciphertext') IS NOT NULL OR search_text IS NOT NULL OR json_extract_string(preview_doc,'$.content_redacted') IS NOT NULL)"), [cutoff])?;
     hydrate_facts(conn)
 }

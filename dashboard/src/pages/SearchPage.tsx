@@ -59,7 +59,7 @@ export default function SearchPage() {
                             <time dateTime={r.occurred_at}>{fmtDay(r.occurred_at, timezone)} {fmtClock(r.occurred_at, timezone)}</time>
                           </div>
                           <p className="result-text">{s.before}{s.match && <mark>{s.match}</mark>}{s.after}</p>
-                          {r.thread_id && <AppLink className="link" href={hrefPage('Threads', { id: r.thread_id })}>Open thread</AppLink>}
+                          {r.thread_id && <AppLink className="link" href={hrefPage('Threads', { id: r.thread_id, instance: r.instance_id })}>Open thread</AppLink>}
                         </li>
                       );
                     })}

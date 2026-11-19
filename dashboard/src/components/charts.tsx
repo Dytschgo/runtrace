@@ -87,7 +87,7 @@ export function StackedDays({ rows, series, height = 240, compactValues, legendF
             <YAxis allowDecimals={false} width={36} tick={axisTick} axisLine={false} tickLine={false} tickFormatter={fmtCompact} />
             <Tooltip cursor={{ fill: 'var(--wash)' }} content={<ChartTip compact={compactValues} title={(p) => String(p.label)} />} isAnimationActive={false} />
             {series.map((s) => (
-              <Bar key={s.key} dataKey={s.key} name={s.label} stackId="a" fill={s.hatched ? 'url(#stack-hatch)' : s.color} stroke="var(--bg)" strokeWidth={2} maxBarSize={28} isAnimationActive={false} />
+              <Bar key={s.key} dataKey={s.key} name={s.label} stackId="a" fill={s.hatched ? 'url(#stack-hatch)' : s.color} fillOpacity={s.hatched ? 1 : 0} stroke={s.hatched ? 'var(--line-strong)' : s.color} strokeWidth={2} maxBarSize={28} isAnimationActive={false} />
             ))}
           </BarChart>
         </ResponsiveContainer>

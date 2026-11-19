@@ -10,6 +10,8 @@ export interface Envelope<T = unknown> {
   /** Optional: a future backend may report the unpaged row count. */
   total?: number;
   reason?: string;
+  scope?: string;
+  scope_reason?: string;
   window_status?: string;
 }
 
@@ -31,6 +33,12 @@ export interface Entity {
 }
 
 export interface KindCount { kind: string; count: number }
+export interface EfficiencyRow {
+  tools: number; provider_turns: number; linked_tools: number; linked_turns: number;
+  tools_per_turn: number | null;
+  runs: number; covered_runs: number; threads: number; covered_threads: number;
+  reattempts: number | null; steering_restarts: number | null; retries_per_thread: number | null;
+}
 export interface HourRow { hour: string; prompts: number }
 export interface ModelRow {
   model: string | null;
@@ -75,6 +83,7 @@ export interface UsageRow {
 }
 export interface QualityRow { kind: string; capture_quality: string; count: number }
 export interface StorageResponse {
+  scope_reason?: string;
   rows?: { table: string; rows: number }[];
   events?: number;
   capture_source?: string;
@@ -85,4 +94,9 @@ export interface StorageResponse {
   newest_at?: string | null;
   /** Optional; rendered only when the API sends it. */
   archive_bytes?: number | null;
+  cold_segments?: number;
+  maintenance?: {
+    state: 'synced' | 'failed';
+    last_success_epoch_ms?: number | null;
+  } | null;
 }

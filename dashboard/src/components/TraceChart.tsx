@@ -233,8 +233,8 @@ export function TraceChart({ rows, series, focus, replay, height: tall = 400, st
             <pattern id={`${uid}gap`} width="4" height="4" patternUnits="userSpaceOnUse" patternTransform="rotate(135)"><rect width="1.5" height="4" fill="var(--ink-2)" /></pattern>
             {series.map((s, i) => (
               <linearGradient key={s.key} id={`${uid}g${i}`} x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0" stopColor={s.color} stopOpacity={stacked ? 0.62 : 0.24} />
-                <stop offset="1" stopColor={s.color} stopOpacity={stacked ? 0.5 : 0} />
+                <stop offset="0" stopColor="var(--ink-2)" stopOpacity={stacked ? 0.62 : 0.24} />
+                <stop offset="1" stopColor="var(--ink-2)" stopOpacity={stacked ? 0.5 : 0} />
               </linearGradient>
             ))}
           </defs>

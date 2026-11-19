@@ -1,11 +1,11 @@
 import { useMemo, useState } from 'react';
 import { CircleCheck, CircleGauge, OctagonAlert, RotateCcw, TrendingDown, TriangleAlert } from 'lucide-react';
 import { Async, EmptyState, PageHeader, Panel, QualityBadge, Skeleton, Unknown } from '../components/ui';
-import { useMinute, useQuota, useQuotaSamples } from '../lib/data';
+import { useFilters, useMinute, useQuota, useQuotaSamples } from '../lib/data';
 import { fmtDateTime, fmtShortDateTime, fmtDuration, fmtPct, fmtRelative, isKnown } from '../lib/format';
 import { harnessColor, harnessFamily, harnessName, quotaHarness } from '../lib/harness';
 import { providerIcon } from '../lib/icons';
-import { freshness, leftOf, QUOTA_LOW, quotaCards, quotaPace, spanText, windowLabel, type QuotaCard, type QuotaReading, type QuotaWindow, type SilentHarness } from '../lib/quota';
+import { freshness, leftOf, MAX_QUOTA_GAP, QUOTA_LOW, quotaCards, quotaPace, quotaTrack, spanText, windowLabel, type QuotaCard, type QuotaReading, type QuotaWindow, type SilentHarness } from '../lib/quota';
 import { useSettings } from '../lib/settings';
 
 type Row = Record<string, unknown>;
@@ -22,10 +22,13 @@ const labelOf = (labels: Labels, provider: unknown, window: unknown) => windowLa
 
 export default function Quota() {
   const { timezone } = useSettings();
+  const scope = useFilters();
   const current = useQuota('quota/current');
   const live = useQuota('quota/live');
   const windows = useQuota('quota/windows');
   const resets = useQuota('quota/resets');
+  const notifications = useQuota('quota/notifications');
+  const alert = notifications.data?.data?.[0];
   // A week, like every other page.
   const [days, setDays] = useState(7);
   const now = useMinute();
@@ -42,6 +45,8 @@ export default function Quota() {
   return (
     <>
       <PageHeader title="Quota and Resets" />
+      {(scope.instance || scope.status) && <p className="fine" role="status"><strong>Installation-wide quota.</strong> These readings and alert status span all machines and run statuses; they are not attributed to individual runs.</p>}
+      <p className="fine">{notifications.isPending ? 'Checking Windows alert status…' : alert?.state === 'disabled' ? 'Windows alerts are off.' : alert?.state === 'failed' ? 'Windows did not confirm displaying a quota warning. Check Windows notification settings; claimed warnings are not repeated.' : alert?.state === 'ready' ? 'Windows alerts are enabled at 20% and 5% left, once per window.' : alert?.state === 'unsupported' ? 'Native quota alerts require Windows.' : 'Windows alert status has not been reported.'}{typeof alert?.checked_at === 'string' && <> Last checked {fmtDateTime(alert.checked_at, timezone)}.</>}</p>
       <Async query={current} skeleton={<Skeleton height="12rem" label="Loading quota" />}>
         {(c) => (c.data?.length || liveRows.length ? <Live current={c.data ?? []} live={liveRows} samples={samples.data?.data ?? []} tz={timezone} now={now} /> : (
           <Panel>
@@ -54,7 +59,7 @@ export default function Quota() {
 
       <Panel
         title="Left over time"
-        hint="Each line is how much of a limit was left. It falls as work uses it and jumps back up when the limit resets. Red marks are moments a limit refused work."
+        hint="Each line is how much of a limit was left. Hatched spans have no readings; expand their gap details for times and recorded sleep. Red marks are moments a limit refused work."
         action={
           <div className="segmented-mini" role="group" aria-label="Days shown">
             {[3, 7, 14, 30].map((d) => <button key={d} type="button" aria-pressed={days === d} onClick={() => setDays(d)}>{d}d</button>)}
@@ -62,7 +67,7 @@ export default function Quota() {
         }
       >
         <Async query={samples} skeleton={<Skeleton height="12rem" label="Loading quota history" />} isEmpty={(s) => !s.data?.length} compact empty={<p className="fine">No readings in this time.</p>}>
-          {(s) => <Tracks samples={s.data ?? []} hits={resets.data?.data ?? []} since={Date.parse(since)} until={now} tz={timezone} labels={labels} />}
+          {(s) => <Tracks samples={s.data ?? []} hits={resets.data?.data ?? []} windows={windows.data?.data ?? []} since={Date.parse(since)} until={now} tz={timezone} labels={labels} />}
         </Async>
       </Panel>
 
@@ -134,15 +139,14 @@ function Live({ current, live, samples, tz, now }: { current: Row[]; live: Row[]
 
 function LiveCard({ card, paceOf, clock, tz, now }: { card: QuotaCard; paceOf: PaceOf; clock: Intl.DateTimeFormat; tz: string; now: number }) {
   const name = harnessName(card.harness);
-  const color = harnessColor(card.harness);
   const Icon = providerIcon(harnessFamily(card.harness));
   const fresh = freshness(card.checkedAt, now);
   const who = card.checkedBy === 'runtrace' ? 'Runtrace' : 'T3 Code';
   const day = new Intl.DateTimeFormat('en-GB', { timeZone: tz, day: 'numeric', month: 'short' });
   return (
-    <section className="panel quota-card" aria-label={`${name} quota`} style={{ '--q': color } as React.CSSProperties}>
+    <section className="panel quota-card" aria-label={`${name} quota`}>
       <header className="quota-head">
-        <Icon size={16} aria-hidden="true" style={{ color }} />
+        <Icon size={16} aria-hidden="true" />
         <h2>{name}</h2>
         {card.plan && <span className="tag">{card.plan}</span>}
         {card.checkedAt !== null && (
@@ -225,23 +229,42 @@ function Silent({ rows }: { rows: SilentHarness[] }) {
 /** One track per window: how much of it was left over time. A step line, because a reading holds until the next one. */
 const span = (w: string) => (/five|5h|hour|primary/i.test(w) ? 0 : 1);
 
-function Tracks({ samples, hits, since: asked, until, tz, labels }: { samples: Row[]; hits: Row[]; since: number; until: number; tz: string; labels: Labels }) {
+function gapText(gap: Row, tz: string): string {
+  const range = (g: Row) => isKnown(g.start_epoch_ms) && isKnown(g.end_epoch_ms) ? `${fmtShortDateTime(iso(g.start_epoch_ms), tz)}–${fmtShortDateTime(iso(g.end_epoch_ms), tz)}` : 'interval not reported';
+  const sleep = (Array.isArray(gap.causes) ? gap.causes as Row[] : []).filter((c) => c.reason === 'observer_asleep' && c.source === 'windows_power_event').map((c) => `observer asleep ${range(c)} (recorded by Windows)`);
+  return `No readings ${range(gap)}${sleep.length ? `; ${sleep.join('; ')}` : '; cause not recorded'}`;
+}
+
+function CoverageReasons({ row, tz }: { row: Row; tz: string }) {
+  const gaps = Array.isArray(row.gaps) ? row.gaps as Row[] : [];
+  const reasons = Array.isArray(row.coverage_reasons) ? row.coverage_reasons : [];
+  const asleep = gaps.some((g) => Array.isArray(g.causes) && (g.causes as Row[]).some((c) => c.reason === 'observer_asleep'));
+  return <>
+    {reasons.includes('window_length_unreported') && <small className="fine quota-early">Window length not reported.</small>}
+    {reasons.includes('window_still_running') && <small className="fine quota-early">Window still running.</small>}
+    {gaps.length > 0 && <details className="fine quota-early"><summary>{asleep ? 'Observer asleep; ' : ''}{gaps.length} {gaps.length === 1 ? 'gap' : 'gaps'} in readings</summary><ul>{gaps.map((g, i) => <li key={i}>{gapText(g, tz)}</li>)}</ul></details>}
+    {row.capture_quality === 'partial' && !gaps.length && !reasons.length && <small className="fine quota-early">Detailed coverage not reported.</small>}
+  </>;
+}
+
+function Tracks({ samples, hits, windows, since: asked, until, tz, labels }: { samples: Row[]; hits: Row[]; windows: Row[]; since: number; until: number; tz: string; labels: Labels }) {
   const tracks = useMemo(() => {
-    const m = new Map<string, { provider: string; window: string; points: [number, number][]; resetAt: number | null; lastAt: number }>();
+    const m = new Map<string, { provider: string; window: string; points: QuotaReading[]; resetAt: number | null; lastAt: number }>();
     for (const s of samples) {
       const t = Date.parse(String(s.sampled_at)); const v = s.used_percentage;
       if (!Number.isFinite(t) || !isKnown(v)) continue;
       const key = `${s.provider}|${s.window}`;
       const e = m.get(key) ?? { provider: String(s.provider), window: String(s.window), points: [], resetAt: null, lastAt: -Infinity };
-      e.points.push([t, leftOf(v)]);
+      const resetAt = typeof s.reset_at === 'string' ? Date.parse(s.reset_at) : NaN;
+      e.points.push({ at: t, used: v, resetAt: Number.isFinite(resetAt) ? resetAt : null });
       if (t >= e.lastAt) { e.lastAt = t; const rs = typeof s.reset_at === 'string' ? Date.parse(s.reset_at) : NaN; e.resetAt = Number.isFinite(rs) ? rs : null; }
       m.set(key, e);
     }
     // Short windows first, then weekly ones, so lines of the same rhythm sit together.
-    return [...m.values()].map((e) => ({ ...e, points: e.points.sort((a, b) => a[0] - b[0]) })).sort((x, y) => span(x.window) - span(y.window) || x.provider.localeCompare(y.provider));
+    return [...m.values()].map((e) => ({ ...e, points: e.points.sort((a, b) => a.at - b.at) })).sort((x, y) => span(x.window) - span(y.window) || x.provider.localeCompare(y.provider));
   }, [samples]);
   // The axis starts at the first reading, so days before anything was read do not take most of the width.
-  const firstRead = Math.min(...tracks.flatMap((t) => (t.points.length ? [t.points[0][0]] : [])));
+  const firstRead = Math.min(...tracks.flatMap((t) => (t.points.length ? [t.points[0].at] : [])));
   const since = Number.isFinite(firstRead) ? Math.max(asked, firstRead - (until - firstRead) * 0.02) : asked;
   const W = 1000; const H = 64;
   const x = (t: number) => ((t - since) / Math.max(1, until - since)) * W;
@@ -256,9 +279,10 @@ function Tracks({ samples, hits, since: asked, until, tz, labels }: { samples: R
         const short = span(tr.window) === 0 && until - since > 2 * 86_400_000;
         const from = short ? until - 86_400_000 : since;
         const x = (t: number) => Math.max(0, ((t - from) / Math.max(1, until - from)) * W);
-        let d = '';
-        tr.points.forEach(([t, v], i) => { d += i === 0 ? `M${x(t).toFixed(1)} ${y(v).toFixed(1)}` : `H${x(t).toFixed(1)}V${y(v).toFixed(1)}`; });
-        if (tr.points.length) d += `H${x(Math.min(until, tr.points[tr.points.length - 1][0] + 6 * 3_600_000)).toFixed(1)}`;
+        const geometry = quotaTrack(tr.points, from, until);
+        const d = geometry.segments.map((s) => s.map((p, i) => i === 0 ? `M${x(p.at).toFixed(1)} ${y(leftOf(p.used)).toFixed(1)}` : `H${x(p.at).toFixed(1)}V${y(leftOf(p.used)).toFixed(1)}`).join('')).join('');
+        const knownGaps = windows.filter((w) => w.provider === tr.provider && w.window === tr.window).flatMap((w) => Array.isArray(w.gaps) ? w.gaps as Row[] : []);
+        const describeGap = (gap: { start_epoch_ms: number; end_epoch_ms: number }) => gapText({ ...gap, causes: knownGaps.filter((g) => Number(g.start_epoch_ms) < gap.end_epoch_ms && Number(g.end_epoch_ms) > gap.start_epoch_ms).flatMap((g) => Array.isArray(g.causes) ? g.causes : []) }, tz);
         const marks = hits.filter((h) => h.provider === tr.provider && h.window === tr.window).map((h) => Date.parse(String(h.first_hit_at))).filter((t) => t >= since && t <= until);
         const last = tr.points[tr.points.length - 1];
         const label = `${agentName(tr.provider)} · ${labelOf(labels, tr.provider, tr.window)}`;
@@ -266,18 +290,20 @@ function Tracks({ samples, hits, since: asked, until, tz, labels }: { samples: R
         return (
           <div key={`${tr.provider}|${tr.window}`} className="quota-track">
             <span className="quota-track-name"><i style={{ background: colorOf(tr.provider) }} />{label}{short && <small className="fine quota-track-span">last 24 h</small>}</span>
-            <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" role="img" aria-label={`${label}, ${tr.points.length} readings${last ? `, last ${pct(last[1])} left` : ''}${marks.length ? `, ran out ${marks.length} times` : ''}`}>
+            <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" role="img" aria-label={`${label}, ${tr.points.length} readings${last ? `, last ${pct(leftOf(last.used))} left` : ''}${geometry.gaps.length ? `, ${geometry.gaps.length} gaps in readings` : ''}${marks.length ? `, ran out ${marks.length} times` : ''}`}>
               {/* Before the first reading nothing is known, which is hatched rather than blank. */}
-              {tr.points.length > 0 && tr.points[0][0] > since && <rect x="0" y="0" width={Math.max(0, x(tr.points[0][0]))} height={H} className="quota-before" fill="url(#quota-hatch)"><title>No readings before this</title></rect>}
+              {geometry.gaps.map((g, i) => <rect key={i} x={x(g.start_epoch_ms)} y="0" width={Math.max(0, x(g.end_epoch_ms) - x(g.start_epoch_ms))} height={H} className="quota-before" fill="url(#quota-hatch)"><title>{describeGap(g)}</title></rect>)}
               <line x1="0" x2={W} y1={y(0)} y2={y(0)} className="quota-full" />
               <line x1="0" x2={W} y1={y(50)} y2={y(50)} className="quota-half" vectorEffect="non-scaling-stroke"><title>50% left</title></line>
               <path d={d} className="quota-path" style={{ stroke: colorOf(tr.provider) }} vectorEffect="non-scaling-stroke" />
+              {geometry.segments.filter((s) => s.length === 1).map((s, i) => <circle key={i} cx={x(s[0].at)} cy={y(leftOf(s[0].used))} r="2" fill={colorOf(tr.provider)} />)}
               {marks.map((t) => <line key={t} x1={x(t)} x2={x(t)} y1="0" y2={H} className="quota-hit" vectorEffect="non-scaling-stroke"><title>Ran out {fmtDateTime(new Date(t).toISOString(), tz)}</title></line>)}
             </svg>
             {/* After its reset the last reading no longer says what is left now. */}
-            <span className="quota-track-last" title={reset ? 'Reset since the last reading, so what is left now is unknown' : last ? `${pct(last[1])} left at the last reading` : undefined}>{reset ? <span className="fine">reset</span> : last ? <>{pct(last[1])}<small> left</small></> : '–'}</span>
+            <span className="quota-track-last" title={reset ? 'Reset since the last reading, so what is left now is unknown' : last ? `${pct(leftOf(last.used))} left at ${fmtDateTime(iso(last.at), tz)}` : undefined}>{reset ? <span className="fine">reset</span> : last ? <>{pct(leftOf(last.used))}<small>{until - last.at > MAX_QUOTA_GAP ? ' last reading' : ' left'}</small></> : '–'}</span>
             {short && <span className="quota-track-axis" aria-hidden="true"><span>−24 h</span><span>−12 h</span><span>now</span></span>}
-            {tr.points.length === 1 && <span className="quota-track-note fine">Collecting since {fmtDateTime(new Date(tr.points[0][0]).toISOString(), tz)}.</span>}
+            {!!geometry.gaps.length && <details className="quota-track-note fine"><summary>{geometry.gaps.length} gaps in readings</summary><ul>{geometry.gaps.map((g, i) => <li key={i}>{describeGap(g)}</li>)}</ul></details>}
+            {tr.points.length === 1 && <span className="quota-track-note fine">Collecting since {fmtDateTime(iso(tr.points[0].at), tz)}.</span>}
           </div>
         );
       })}
@@ -307,12 +333,12 @@ function WindowTable({ rows: all, tz, labels }: { rows: Row[]; tz: string; label
             : (isKnown(r.unused_percentage_before_reset) ? r.unused_percentage_before_reset : null);
           return (
             <tr key={i}>
-              <td><span className="quota-who"><i style={{ background: colorOf(r.provider) }} />{agentName(r.provider)}</span><small className="fine quota-early">{labelOf(labels, r.provider, r.window)}</small></td>
+              <td><span className="quota-who"><i style={{ background: colorOf(r.provider) }} />{agentName(r.provider)}</span><small className="fine quota-early">{labelOf(labels, r.provider, r.window)}</small><CoverageReasons row={r} tz={tz} /></td>
               <td data-label="Reset">{fmtShortDateTime(r.reset_at, tz)}{typeof r.ended_early_at === 'string' && <small className="fine quota-early">ended early {fmtDateTime(r.ended_early_at, tz)}</small>}</td>
               <td data-label="Left at reset" title={r.ended === false ? 'Still running: at most this much is left, from the latest reading.' : 'From the last reading before the reset. Less may have been left.'}>
                 {left === null ? <Unknown label="Unknown" /> : (
                   <span className="left-cell">
-                    <span className="left-track" aria-hidden="true"><span style={{ inlineSize: `${Math.max(0, Math.min(100, left))}%`, background: colorOf(r.provider) }} /></span>
+                    <span className="left-track" aria-hidden="true"><span style={{ inlineSize: `${Math.max(0, Math.min(100, left))}%` }} /></span>
                     <b>{left > 0 ? '≤ ' : ''}{pct(left, left > 0 && left < 10 ? 1 : 0)}</b>
                   </span>
                 )}

@@ -4,12 +4,14 @@ export const RANGES: Record<string, number> = { '1h': 3_600_000, '6h': 21_600_00
 export const DEFAULT_RANGE = '7d';
 
 export interface Filters {
-  project?: string; model?: string; instance?: string; since?: string; until?: string; range?: string;
+  project?: string; model?: string; instance?: string; status?: string; since?: string; until?: string; range?: string;
   /** A provider family. Never read from a link: only a chosen provider row sets it. */
   provider?: string;
   /** The agent program that ran a record (codex, claudeAgent…). Like provider, only a chosen row sets it. */
   harness?: string;
 }
+
+export const RUN_STATUSES: readonly string[] = ['running', 'completed', 'failed', 'cancelled'];
 
 const MINUTE = 60_000;
 
@@ -28,6 +30,8 @@ export function cleanSearch(search: string, pages: readonly string[]): string | 
   const drop = (key: string) => { params.delete(key); changed = true; };
   const page = params.get('page');
   if (page !== null && !pages.includes(page)) drop('page');
+  const status = params.get('run_status');
+  if (status !== null && !RUN_STATUSES.includes(status)) drop('run_status');
   const range = params.get('range');
   if (range !== null && range !== 'all' && !Object.hasOwn(RANGES, range)) drop('range');
   for (const key of ['since', 'until']) { const v = params.get(key); if (v !== null && !readDate(v)) drop(key); }
@@ -47,6 +51,7 @@ export function resolveFilters(params: URLSearchParams, now = Date.now(), defaul
     project: params.get('project') || undefined,
     model: params.get('model') || undefined,
     instance: params.get('instance') || undefined,
+    status: RUN_STATUSES.includes(params.get('run_status') ?? '') ? params.get('run_status')! : undefined,
     since: readDate(params.get('since')),
     until: readDate(params.get('until')),
   };
@@ -92,6 +97,8 @@ export const ROUTE_FILTERS: Record<string, FilterKey[]> = {
   'usage/machines': ['project', 'time'],
   'usage/tools': ['project', 'model', 'provider', 'harness', 'instance', 'time'],
   'usage/tool-hours': ['project', 'model', 'instance', 'time'],
+  'quota/samples': ['time'],
+  'usage/efficiency': ['project', 'model', 'provider', 'harness', 'instance', 'time'],
   timeline: ['project', 'model', 'instance', 'time'],
   search: ['project', 'model', 'instance', 'time'],
 };
@@ -108,6 +115,9 @@ export function apiParams(route: string, f: Filters, extra: Record<string, strin
     if (f.since) p.set('since', f.since);
     if (f.until) p.set('until', f.until);
   }
+  // Machine and containing-run status are global, including pages without time/model filters.
+  if (f.instance) p.set('instance', f.instance);
+  if (f.status) p.set('run_status', f.status);
   for (const [k, v] of Object.entries(extra)) if (v !== undefined && v !== '') p.set(k, String(v));
   return p;
 }

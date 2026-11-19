@@ -1,10 +1,29 @@
 import { describe, expect, it } from 'vitest';
-import { freshness, leftOf, quotaCards, quotaPace, windowLabel, windowName } from './quota';
+import { freshness, leftOf, quotaCards, quotaPace, quotaTrack, windowLabel, windowName } from './quota';
 
 const H = 3_600_000;
 const NOW = Date.parse('2026-11-07T18:00:00Z');
 const RESET = NOW + 3 * H;
 const r = (hoursAgo: number, used: number, resetAt: number | null = RESET) => ({ at: NOW - hoursAgo * H, used, resetAt });
+
+describe('quota chart observation gaps', () => {
+  it('breaks the path through an overnight gap and hatches stale tails', () => {
+    const t = quotaTrack([r(6, 10), r(5.9, 12), r(1, 20)], NOW - 6 * H, NOW);
+    expect(t.segments.map((s) => s.length)).toEqual([2, 1]);
+    expect(t.gaps).toEqual([{ start_epoch_ms: NOW - 5.9 * H, end_epoch_ms: NOW - H }, { start_epoch_ms: NOW - H, end_epoch_ms: NOW }]);
+  });
+  it('does not carry a figure across a reset or invent observations before the first one', () => {
+    const t = quotaTrack([{ at: NOW, used: 90, resetAt: NOW + 5 * 60_000 }, { at: NOW + 10 * 60_000, used: 1, resetAt: RESET }], NOW - H, NOW + 15 * 60_000);
+    expect(t.segments).toHaveLength(2);
+    expect(t.gaps).toEqual([{ start_epoch_ms: NOW - H, end_epoch_ms: NOW }, { start_epoch_ms: NOW, end_epoch_ms: NOW + 10 * 60_000 }]);
+  });
+  it('keeps closely watched readings connected and clips a recent preceding reading', () => {
+    const t = quotaTrack([r(.1, 10), r(0, 11)], NOW - 60_000, NOW + 60_000);
+    expect(t.gaps).toEqual([]);
+    expect(t.segments[0][0].at).toBe(NOW - 60_000);
+    expect(t.segments[0].at(-1)?.at).toBe(NOW + 60_000);
+  });
+});
 
 describe('quota pace', () => {
   it('projects when a fast window fills before its reset', () => {

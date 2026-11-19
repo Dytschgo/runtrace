@@ -1,0 +1,7 @@
+# Local scratch and recovery
+
+Before project commands in PowerShell, dot-source `scripts/scratch-env.ps1 -Task <task-name>` in that command's shell. Use a distinct task name per agent. This explicitly sets TMP, TEMP, CARGO_TARGET_DIR, CARGO_HOME, npm_config_cache and PLAYWRIGHT_BROWSERS_PATH under `D:\Scratch\Runtrace\<task-name>`. Include the same setup in delegate briefs. Keep new logs, backups, test fixtures and worktrees on D: too; commands that override these paths must still use task-owned D: locations. Pause large builds while C: has less than 20 GiB free.
+
+Development uses `D:\Code\Runtrace\source`; the installed service and production database `D:\Code\Runtrace\data\t3-usage.duckdb` stay outside it. The retired C: checkout retains a protected `data` junction to that live directory. Keep that junction out of recursive cleanup and fixture generation. Preserve production data, database recovery files and backups.
+
+For cleanup, establish project ownership and writer inactivity independently of timestamps. Inspect Git status and unpublished commits; preserve branch and detached tips in named recovery refs before removing registered worktrees with Git. Keep dirty/untracked work in place unless a private D: archive has been fully hash-verified. Resolve each removal target within the specific cleanup root and reject reparse points before descending. Keep other projects, T3 source databases and Codex history outside cleanup scope.

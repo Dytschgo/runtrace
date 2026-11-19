@@ -1,3 +1,4 @@
+import { sourceKey } from '../../lib/entities';
 import { useMemo, type ComponentType } from 'react';
 import { Bot, MessageSquare, MessageSquareReply, MessagesSquare, Play, Repeat2, Terminal, XCircle, RefreshCw } from 'lucide-react';
 import { Counter } from '../../components/motion';
@@ -40,6 +41,8 @@ export function KeyTotals({ counts, previous, comparable, windowed, turnsSeen, u
   // An older service has no provider turns; a tile would read as zero work, so it is left out.
   const visible = tiles.filter((t) => t.kind !== 'model_turn' || isKnown(c.model_turn) || turnsSeen);
   return (
+    <>
+    {stale && <p className="fine" role="status">Totals for the previous selection</p>}
     <section className="stats" aria-label="Key totals" data-stale={stale ? 'true' : undefined}>
       {visible.map((t) => {
         // The service never counts session-log hours as provider turns.
@@ -61,30 +64,31 @@ export function KeyTotals({ counts, previous, comparable, windowed, turnsSeen, u
         );
       })}
     </section>
+    </>
   );
 }
 
 /** The threads that ran in the window, most recent or biggest first, each with its turns, tokens and a sparkline. */
 export function RecentThreadsPanel({ threads, inWindow, activity, turns, agentsByThread, slots, projectName }: {
   threads: ReturnType<typeof useThreads>; inWindow: ThreadRow[]; activity: Map<string, ThreadActivity>; turns: TurnRow[];
-  agentsByThread: Map<string, number>; slots: Map<string, string>; projectName: (id: string) => string | null;
+  agentsByThread: Map<string, number>; slots: Map<string, string>; projectName: (instance: string, id: string) => string | null;
 }) {
   const { hrefPage, params, set } = useUrl();
   const sort = params.get('threads') === 'tokens' ? 'tokens' : 'recent';
   const recent = useMemo(() => {
     const lastSeen = (id: string, fallback: string) => activity.get(id)?.last ?? fallback;
-    if (sort === 'tokens') return [...inWindow].sort((a, b) => (activity.get(b.source_id)?.tokens ?? 0) - (activity.get(a.source_id)?.tokens ?? 0)).slice(0, 8);
-    return inWindow.filter((t) => t.type !== 'child').sort((a, b) => lastSeen(b.source_id, b.occurred_at).localeCompare(lastSeen(a.source_id, a.occurred_at))).slice(0, 6);
+    if (sort === 'tokens') return [...inWindow].sort((a, b) => (activity.get(sourceKey(b.instance_id, b.source_id))?.tokens ?? 0) - (activity.get(sourceKey(a.instance_id, a.source_id))?.tokens ?? 0)).slice(0, 8);
+    return inWindow.filter((t) => t.type !== 'child').sort((a, b) => lastSeen(sourceKey(b.instance_id, b.source_id), b.occurred_at).localeCompare(lastSeen(sourceKey(a.instance_id, a.source_id), a.occurred_at))).slice(0, 6);
   }, [inWindow, sort, activity]);
   const sparks = useMemo(() => {
-    const wanted = new Set(recent.map((t) => t.source_id));
+    const wanted = new Set(recent.map((t) => sourceKey(t.instance_id, t.source_id)));
     const byThread = new Map<string, { at: string; v: number }[]>();
     for (const t of turns) {
       // A sparkline only draws what was reported, so a thread with no totals has no line rather than a flat zero.
-      if (!wanted.has(t.thread_id) || t.total === null) continue;
-      const list = byThread.get(t.thread_id) ?? [];
+      if (!wanted.has(sourceKey(t.instance_id, t.thread_id)) || t.total === null) continue;
+      const list = byThread.get(sourceKey(t.instance_id, t.thread_id)) ?? [];
       list.push({ at: t.occurred_at, v: t.total });
-      byThread.set(t.thread_id, list);
+      byThread.set(sourceKey(t.instance_id, t.thread_id), list);
     }
     const out = new Map<string, number[]>();
     for (const [id, list] of byThread) out.set(id, list.sort((a, b) => a.at.localeCompare(b.at)).map((l) => l.v));
@@ -104,25 +108,25 @@ export function RecentThreadsPanel({ threads, inWindow, activity, turns, agentsB
         {() => (
           <ul className="trace-rows">
             {recent.map((t, i) => {
-              const spark = sparks.get(t.source_id);
-              const did = activity.get(t.source_id);
-              const kids = agentsByThread.get(t.source_id) ?? 0;
+              const spark = sparks.get(sourceKey(t.instance_id, t.source_id));
+              const did = activity.get(sourceKey(t.instance_id, t.source_id));
+              const kids = agentsByThread.get(sourceKey(t.instance_id, t.source_id)) ?? 0;
               const Icon = modelIcon(t.model);
               const color = t.model ? seriesColor(slots.get(t.model)) : seriesColor(undefined);
               return (
-                <li key={t.id} style={{ '--i': i, color } as React.CSSProperties}>
+                <li key={t.id} style={{ '--i': i } as React.CSSProperties}>
                   <Icon size={15} aria-hidden="true" />
                   <span className="trace-row-title">
-                    <AppLink className="list-title" href={hrefPage('Threads', { id: t.source_id })}>{t.title}</AppLink>
+                    <AppLink className="list-title" href={hrefPage('Threads', { id: t.source_id, instance: t.instance_id })}>{t.title}</AppLink>
                     <small>
-                      {projectName(t.project_id) ?? 'Project not imported'}
+                      {projectName(t.instance_id, t.project_id) ?? 'Project not imported'}
                       {t.model && <span className="mono"> · {t.model}</span>}
                       {kids > 0 && <> · <Tag>{plural(kids, 'sub-agent')}</Tag></>}
                     </small>
                   </span>
                   <span className="trace-row-num trace-row-turns" title="Provider turns in this window">{did ? <><RefreshCw size={11} aria-hidden="true" />{fmtInt(did.turns)}<span className="sr-only"> turns</span></> : <span className="sr-only">No provider turns here</span>}</span>
                   <span className="trace-row-num trace-row-tokens">{did?.missing && did.tokens !== null && <span title="Some turns reported no total">≥ </span>}<Tokens v={did?.tokens ?? null} why="No provider reported a token total for this thread in this window." /></span>
-                  <span className="trace-row-spark">{spark && <Sparkline values={spark} />}</span>
+                  <span className="trace-row-spark" style={{ color }}>{spark && <Sparkline values={spark} />}</span>
                   <time className="trace-row-when" dateTime={did?.last ?? t.occurred_at}>{fmtRelative(did?.last ?? t.occurred_at)}</time>
                 </li>
               );
@@ -175,7 +179,7 @@ export function DelegationPanel({ threads, agents, forest, window, model, pickin
     if (!forest) return null;
     // A tree in view that started at least one sub-agent inside the window.
     const inView = forestInView(forest.roots, { since: window.since, until: window.until, model }).trees
-      .filter((r) => !picking || (!!r.thread && activity.has(r.thread.source_id)));
+      .filter((r) => !picking || (!!r.thread && activity.has(sourceKey(r.thread.instance_id, r.thread.source_id))));
     const scored = inView.map((r) => ({ root: r, s: treeStats(r, window) })).filter((x) => x.s.delegated > 0);
     const stats = scored.map((x) => x.s);
     return {

@@ -1,3 +1,4 @@
+import { sourceKey } from './entities';
 import { hasTurnUsage } from './entities';
 import { useCallback, useMemo, useState, useSyncExternalStore } from 'react';
 import { keepPreviousData, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -122,18 +123,19 @@ export function useToolAggregatesMany(list: Filters[]): Load<ToolStat[]> {
   });
 }
 
-export function useProjects() {
+export function useProjects(f: Filters = {}) {
+  const params = apiParams('projects', f, { limit: 500 });
   return useQuery({
-    queryKey: ['projects'],
+    queryKey: ['projects', params.toString()],
     refetchInterval: 120_000,
-    queryFn: async ({ signal }) => (await getJson<Envelope<Entity>>('projects', new URLSearchParams({ limit: '500' }), signal)).data ?? [],
+    queryFn: async ({ signal }) => (await getJson<Envelope<Entity>>('projects', params, signal)).data ?? [],
   });
 }
 
 /** Rows per page for preview scans. Each read costs about the same at any size, so fewer, bigger pages are much faster. */
 export const BIG_PAGE = 5_000;
 const THREAD_MAX = 20_000;
-export function useThreads(f: Pick<Filters, 'project' | 'instance'>, enabled = true) {
+export function useThreads(f: Pick<Filters, 'project' | 'instance' | 'status'>, enabled = true) {
   const params = apiParams('threads', f);
   return useQuery({
     queryKey: ['threads', params.toString()],
@@ -144,7 +146,7 @@ export function useThreads(f: Pick<Filters, 'project' | 'instance'>, enabled = t
 }
 
 const AGENT_MAX = 20_000;
-export function useAgents(f: Pick<Filters, 'project' | 'instance'>, enabled = true) {
+export function useAgents(f: Pick<Filters, 'project' | 'instance' | 'status'>, enabled = true) {
   const params = apiParams('agents', f);
   return useQuery({
     enabled,
@@ -174,18 +176,18 @@ const RECENT_DAYS = 15;
  * without re-reading thousands of rows, and the headline, list and chart all move together.
  * New turns build up between polls, and a full page with nothing already known means some were missed, so history is read again.
  */
-export function useLiveTurns(f: Pick<Filters, 'project' | 'instance'>, enabled = true, holdHistory = false) {
+export function useLiveTurns(f: Pick<Filters, 'project' | 'instance' | 'status'>, enabled = true, holdHistory = false) {
   const [coversFrom] = useState(() => Math.floor((Date.now() - RECENT_DAYS * 86_400_000) / 3_600_000) * 3_600_000);
-  const recentParams = apiParams('model-turns', { project: f.project, instance: f.instance, since: new Date(coversFrom).toISOString() }, LEAN);
+  const recentParams = apiParams('model-turns', { project: f.project, instance: f.instance, status: f.status, since: new Date(coversFrom).toISOString() }, LEAN);
   const recent = useQuery({
     queryKey: ['turns-recent', recentParams.toString()],
     enabled,
     queryFn: ({ signal }) => scanPages('model-turns', recentParams, toTurn, TURN_MAX, signal, BIG_PAGE),
   });
   // The whole history can wait while what is on screen loads, as long as the recent turns cover the window.
-  const all = useModelTurns({ project: f.project, instance: f.instance }, enabled && !recent.isPending && !holdHistory);
+  const all = useModelTurns({ project: f.project, instance: f.instance, status: f.status }, enabled && !recent.isPending && !holdHistory);
   const queryClient = useQueryClient();
-  const params = apiParams('model-turns', { project: f.project, instance: f.instance }, { limit: TAIL, ...LEAN });
+  const params = apiParams('model-turns', { project: f.project, instance: f.instance, status: f.status }, { limit: TAIL, ...LEAN });
   const tailKey = ['turn-tail', params.toString()];
   const tail = useQuery({
     queryKey: tailKey,
@@ -228,9 +230,9 @@ export function useLiveTurns(f: Pick<Filters, 'project' | 'instance'>, enabled =
 }
 
 /** Token totals per thread, adding only turns that reported usage. */
-export function useThreadTokens(f: Pick<Filters, 'project' | 'instance'>, enabled = true): Map<string, ThreadTokens> {
-  const turns = useModelTurns({ project: f.project, instance: f.instance }, enabled);
-  return useMemo(() => tokensByKey(turns.data?.rows ?? [], (t) => t.thread_id, (t) => t.total, hasTurnUsage), [turns.data]);
+export function useThreadTokens(f: Pick<Filters, 'project' | 'instance' | 'status'>, enabled = true): Map<string, ThreadTokens> {
+  const turns = useModelTurns({ project: f.project, instance: f.instance, status: f.status }, enabled);
+  return useMemo(() => tokensByKey(turns.data?.rows ?? [], (t) => sourceKey(t.instance_id, t.thread_id), (t) => t.total, hasTurnUsage), [turns.data]);
 }
 
 export function useUsage(dimension: 'projects' | 'machines', f: Filters, enabled = true) {
@@ -309,67 +311,77 @@ export function useTimelinePage(f: Filters, limit: number, offset: number, kind?
   });
 }
 
-export function useLatestRecord() {
+export function useLatestRecord(f: Filters = {}) {
+  const params = apiParams('timeline', f, { limit: 1, include_content: 'false' });
   return useQuery({
-    queryKey: ['latest'],
+    queryKey: ['latest', params.toString()],
     refetchInterval: 60_000,
-    queryFn: async ({ signal }) => (await getEntities<Entity>('timeline', new URLSearchParams({ limit: '1', include_content: 'false' }), signal))[0] ?? null,
+    queryFn: async ({ signal }) => (await getEntities<Entity>('timeline', params, signal))[0] ?? null,
   });
 }
 
 /** Field coverage of every tool call, and redaction categories of every tool call and sub-agent, counted by the service. */
 export interface FieldReport { tools: ToolCoverage | null; redactions: { category: string; records: number }[] }
-export function useFieldReport() {
+export function useFieldReport(f: Filters = {}) {
+  const params = apiParams('data-quality/fields', f);
   return useQuery({
-    queryKey: ['data-quality/fields'],
+    queryKey: ['data-quality/fields', params.toString()],
     queryFn: async ({ signal }) => {
-      const r = await getJson<Partial<FieldReport>>('data-quality/fields', undefined, signal);
+      const r = await getJson<Partial<FieldReport>>('data-quality/fields', params, signal);
       return { tools: r.tools ?? null, redactions: r.redactions ?? [] } satisfies FieldReport;
     },
   });
 }
 
-export function useQuality() {
+export function useQuality(f: Filters = {}) {
+  const params = apiParams('data-quality', f);
   return useQuery({
-    queryKey: ['data-quality'],
-    queryFn: ({ signal }) => getJson<QualityReport>('data-quality', undefined, signal),
+    queryKey: ['data-quality', params.toString()],
+    queryFn: ({ signal }) => getJson<QualityReport>('data-quality', params, signal),
     select: (report) => report.data ?? [],
   });
 }
 
 interface QualityCheckpoint { instance_id: string; project_id?: string; source_updated_at: string; last_successful_sync_at: string }
 interface QualityReport extends Envelope<QualityRow> {
+  scope_reason?: string;
   checkpoints?: QualityCheckpoint[];
   project_checkpoints?: QualityCheckpoint[];
   missing_thread_relationships?: number;
   sync_progress?: { project_id?: string; project_position?: number; projects_discovered?: number; projects_completed_this_pass?: number; committed_changes_in_project?: number; state?: string }[];
   import_reports?: { project_errors?: { project_id: string; error_category: string }[]; skipped_incomplete_or_purged?: number; unchanged_source_rows_skipped?: number }[];
 }
-export function useQualityReport() {
-  return useQuery({ queryKey: ['data-quality'], refetchInterval: 15_000, queryFn: ({ signal }) => getJson<QualityReport>('data-quality', undefined, signal) });
+export function useQualityReport(f: Filters = {}) {
+  const params = apiParams('data-quality', f);
+  return useQuery({ queryKey: ['data-quality', params.toString()], refetchInterval: 15_000, queryFn: ({ signal }) => getJson<QualityReport>('data-quality', params, signal) });
 }
 export function useCollectorReadiness() {
   return useQuery({ queryKey: ['collector-ready'], refetchInterval: 15_000, retry: false,
     queryFn: async ({ signal }) => {
       const response = await fetch('/health/ready', { signal });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      return await response.json() as { collector?: { state?: string; last_successful_sync_at?: string } };
+      return await response.json() as { poll_seconds?: number; collector?: { state?: string; last_successful_sync_at?: string } };
     },
   });
 }
 
-export function useStorage() {
-  return useQuery({ queryKey: ['storage'], retry: false, queryFn: ({ signal }) => getJson<StorageResponse>('storage', undefined, signal) });
+export function useStorage(f: Filters = {}) {
+  const params = apiParams('storage', f);
+  return useQuery({ queryKey: ['storage', params.toString()], retry: false, queryFn: ({ signal }) => getJson<StorageResponse>('storage', params, signal) });
 }
 
-export type QuotaRoute = 'quota/current' | 'quota/live' | 'quota/windows' | 'quota/resets';
+export type QuotaRoute = 'quota/current' | 'quota/live' | 'quota/windows' | 'quota/resets' | 'quota/notifications';
 /** Quota readings over a span, for drawing how each window filled. Refreshed with every sync. */
 export function useQuotaSamples(since: string) {
-  return useQuery({ queryKey: ['quota/samples', since], placeholderData: keepPreviousData, refetchInterval: 60_000, queryFn: ({ signal }) => getJson<Envelope<Record<string, unknown>>>('quota/samples', new URLSearchParams({ since }), signal) });
+  const f = useFilters();
+  const params = apiParams('quota/samples', { instance: f.instance, status: f.status, since });
+  return useQuery({ queryKey: ['quota/samples', params.toString()], placeholderData: keepPreviousData, refetchInterval: 60_000, queryFn: ({ signal }) => getJson<Envelope<Record<string, unknown>>>('quota/samples', params, signal) });
 }
 
 export function useQuota(route: QuotaRoute, enabled = true) {
-  return useQuery({ queryKey: [route], enabled, refetchInterval: 60_000, queryFn: ({ signal }) => getJson<Envelope<Record<string, unknown>>>(route, undefined, signal) });
+  const f = useFilters();
+  const params = apiParams(route, { instance: f.instance, status: f.status });
+  return useQuery({ queryKey: [route, params.toString()], enabled, refetchInterval: 60_000, queryFn: ({ signal }) => getJson<Envelope<Record<string, unknown>>>(route, params, signal) });
 }
 
 export function useHealth() {

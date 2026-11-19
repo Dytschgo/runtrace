@@ -3,7 +3,7 @@ import { useQuery, type UseQueryResult } from '@tanstack/react-query';
 import { CheckCircle2, TriangleAlert, XCircle } from 'lucide-react';
 import { AppLink, Async, Command, PageHeader, Panel, Segmented, SelectField, SkeletonRows, Tag, Tokens, Unknown } from '../components/ui';
 import { getJson } from '../lib/api';
-import { useHealth, useThreads, useUsage } from '../lib/data';
+import { useFilters, useHealth, useThreads, useUsage } from '../lib/data';
 import { fmtDateTime, fmtInt, fmtRelative } from '../lib/format';
 import { browserTimezone, DEFAULTS, TIMEZONES, updateSettings, useSettings } from '../lib/settings';
 import type { Entity, Envelope } from '../lib/types';
@@ -21,12 +21,13 @@ function useReady() {
 }
 
 export default function Settings() {
+  const { instance, status } = useFilters();
   const { timezone, density, pageSize } = useSettings();
   const health = useHealth();
   const ready = useReady();
   // The per-machine aggregate names each instance and counts its threads. Threads are read whole only when it is unavailable.
-  const machines = useUsage('machines', {});
-  const threads = useThreads({}, machines.isError);
+  const machines = useUsage('machines', { instance, status });
+  const threads = useThreads({ instance, status }, machines.isError);
   const instanceIds = useMemo(() => [...new Set(machines.data ? machines.data.map((m) => m.identity) : (threads.data?.rows ?? []).map((t) => t.instance_id))].sort(), [machines.data, threads.data]);
   const threadCount = (id: string) => machines.data ? machines.data.find((m) => m.identity === id)?.observed_threads ?? 0 : threads.data?.rows.filter((t) => t.instance_id === id).length ?? 0;
   const tzOptions = [...new Set([timezone, browserTimezone(), ...TIMEZONES])];
@@ -34,6 +35,7 @@ export default function Settings() {
   return (
     <>
       <PageHeader title="Settings" lead="Display choices are saved in this browser; capture is set in the CLI." />
+      {(instance || status) && <p className="fine" role="status">Machine summaries follow the selected scope. Browser preferences and local service controls apply to this installation and have no run status.</p>}
       {/* Two independent columns, so a short panel never leaves a hole beside a tall one. */}
       <div className="settings-cols">
         <Panel title="Display" sub="This browser only" hint={`Hourly buckets come from the API in UTC and are regrouped in this timezone. Default: ${DEFAULTS.timezone}, matching the server configuration.`}>

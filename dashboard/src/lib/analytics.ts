@@ -1,3 +1,4 @@
+import { sourceKey } from './entities';
 import { hasTurnUsage, turnMs } from './entities';
 import { fmtDay, localParts, zonedDayStart } from './format';
 import type { AgentRow, ThreadRow, ToolRow, TurnRow } from './entities';
@@ -380,12 +381,12 @@ export function windowTokens(turns: TurnRow[], f: { since?: string; until?: stri
     turnCount += 1;
     if (t.total !== null) reported += 1;
     if (!t.thread_id) { unthreaded = add(unthreaded, t.total); continue; }
-    const cur = byThread.get(t.thread_id) ?? { total: null, turns: 0, withUsage: 0, withTotal: 0 };
+    const cur = byThread.get(sourceKey(t.instance_id, t.thread_id)) ?? { total: null, turns: 0, withUsage: 0, withTotal: 0 };
     cur.turns += 1;
     if (t.total !== null) cur.withTotal = (cur.withTotal ?? 0) + 1;
     cur.total = add(cur.total, t.total);
     if (hasTurnUsage(t)) cur.withUsage += 1;
-    byThread.set(t.thread_id, cur);
+    byThread.set(sourceKey(t.instance_id, t.thread_id), cur);
   }
   return { byThread, total, logTotal, unthreaded, turns: turnCount, reported };
 }

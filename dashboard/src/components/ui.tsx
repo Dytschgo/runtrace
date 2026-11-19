@@ -67,7 +67,7 @@ export function ShareStrip({ items, label, legend = 6, format = fmtCompact, note
     <div className="share">
       <div className="share-bar" role="img" aria-label={`${label}: ${sorted.map((i) => `${i.text} ${fmtPct(i.value / total)}`).join(', ')}`}>
         {sorted.map((i) => (
-          <span key={i.key} className={i.muted ? 'share-seg is-muted' : 'share-seg'} style={{ flexGrow: i.value, background: i.muted ? undefined : i.color, boxShadow: i.dashed ? 'inset 0 0 0 1.5px var(--bg)' : undefined }} title={`${i.text}: ${format(i.value)} (${fmtPct(i.value / total)})`} />
+          <span key={i.key} className={i.muted ? 'share-seg is-muted' : 'share-seg'} style={{ flexGrow: i.value, background: i.muted ? undefined : 'var(--surface-2)', borderBlockStart: i.muted ? undefined : `2px ${i.dashed ? 'dashed' : 'solid'} ${i.color}` }} title={`${i.text}: ${format(i.value)} (${fmtPct(i.value / total)})`} />
         ))}
       </div>
       <ul className="share-legend" aria-label={`${label}, largest first`}>

@@ -151,7 +151,7 @@ test('models show verified tokens, name those without usage, and never count tur
   await expect(gpt).toContainText('12 reported, 10 in full');
   // Calls are null for every model: stated once, and turns never appear under that heading.
   await expect(page.getByRole('columnheader', { name: 'Model calls' })).toBeHidden();
-  await expect(page.locator('.table-gap')).toContainText('Model calls');
+  await expect(page.locator('.table-gap').filter({ hasText: 'Model calls' })).toContainText('Model calls');
   await expect(page.locator('.tokens-none')).toContainText('grok-4.7');
 });
 
@@ -163,7 +163,7 @@ test('the backend without provider turns still renders every model', async ({ pa
   });
   await page.goto('/?page=Models');
   await expect(page.locator('tbody')).toContainText('old');
-  await expect(page.locator('.table-gap')).toContainText('Input');
+  await expect(page.locator('.table-gap').filter({ hasText: 'Input' })).toContainText('Input');
   await page.goto('/?range=all');
   await expect(page.locator('.stats')).not.toContainText('Provider turns');
   await expect(page.locator('.gaps')).toContainText('Complete token total');
@@ -277,7 +277,7 @@ test('partial-only models explain totals and retain recorded cache fields', asyn
   await expect(page.getByText('No complete token totals. Partial token fields are shown in the ledger.',{exact:true})).toBeVisible();
   // With no complete totals the page ranks by runs, and says so.
   await expect(page.getByRole('heading', { name: 'Share of runs' })).toBeVisible();
-  await expect(page.locator('.page-head')).toContainText('of the runs');
+  await expect(page.locator('.page-head')).toContainText('100% of matching runs requested partial-model.');
 });
 
 

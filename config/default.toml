@@ -1,6 +1,9 @@
 [server]
 host = "127.0.0.1"
 port = 4310
+# Exact additional Host headers for a trusted local proxy, including its public port.
+# Example: ["dashboard.example.test:12443"]. Empty keeps HTTP admission localhost-only.
+allowed_hosts = []
 [dashboard]
 timezone = "Europe/Zurich"
 assets_path = "dashboard/dist"
@@ -22,6 +25,8 @@ sqlite_path = ""
 poll_seconds = 60
 collect_on_serve = true
 [quota]
+# Native Windows warnings at 20% and 5% left, once per window across restarts.
+notifications = true
 # Ask harnesses T3 does not check (Antigravity, Muse) for their limits, every 5 minutes, with their own programs.
 checks = true
 normal_interval_seconds = 600

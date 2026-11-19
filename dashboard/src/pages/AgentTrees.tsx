@@ -7,12 +7,15 @@ import { AppLink, EmptyState, ErrorState, NotLoaded, PageHeader, Panel, Skeleton
 import { windowTokens, type ThreadTokens } from '../lib/analytics';
 import { getEntities } from '../lib/api';
 import { useAgents, useFilters, useLiveTurns, useThreads, useThreadTokens } from '../lib/data';
-import { toAgent } from '../lib/entities';
+import { apiParams } from '../lib/filters';
+import { sourceKey, toAgent } from '../lib/entities';
 import type { Entity } from '../lib/types';
 import { fmtClock, fmtDateTime, fmtDay, fmtDuration, fmtInt } from '../lib/format';
 import { useSettings } from '../lib/settings';
-import { buildForest, compressAxis, flatten, forestInView, treeStats, type EdgeEvidence, type TreeNode } from '../lib/tree';
+import { buildForest, observedCriticalPath, recordedSpans, compressAxis, flatten, forestInView, treeStats, type EdgeEvidence, type TreeNode } from '../lib/tree';
 import { useUrl } from '../lib/url';
+
+const tokenKey = (n: TreeNode) => n.thread ? sourceKey(n.thread.instance_id, n.thread.source_id) : '';
 
 const EVIDENCE: Record<EdgeEvidence, string> = {
   both: 'Agent record and thread lineage agree',
@@ -25,9 +28,9 @@ export default function AgentTrees() {
   const { timezone } = useSettings();
   const f = useFilters();
   // Lineage is read whole per project: a time or model filter must never cut a parent out and orphan its children.
-  const threads = useThreads({ project: f.project, instance: f.instance });
-  const agents = useAgents({ project: f.project, instance: f.instance });
-  const lifetime = useThreadTokens({ project: f.project, instance: f.instance });
+  const threads = useThreads({ project: f.project, instance: f.instance, status: f.status });
+  const agents = useAgents({ project: f.project, instance: f.instance, status: f.status });
+  const lifetime = useThreadTokens({ project: f.project, instance: f.instance, status: f.status });
   // With a window, tokens are the ones used inside it, from the same turns the Overview reads. The tree itself is still drawn whole.
   const windowed = !!(f.since || f.until);
   const liveTurns = useLiveTurns(f, windowed);
@@ -37,8 +40,8 @@ export default function AgentTrees() {
   const turnsReady = coverage === 'ready';
   const win = useMemo(() => (windowed ? windowTokens(liveTurns.rows, f) : null), [windowed, liveTurns.rows, f]);
   const tokens = win ? win.byThread : lifetime;
-  const treeTokens = (root: TreeNode) => flatten(root).reduce<number | null>((s, n) => { const v = tokens.get(n.key)?.total; return v == null ? s : (s ?? 0) + v; }, null);
-  const treeShort = (root: TreeNode) => flatten(root).some((n) => { const u = tokens.get(n.key); return !!u && (u.withTotal ?? u.withUsage) < u.turns; });
+  const treeTokens = (root: TreeNode) => flatten(root).reduce<number | null>((s, n) => { const v = tokens.get(tokenKey(n))?.total; return v == null ? s : (s ?? 0) + v; }, null);
+  const treeShort = (root: TreeNode) => flatten(root).some((n) => { const u = tokens.get(tokenKey(n)); return !!u && (u.withTotal ?? u.withUsage) < u.turns; });
 
   const forest = useMemo(() => (threads.data && agents.data ? buildForest(threads.data.rows, agents.data.rows) : null), [threads.data, agents.data]);
   const view = useMemo(() => (forest ? forestInView(forest.roots, f) : null), [forest, f]);
@@ -48,7 +51,7 @@ export default function AgentTrees() {
   const quietTrees = scored.length - trees.length;
 
   const selectedKey = params.get('root');
-  const selected = trees.find((t) => t.root.key === selectedKey) ?? trees[0];
+  const selected = trees.find((t) => t.root.key === selectedKey || t.root.thread?.source_id === selectedKey) ?? trees[0];
   const scanIncomplete = threads.data?.complete === false || agents.data?.complete === false;
 
   type Row = (typeof trees)[number];
@@ -63,7 +66,7 @@ export default function AgentTrees() {
     { key: 'fanout', header: 'Fan-out', align: 'end', className: 'hide-narrow', sort: (t) => t.stats.maxFanout, render: (t) => fmtInt(t.stats.maxFanout) },
     { key: 'parallel', header: 'Peak parallel', align: 'end', className: 'hide-narrow', sort: (t) => t.stats.peakParallel, render: (t) => fmtInt(t.stats.peakParallel) },
     { key: 'busy', header: 'Busy time', align: 'end', sort: (t) => t.stats.busyMs, render: (t) => <span className="token-cell"><span className="bar-cell-track" aria-hidden="true"><span style={{ inlineSize: `${((t.stats.busyMs ?? 0) / maxBusy) * 100}%` }} /></span>{fmtDuration(t.stats.busyMs)}</span> },
-    { key: 'tokens', header: 'Tree tokens', align: 'end', sort: (t) => treeTokens(t.root), render: (t) => { if (coverage === 'failed') return <NotLoaded />; if (!turnsReady) return <span className="fine" aria-label="Loading">…</span>; const v = treeTokens(t.root); const ran = flatten(t.root).some((n) => (tokens.get(n.key)?.turns ?? 0) > 0); return v === null && windowed && !ran ? <span className="fine">None here</span> : v === null || (v === 0 && treeShort(t.root)) ? <Unknown label="No complete total" why="Turns ran here but none with a total, or those with one summed to 0 while others reported none." /> : <>{v !== null && treeShort(t.root) && <span className="lower-bound" title="Some turns reported no total"><span aria-hidden="true">≥</span><span className="sr-only">at least </span></span>}<Tokens v={v} /></>; } },
+    { key: 'tokens', header: 'Tree tokens', align: 'end', sort: (t) => treeTokens(t.root), render: (t) => { if (coverage === 'failed') return <NotLoaded />; if (!turnsReady) return <span className="fine" aria-label="Loading">…</span>; const v = treeTokens(t.root); const ran = flatten(t.root).some((n) => (tokens.get(tokenKey(n))?.turns ?? 0) > 0); return v === null && windowed && !ran ? <span className="fine">None here</span> : v === null || (v === 0 && treeShort(t.root)) ? <Unknown label="No complete total" why="Turns ran here but none with a total, or those with one summed to 0 while others reported none." /> : <>{v !== null && treeShort(t.root) && <span className="lower-bound" title="Some turns reported no total"><span aria-hidden="true">≥</span><span className="sr-only">at least </span></span>}<Tokens v={v} /></>; } },
     { key: 'start', header: 'Started', sort: (t) => t.root.start, render: (t) => (t.root.start ? <time dateTime={new Date(t.root.start).toISOString()}>{fmtDay(new Date(t.root.start).toISOString(), timezone)}</time> : <span className="fine">Unknown</span>) },
   ];
 
@@ -135,9 +138,11 @@ function TreeView({ root, tz, tokens, win }: { root: TreeNode; tz: string; token
   const rows = useMemo(() => flatten(root, collapsed), [root, collapsed]);
   const all = useMemo(() => flatten(root), [root]);
   const stats = useMemo(() => treeStats(root, win), [root, win]);
-  const axis = useMemo(() => compressAxis(all.filter((n) => n.depth > 0).flatMap((n) => (n.start !== null && n.end !== null && n.end >= n.start ? [[n.start, n.end] as [number, number]] : []))), [all]);
+  const critical = useMemo(() => observedCriticalPath(root), [root]);
+  const axis = useMemo(() => compressAxis(all.filter((n) => n.depth > 0).flatMap((n) => recordedSpans(n).flatMap((s) => s.start !== null && s.end !== null && s.end >= s.start ? [[s.start, s.end] as [number,number]] : []))), [all]);
+  const { status } = useFilters();
   const nodeKey = params.get('node');
-  const selected = all.find((n) => n.key === nodeKey) ?? root;
+  const selected = all.find((n) => n.key === nodeKey || n.thread?.source_id === nodeKey) ?? root;
   const [cursor, setCursor] = useState(selected.key);
   const treeRef = useRef<HTMLDivElement>(null);
   const focusCursor = useRef(false);
@@ -174,16 +179,16 @@ function TreeView({ root, tz, tokens, win }: { root: TreeNode; tz: string; token
   };
 
   const hasTimes = axis.end > axis.start;
-  const rootTokens = tokens.get(root.key)?.total ?? null;
-  const childTokens = all.filter((n) => n.depth > 0).reduce<number | null>((s, n) => { const v = tokens.get(n.key)?.total; return v == null ? s : (s ?? 0) + v; }, null);
+  const rootTokens = tokens.get(tokenKey(root))?.total ?? null;
+  const childTokens = all.filter((n) => n.depth > 0).reduce<number | null>((s, n) => { const v = tokens.get(tokenKey(n))?.total; return v == null ? s : (s ?? 0) + v; }, null);
   // A sum is a lower bound when any turn behind it reported no total.
-  const short = (n: TreeNode) => { const u = tokens.get(n.key); return !!u && (u.withTotal ?? u.withUsage) < u.turns; };
+  const short = (n: TreeNode) => { const u = tokens.get(tokenKey(n)); return !!u && (u.withTotal ?? u.withUsage) < u.turns; };
   const childShort = all.some((n) => n.depth > 0 && short(n));
   const fullAgent = useQuery({
-    queryKey: ['agent-full', selected.agent?.source_id],
+    queryKey: ['agent-full', selected.agent?.source_id, selected.agent?.instance_id, status],
     enabled: !!selected.agent,
     queryFn: async ({ signal }) => {
-      const rows = await getEntities<Entity>('agents', new URLSearchParams({ id: selected.agent!.source_id, limit: '1', include_content: 'true' }), signal);
+      const rows = await getEntities<Entity>('agents', apiParams('agents', { instance: selected.agent!.instance_id, status }, { id: selected.agent!.source_id, limit: 1, include_content: 'true' }), signal);
       const row = rows.find((r) => r.source_id === selected.agent!.source_id);
       return row ? toAgent(row) : null;
     },
@@ -199,7 +204,7 @@ function TreeView({ root, tz, tokens, win }: { root: TreeNode; tz: string; token
         className="grow-3"
         title={root.title}
         sub={hasTimes ? <>{fmtDateTime(new Date(axis.start).toISOString(), tz)} – {fmtDateTime(new Date(axis.end).toISOString(), tz)}</> : 'No completion times recorded, so no timeline can be drawn.'}
-        hint={<>Each bar is one sub-agent's run on a shared time line.{axis.gaps.length ? ` Idle stretches are shortened so short runs stay visible; ${fmtInt(axis.gaps.length)} ${axis.gaps.length === 1 ? 'break is' : 'breaks are'} marked ≈ above the bars.` : ''} The outlined bar is the span of the root's sub-agents; the root's own run time is not recorded here. Hatched is a run with no recorded end.</>}
+        hint={<>Each bar is one sub-agent's run on a shared time line.{axis.gaps.length ? ` Idle stretches are shortened so short runs stay visible; ${fmtInt(axis.gaps.length)} ${axis.gaps.length === 1 ? 'break is' : 'breaks are'} marked ≈ above the bars.` : ''} Repeated delegations have separate bars. The outlined bar is the span of the root's sub-agents; the root's own run time is not recorded here. Hatched is a run with no recorded end.</>}
         action={<button type="button" className="link-btn choose-tree" onClick={() => document.getElementById('trees-list')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}>Choose another tree ↑</button>}
         flush
       >
@@ -212,6 +217,11 @@ function TreeView({ root, tz, tokens, win }: { root: TreeNode; tz: string; token
           {childTokens !== null && <span><b><AtLeast on={childShort && childTokens > 0} /><Tokens v={childTokens} /></b> sub-agent tokens{win ? ' here' : ''}</span>}
           {stats.openEnded > 0 && <span><b>{fmtInt(stats.openEnded)}</b> <span className="unknown unknown-inline">no end time</span></span>}
         </div>
+        <p className="fine pad" role="status" aria-label="Observed critical path coverage">
+          <b>Observed critical path</b>{critical.elapsedMs === null ? ': unavailable — no complete run times.' : <>: {!critical.complete && 'at least '}{fmtDuration(critical.elapsedMs)} · {critical.tiedChains > 1 ? `${critical.tiedChains} tied chains` : 'longest timed chain'}.</>}
+          {' '}{critical.timedAgents} of {critical.agents} agents fully timed{!critical.complete && ' · partial timing'}.
+          {' '}Nested elapsed time is counted once along recorded links; parent waits and dependencies between siblings are not recorded. The path covers the whole tree.
+        </p>
         <div className="tree-axis" aria-hidden="true">
           <span />
           <span className="tree-axis-track">{axis.gaps.map((g) => <i key={g} style={{ insetInlineStart: `${g}%` }} />)}</span>
@@ -221,8 +231,8 @@ function TreeView({ root, tz, tokens, win }: { root: TreeNode; tz: string; token
           {rows.map((n, i) => {
             const isParent = n.children.length > 0;
             const open = isParent && !collapsed.has(n.key);
-            const left = n.start !== null && hasTimes ? axis.at(n.start) : null;
-            const right = n.end !== null && n.start !== null && n.end >= n.start && hasTimes ? axis.at(n.end) : null;
+            const spans = recordedSpans(n);
+            const onPath = critical.keys.has(n.key);
             return (
               <div
                 key={n.key}
@@ -231,7 +241,8 @@ function TreeView({ root, tz, tokens, win }: { root: TreeNode; tz: string; token
                 aria-expanded={isParent ? open : undefined}
                 aria-selected={selected.key === n.key}
                 tabIndex={cursor === n.key ? 0 : -1}
-                className={selected.key === n.key ? 'tree-row is-selected' : 'tree-row'}
+                className={`tree-row${selected.key === n.key ? ' is-selected' : ''}${onPath ? ' is-critical-path' : ''}`}
+                data-critical-path={onPath || undefined}
                 style={{ '--depth': n.depth } as React.CSSProperties}
                 onClick={() => choose(n)}
                 onFocus={() => setCursor(n.key)}
@@ -245,13 +256,19 @@ function TreeView({ root, tz, tokens, win }: { root: TreeNode; tz: string; token
                   ) : <span className="tree-leaf" aria-hidden="true" />}
                   {(n.thread?.model ?? n.agent?.model) && <ModelName model={(n.thread?.model ?? n.agent?.model)!} showName={false} />}
                   <span className="tree-title">{n.title}</span>
+                  {onPath && <span className="tree-path-mark" title="On an observed critical path"><span aria-hidden="true">◆</span><span className="sr-only">, observed critical path</span></span>}
                   {n.agent?.status === 'failed' && <span className="tree-failed" title="This sub-agent failed"><XCircle size={12} aria-hidden="true" /><span className="sr-only">, failed</span></span>}
                 </span>
                 <span className="tree-track" aria-hidden="true">
                   {n.depth === 0 && hasTimes && <span className="tree-bar tree-bar-envelope" style={{ insetInlineStart: 0, inlineSize: '100%' }} />}
-                  {n.depth > 0 && left !== null && (right !== null
-                    ? <span className={n.agent?.status === 'failed' ? 'tree-bar tree-bar-failed' : 'tree-bar'} style={{ insetInlineStart: `${left}%`, inlineSize: `${Math.max(0.5, right - left)}%` }} />
-                    : <span className="tree-bar tree-bar-open" style={{ insetInlineStart: `${left}%`, inlineSize: '3%' }} />)}
+                  {n.depth > 0 && hasTimes && spans.map((span, index) => {
+                    if (span.start === null) return null;
+                    const left = axis.at(span.start);
+                    const right = span.end !== null && span.end >= span.start ? axis.at(span.end) : null;
+                    return right !== null
+                      ? <span key={index} className={n.agent?.status === 'failed' ? 'tree-bar tree-bar-failed' : 'tree-bar'} style={{ insetInlineStart: `${left}%`, inlineSize: `${Math.max(0.5, right-left)}%` }} />
+                      : <span key={index} className="tree-bar tree-bar-open" style={{ insetInlineStart: `${left}%`, inlineSize: '3%' }} />;
+                  })}
                 </span>
                 <span className="tree-time">
                   {n.depth === 0 ? <span className="fine">{isParent ? `${fmtInt(n.children.length)} direct` : ''}</span>
@@ -263,9 +280,10 @@ function TreeView({ root, tz, tokens, win }: { root: TreeNode; tz: string; token
           })}
         </div>
         <p className="fine pad tree-legend">
-          <span className="tree-key" /> Recorded run
-          <span className="tree-key tree-key-open" /> No recorded end
-          <span className="tree-key tree-key-envelope" /> Root span
+          <span className="tree-legend-item"><span className="tree-path-mark" aria-hidden="true">◆</span>Observed critical path</span>
+          <span className="tree-legend-item"><span className="tree-key" />Recorded run</span>
+          <span className="tree-legend-item"><span className="tree-key tree-key-open" />No recorded end</span>
+          <span className="tree-legend-item"><span className="tree-key tree-key-envelope" />Root span</span>
         </p>
       </Panel>
 
@@ -276,14 +294,14 @@ function TreeView({ root, tz, tokens, win }: { root: TreeNode; tz: string; token
           <div><dt>Started</dt><dd>{selected.start ? `${fmtDay(new Date(selected.start).toISOString(), tz)} ${fmtClock(new Date(selected.start).toISOString(), tz)}` : <Unknown label="Unknown" />}</dd></div>
           {selected.depth > 0 && <div><dt>Time</dt><dd>{selected.agent?.duration != null ? fmtDuration(selected.agent.duration) : <Unknown label="Unknown" why="No completion time recorded." />}</dd></div>}
           {selected.depth > 0 && <div><dt>Result delivered</dt><dd>{selected.agent?.returned == null ? <Unknown label="Not recorded" why="No explicit delivery record. This does not mean the result was lost." /> : selected.agent.returned ? <Tag>Acknowledged</Tag> : <Tag tone="warn">Not acknowledged</Tag>}</dd></div>}
-          <div><dt>{win ? 'Tokens here' : 'Tokens'}</dt><dd><AtLeast on={short(selected) && !!tokens.get(selected.key)?.total} /><Tokens v={tokens.get(selected.key)?.total} why="No provider turn with a reported total is recorded for this thread here." /></dd></div>
+          <div><dt>{win ? 'Tokens here' : 'Tokens'}</dt><dd><AtLeast on={short(selected) && !!tokens.get(tokenKey(selected))?.total} /><Tokens v={tokens.get(tokenKey(selected))?.total} why="No provider turn with a reported total is recorded for this thread here." /></dd></div>
           {selected.evidence && <div><dt>Edge evidence</dt><dd>{EVIDENCE[selected.evidence]}</dd></div>}
           {selected.missingParent && <div><dt>Parent</dt><dd><Tag tone="warn">Recorded, not imported</Tag></dd></div>}
           {selected.depth === 0 && <div><dt>{win ? 'Direct sub-agents, whole tree' : 'Direct sub-agents'}</dt><dd>{fmtInt(selected.children.length)}</dd></div>}
         </dl>
         {agentText?.task && <TextBlock label="Task" text={agentText.task} />}
         {agentText?.result && <TextBlock label="Result" text={agentText.result} />}
-        {selected.thread && <AppLink className="btn" href={hrefPage('Threads', { id: selected.thread.source_id })}><ExternalLink size={14} aria-hidden="true" /> Open thread</AppLink>}
+        {selected.thread && <AppLink className="btn" href={hrefPage('Threads', { id: selected.thread.source_id, instance: selected.thread.instance_id })}><ExternalLink size={14} aria-hidden="true" /> Open thread</AppLink>}
       </Panel>
     </div>
   );

@@ -1,8 +1,6 @@
 import { hasTurnUsage } from '../lib/entities';
 import { Fragment, useMemo, useState } from 'react';
 import { modelIcon, toolIcon } from '../lib/icons';
-import { useModelSlots } from '../lib/data';
-import { seriesColor } from '../lib/modelColors';
 import { Bot, ChevronRight, Coins, FileText, Globe, MessageSquare, MessageSquareReply, Play, Wrench, type LucideIcon } from 'lucide-react';
 import { ActivityHeatmap, ColumnChart } from '../components/charts';
 import { Pager } from '../components/DataTable';
@@ -237,7 +235,6 @@ function WorkGroup({ rows, tz, href }: { rows: Entity[]; tz: string; href: Href 
 }
 
 function ModelGlyph({ model }: { model: string }) {
-  const slots = useModelSlots();
   const Icon = modelIcon(model);
-  return <Icon size={13} aria-hidden="true" style={{ color: seriesColor(slots.get(model)) }} />;
+  return <Icon size={13} aria-hidden="true" />;
 }

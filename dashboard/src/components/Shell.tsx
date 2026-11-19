@@ -5,9 +5,10 @@ import { useIsFetching, useQueryClient } from '@tanstack/react-query';
 import {
   Activity, CalendarDays, CircleGauge, Cpu, Database, Filter, FolderKanban, Keyboard, LayoutDashboard, MessagesSquare,
   Network, RefreshCw, Scale, Search, Settings as SettingsIcon, ShieldCheck, Wrench, X, Folder } from 'lucide-react';
-import { useFilters, useHealth, useLatestRecord, useModels, useProjects, useQuota, useThreads, useUsage } from '../lib/data';
+import { useCollectorReadiness, useFilters, useHealth, useLatestRecord, useMinute, useModels, useProjects, useQuota, useThreads, useUsage } from '../lib/data';
+import { collectionNotice } from '../lib/collection';
 import { QUOTA_LOW } from '../lib/quota';
-import { cleanSearch, PAGE_SCOPE, readDate, zoomOutPatch } from '../lib/filters';
+import { cleanSearch, PAGE_SCOPE, RUN_STATUSES, readDate, zoomOutPatch } from '../lib/filters';
 import { fmtDateTime, fmtRelative, localParts, repairText, zonedDayStart } from '../lib/format';
 import { nextDay } from '../lib/timeWindow';
 import { useSettings } from '../lib/settings';
@@ -89,7 +90,7 @@ function FilterBar() {
   const { timezone } = useSettings();
   const filters = useFilters();
   const projects = useProjects();
-  const needsLists = page !== 'Overview';
+  const needsLists = true;
   const models = useModels({}, needsLists);
   const machines = useUsage('machines', {}, needsLists);
   const [open, setOpen] = useState(false);
@@ -111,15 +112,15 @@ function FilterBar() {
     return p ? repairText(String(p.data?.name ?? id)) : id;
   };
 
-  const activeCount = [filters.project, filters.model, filters.instance, params.get('range') || params.get('since') || params.get('until'), params.get('pick')].filter(Boolean).length;
+  const activeCount = (scope === 'none' ? [filters.instance, filters.status] : [filters.project, filters.model, filters.instance, filters.status, params.get('range') || params.get('since') || params.get('until'), params.get('pick')]).filter(Boolean).length;
   // On the overview a row is the filter, so these controls only appear where a page has no rows of its own to click.
   const onOverview = page === 'Overview';
   // Clear takes away what narrows the scope and keeps the time chosen. With nothing else left, it puts the time back to the default.
-  const scoped = !!(filters.project || filters.model || filters.instance || params.get('pick'));
+  const scoped = !!(filters.project || filters.model || filters.instance || filters.status || params.get('pick'));
   const clear = () => {
     setShowDates(false);
     set(scoped
-      ? { project: null, model: null, instance: null, pick: null, offset: null }
+      ? { project: null, model: null, instance: null, run_status: null, pick: null, offset: null }
       : { range: null, since: null, until: null, zs: null, ze: null, track: null, rp: null, up: null, offset: null });
   };
   const setRange = (v: string) => set({ range: v, since: null, until: null, zs: null, ze: null, track: null, rp: null, up: null, offset: null });
@@ -137,17 +138,16 @@ function FilterBar() {
     set({ ...ends, range: null, zs: null, ze: null, track: null, rp: null, offset: null });
   };
 
-  if (scope === 'none') {
-    return <div className="filterbar filterbar-note"><Filter size={14} aria-hidden="true" /> Whole database. Filters do not apply here.</div>;
-  }
 
   return (
     <div className="filterbar" data-open={open}>
+      {scope !== 'none' && <>
       <TimeSlider />
       <Segmented
         label="Time range" value={rangeValue} onChange={setRange}
         options={[{ value: 'all', label: 'All' }, { value: '1h', label: '1h' }, { value: '6h', label: '6h' }, { value: '24h', label: '24h' }, { value: '7d', label: '7d' }, { value: '30d', label: '30d' }]}
       />
+      </>}
       {!onOverview && (
         <button type="button" className="btn filter-toggle" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
           <Filter size={14} aria-hidden="true" /> Filters{activeCount ? ` (${activeCount})` : ''}
@@ -158,8 +158,7 @@ function FilterBar() {
         {onOverview ? <>
           {filters.project && <button type="button" className="scope-chip" onClick={() => set({ project: null, offset: null })} title="Remove this filter"><Folder size={13} aria-hidden="true" />{projectName(filters.project)}<X size={13} aria-hidden="true" /></button>}
           {filters.model && <button type="button" className="scope-chip mono" onClick={() => set({ model: null, offset: null })} title="Remove this filter">{filters.model}<X size={13} aria-hidden="true" /></button>}
-          {filters.instance && <button type="button" className="scope-chip" onClick={() => set({ instance: null, offset: null })} title="Remove this filter">{filters.instance}<X size={13} aria-hidden="true" /></button>}
-        </> : <>
+        </> : scope !== 'none' ? <>
         <button type="button" className={showDates ? 'icon-btn is-on' : 'icon-btn'} aria-expanded={showDates} aria-label="Exact dates" title="Exact dates" onClick={() => setShowDates((v) => !v)}>
           <CalendarDays size={15} aria-hidden="true" />
         </button>
@@ -180,13 +179,15 @@ function FilterBar() {
           options={[{ value: '', label: 'All models' }, ...(models.data ?? []).flatMap((m) => (m.model ? [{ value: m.model, label: m.model }] : [])),
             ...(filters.model && !models.data?.some((m) => m.model === filters.model) ? [{ value: filters.model, label: filters.model }] : [])]}
         />}
-        {(instances.length > 1 || filters.instance) && (
-          <SelectField
-            label="Instance" hideLabel value={filters.instance ?? ''} onChange={(v) => set({ instance: v, offset: null })}
-            options={[{ value: '', label: 'All instances' }, ...instances.map((i) => ({ value: i, label: i })), ...(filters.instance && !instances.includes(filters.instance) ? [{ value: filters.instance, label: filters.instance }] : [])]}
-          />
-        )}
-        </>}
+        </> : null}
+        <SelectField
+          label="Machine" hideLabel value={filters.instance ?? ''} onChange={(v) => set({ instance: v, id: null, root: null, node: null, offset: null })}
+          options={[{ value: '', label: 'All machines' }, ...instances.map((i) => ({ value: i, label: i })), ...(filters.instance && !instances.includes(filters.instance) ? [{ value: filters.instance, label: filters.instance }] : [])]}
+        />
+        <SelectField
+          label="Run status" hideLabel value={filters.status ?? ''} onChange={(v) => set({ run_status: v, id: null, root: null, node: null, offset: null })}
+          options={[{ value: '', label: 'All run statuses' }, ...RUN_STATUSES.map((value) => ({ value, label: value[0].toUpperCase() + value.slice(1) }))]}
+        />
         {activeCount > 0 && <button type="button" className="btn btn-quiet" onClick={clear}><X size={14} aria-hidden="true" /> Clear</button>}
       </div>, slot)}
     </div>
@@ -270,9 +271,12 @@ function ShortcutsDialog({ open, onClose }: { open: boolean; onClose: () => void
 export { isTypingTarget };
 
 export function Shell({ children }: { children: ReactNode }) {
-  const { page, go, params } = useUrl();
-  const { density } = useSettings();
+  const { page, go, params, hrefPage } = useUrl();
+  const { density, timezone } = useSettings();
   const health = useHealth();
+  const readiness = useCollectorReadiness();
+  const now = useMinute();
+  const notice = collectionNotice(readiness.data?.collector, readiness.data?.poll_seconds, now);
   const searchRef = useRef<HTMLInputElement>(null);
   const mainRef = useRef<HTMLElement>(null);
   const [help, setHelp] = useState(false);
@@ -335,6 +339,13 @@ export function Shell({ children }: { children: ReactNode }) {
             <button type="button" className="link-btn" onClick={() => health.refetch()}>Check again</button>
           </div>
         )}
+        {!health.isError && (notice || readiness.isError) && <div className="collector-notice" role="status">
+          <strong>{readiness.isError ? 'Collection status is unavailable.' : notice?.title}</strong>
+          <span>{readiness.isError ? 'The service is reachable, but its collector status could not be read.' : notice?.detail}</span>
+          {notice?.lastSync && <span>Last successful read {fmtDateTime(notice.lastSync, timezone)}.</span>}
+          <AppLink href={hrefPage('Data Quality')}>Collection details</AppLink>
+          <button type="button" className="link-btn" onClick={() => readiness.refetch()}>Check again</button>
+        </div>}
         <div className="page" key={page}>{children}</div>
       </main>
       {/* Outside main, so it is the page's footer landmark rather than part of the content. */}

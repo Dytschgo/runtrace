@@ -32,7 +32,7 @@ export default function Projects() {
   const { timezone } = useSettings();
   const f = useFilters();
   const base: Filters = { ...f, model: undefined };
-  const projects = useProjects();
+  const projects = useProjects(f);
   const usage = useUsage('projects', base);
   const turns = useModelTurns({ ...base, project: undefined }, usage.isError);
   const list = useMemo(() => (projects.data ?? []).filter((p) => !f.instance || p.instance_id === f.instance), [projects.data, f.instance]);
@@ -40,7 +40,7 @@ export default function Projects() {
   const needsFallback = usage.isError || (usage.data !== undefined && usage.data.some((u) => u.observed_threads === undefined));
   const stats = useOverviews(list.slice(0, PER_PROJECT).map((p) => ({ ...base, project: p.source_id })), needsFallback);
   // The same turns the Overview reads, so each project's daily trace matches the chart there.
-  const live = useLiveTurns({ instance: f.instance });
+  const live = useLiveTurns({ instance: f.instance, status: f.status });
   // When each project last saw a turn, for the Last active column.
   const lastSeen = useMemo(() => {
     const m = new Map<string, string>();
@@ -104,7 +104,7 @@ export default function Projects() {
       render: (r) => (
         <>
           {/* The same colour the project has on the Overview chart, which comes from its id alone. */}
-          <AppLink className="row-link" href={hrefPatch({ project: f.project === r.id ? null : r.id })} ariaCurrent={f.project === r.id ? 'true' : undefined} title={f.project === r.id ? 'Close this project' : 'Show this project'}><Folder className="project-swatch" size={14} aria-hidden="true" style={{ color: projectColor(r.id), fill: projectColor(r.id), fillOpacity: 0.45 }} />{r.name}<ChevronRight size={14} aria-hidden="true" /></AppLink>
+          <AppLink className="row-link" href={hrefPatch({ project: f.project === r.id ? null : r.id })} ariaCurrent={f.project === r.id ? 'true' : undefined} title={f.project === r.id ? 'Close this project' : 'Show this project'}><Folder className="project-swatch" size={14} aria-hidden="true"  />{r.name}<ChevronRight size={14} aria-hidden="true" /></AppLink>
           {r.alias && r.alias !== r.name && <span className="project-sub mono" title={r.alias}>{r.alias.split('/').slice(-2).join('/')}</span>}
         </>
       ),
@@ -118,7 +118,19 @@ export default function Projects() {
         </span>
       ),
     }] : []),
-    { key: 'trend', header: 'Tokens per day', render: (r) => (trend.get(r.id)?.some((v) => v > 0) ? <span className="trend-cell" style={{ color: projectColor(r.id) }} title={`Peak ${fmtCompact(Math.max(...trend.get(r.id)!))} tokens in a day; all rows share one scale`}><Sparkline values={trend.get(r.id)!} max={trendMax} label={`${r.name}, tokens per day`} /></span> : <span className="dim" aria-label="No tokens in this window">·</span>) },
+    { key: 'trend', header: 'Tokens per day', render: (r) => {
+      const values = trend.get(r.id);
+      if (values?.some((v) => v > 0)) return <span className="trend-cell" style={{ color: projectColor(r.id) }} title={`Peak ${fmtCompact(Math.max(...values))} reported tokens in a loaded day; all rows share one scale`}><Sparkline values={values} max={trendMax} label={`${r.name}, reported tokens per day from loaded readings`} /></span>;
+      if (loading) return <span className="fine" role="status" aria-label="Loading">…</span>;
+      if (r.countsFailed) return <NotLoaded />;
+      if (r.turns === 0) return <span className="dim">No activity</span>;
+      if (r.tokens === 0 && !r.atLeast) return <span className="dim" title="The project aggregate reports zero tokens in this window">0</span>;
+      if (r.tokens === null || r.atLeast && r.tokens === 0) return <Unknown label="Not reported" why="No complete token total was reported for this project in this window." />;
+      const state = live.coverage(f.since ? Date.parse(f.since) : -Infinity);
+      if (state === 'loading') return <span className="fine" role="status" aria-label="Loading daily readings">…</span>;
+      if (state === 'failed') return <NotLoaded />;
+      return <Unknown label="No daily readings" why="The project total is known, but no daily token totals are present in the loaded readings." />;
+    } },
     { key: 'threads', header: 'Threads', align: 'end', sort: (r) => r.threads, render: (r) => (r.threads ? <AppLink className="link" href={hrefPage('Threads', { project: r.id })} ariaLabel={`${fmtInt(r.threads)} threads in ${r.name}`}>{fmtInt(r.threads)}</AppLink> : num(r.threads, r.countsFailed)) },
     { key: 'prompts', header: 'Prompts', align: 'end', sort: (r) => r.prompts, render: (r) => num(r.prompts, r.countsFailed) },
 
@@ -156,7 +168,7 @@ export default function Projects() {
           {!loading && <ShareStrip label="Tokens by project" legend={8} note={rows.some((r) => r.atLeast) ? 'Some projects are lower bounds (≥ below)' : undefined} items={rows.map((r) => ({ key: r.id, text: r.name, label: r.name, value: r.tokens ?? 0, color: projectColor(r.id), dashed: dashedIds.has(r.id), href: hrefPatch({ project: r.id }) }))} />}
         </Panel>
       )}
-      <Panel title="All projects" hint="Identified by T3 project id. Names come from the source and are redacted. Open a project for its models, branches and threads." flush>
+      <Panel title="All projects" hint="Identified by T3 project id. Names come from the source and are redacted. Daily traces use only loaded readings with reported totals and can be incomplete. Open a project for its models, branches and threads." flush>
         <Async query={projects} skeleton={<div className="pad"><SkeletonRows label="Loading projects" /></div>} isEmpty={() => !list.length} empty={<NoRecords />}>
           {() => <DataTable rows={showIdle || !!f.project ? rows : active} columns={columns} rowKey={(r) => r.id} caption="Projects" defaultSort={hasTokens ? { key: 'tokens', dir: 'desc' } : { key: 'prompts', dir: 'desc' }} exportName="runtrace-projects" />}
         </Async>
@@ -226,7 +238,7 @@ function ProjectDetail({ projectId, name, base }: { projectId: string; name: str
               <ul className="list">
                 {primaries.slice(0, 6).map((t) => (
                   <li key={t.id}>
-                    <AppLink className="list-title" href={hrefPage('Threads', { id: t.source_id, project: projectId })}>{t.title}</AppLink>
+                    <AppLink className="list-title" href={hrefPage('Threads', { id: t.source_id, instance: t.instance_id, project: projectId })}>{t.title}</AppLink>
                     <div className="list-meta">
                       <span>{fmtShortDateTime(t.occurred_at, timezone)}</span>
                       {t.branch && <span className="mono">{t.branch}</span>}

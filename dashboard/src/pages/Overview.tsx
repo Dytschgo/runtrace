@@ -1,3 +1,4 @@
+import { sourceKey } from '../lib/entities';
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { ArrowUpRight, Download, GitCompareArrows, ZoomOut } from 'lucide-react';
 import { ActivityHeatmap } from '../components/heatmap';
@@ -53,7 +54,7 @@ export default function Overview() {
   const hourly = useHourly(f);
   const firstEver = useHourly({ project: f.project, instance: f.instance, model: f.model });
   // What is known runs from the first record of all, whatever is filtered, to the last capture. Outside that nothing can be said, inside it a zero is a zero.
-  const allHours = useHourly({ instance: f.instance });
+  const allHours = useHourly({ instance: f.instance, status: f.status });
   const readiness = useCollectorReadiness();
   const slots = useModelSlots();
   // Every turn in scope, unfiltered by time, so the headline, list and chart agree and follow the slider without a request per day moved.
@@ -118,7 +119,7 @@ export default function Overview() {
   const agentRows = agents.data?.rows;
   const childCounts = useMemo(() => {
     const m = new Map<string, number>();
-    for (const a of agentRows ?? []) m.set(a.thread_id, (m.get(a.thread_id) ?? 0) + 1);
+    for (const a of agentRows ?? []) m.set(sourceKey(a.instance_id, a.thread_id), (m.get(sourceKey(a.instance_id, a.thread_id)) ?? 0) + 1);
     return m;
   }, [agentRows]);
 
@@ -126,10 +127,15 @@ export default function Overview() {
   const modelRows = useMemo(() => (models.data ?? []).filter((m) => !f.model || m.model === f.model), [models.data, f.model]);
   const summary = useMemo(() => tokenSummary(modelRows), [modelRows]);
 
-  const projectName = useMemo(() => {
-    const names = new Map((projects.data ?? []).map((p) => [p.source_id, repairText(String(p.data?.name ?? p.source_id))]));
-    return (id: string) => names.get(id) ?? null;
+  const projectNameForMachine = useMemo(() => {
+    const names = new Map((projects.data ?? []).map((p) => [sourceKey(p.instance_id, p.source_id), repairText(String(p.data?.name ?? p.source_id))]));
+    return (instance: string, id: string) => names.get(sourceKey(instance, id)) ?? null;
   }, [projects.data]);
+
+  const projectName = (id: string) => {
+    const names = new Set((projects.data ?? []).filter((p) => p.source_id === id).map((p) => repairText(String(p.data?.name ?? id))));
+    return names.size === 1 ? [...names][0] : id;
+  };
 
   const scoped = useMemo(() => turnRows.filter((t) => !f.model || t.model === f.model), [turnRows, f.model]);
   const firstTurn = useMemo(() => scoped.reduce((m, t) => Math.min(m, turnMs(t)), Infinity), [scoped]);
@@ -330,16 +336,16 @@ export default function Overview() {
     const inLive = windowTest(settled);
     for (const t of picks.size ? chartTurns : scoped) {
       if (!inLive(turnMs(t))) continue;
-      const e = m.get(t.thread_id) ?? { last: t.occurred_at, turns: 0, tokens: null, missing: false };
+      const e = m.get(sourceKey(t.instance_id, t.thread_id)) ?? { last: t.occurred_at, turns: 0, tokens: null, missing: false };
       e.turns += 1;
       if (t.occurred_at > e.last) e.last = t.occurred_at;
       if (t.total !== null) e.tokens = (e.tokens ?? 0) + t.total; else e.missing = true;
-      m.set(t.thread_id, e);
+      m.set(sourceKey(t.instance_id, t.thread_id), e);
     }
     return m;
   }, [scoped, chartTurns, picks.size, settled]);
   const inWindow = useMemo(
-    () => (threadRows ?? []).filter((t) => activity.has(t.source_id) || (!picks.size && inTimeRange(t.occurred_at, settled) && (!f.model || t.model === f.model))),
+    () => (threadRows ?? []).filter((t) => activity.has(sourceKey(t.instance_id, t.source_id)) || (!picks.size && inTimeRange(t.occurred_at, settled) && (!f.model || t.model === f.model))),
     [threadRows, activity, settled, f.model, picks.size],
   );
   const mainThreads = useMemo(() => inWindow.filter((t) => t.type !== 'child').length, [inWindow]);
@@ -461,7 +467,7 @@ export default function Overview() {
       )}
 
       {(!overview.isError || picks.size > 0) && (
-        <KeyTotals counts={countsLoad} previous={prev} comparable={comparable} windowed={!!(f.since || f.until)} turnsSeen={turnRows.length > 0} unscopable={unscopable} unknown={unknownWindow} stale={!!draft || overview.isPlaceholderData} />
+        <KeyTotals counts={countsLoad} previous={prev} comparable={comparable} windowed={!!(f.since || f.until)} turnsSeen={turnRows.length > 0} unscopable={unscopable} unknown={unknownWindow} stale={countsLoad.state === 'ready' && (!!draft || (!picks.size && overview.isPlaceholderData))} />
       )}
 
       {unknownWindow ? (
@@ -484,7 +490,7 @@ export default function Overview() {
             </Panel>
           </div>
 
-          <RecentThreadsPanel threads={threads} inWindow={inWindow} activity={activity} turns={turnRows} agentsByThread={childCounts} slots={slots} projectName={projectName} />
+          <RecentThreadsPanel threads={threads} inWindow={inWindow} activity={activity} turns={turnRows} agentsByThread={childCounts} slots={slots} projectName={projectNameForMachine} />
 
           <div className="split split-even">
             <ToolsPanel aggregates={toolAggregates} sample={tools} picked={picks.size ? pickedTools : null} />

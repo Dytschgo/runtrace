@@ -1,6 +1,6 @@
 # Dashboard implementation contract (2026-11-06)
 
-Source workspace: C:/Users/DylanFerraro/.t3/projects/runtrace. Production runtime/data: D:/Code/Runtrace. Backend coordinator owns crates, migrations, config, scripts and data. Dashboard implementer exclusively owns dashboard/** and docs/dashboard-design.md; do not modify production data or runtime.
+Source workspace: this repository. Production runtime/data: D:/Code/Runtrace. Backend coordinator owns crates, migrations, config, scripts and data. Dashboard implementer exclusively owns dashboard/** and docs/dashboard-design.md; do not modify production data or runtime.
 
 Keep React/TypeScript/Vite/TanStack Query/Recharts. Existing local API envelope stays compatible: `{data:[], capture_quality, limit, offset, timezone, null_semantics}`. Entity rows contain id, source_id, kind, instance_id, project_id, thread_id, run_id, occurred_at, capture_quality and data. Optional new data fields include duration_ms and per-turn tokens; absent/null remain unknown. Existing endpoints: overview (kind/count records), activity/hourly (hour/prompts), models (model/observed_runs/calls=null), projects, threads, agents, tool-calls, timeline, search, storage, data-quality, quota/current/windows/resets. Dynamic thread timeline uses /threads/{source_id}/timeline or timeline?id=<source-id>. Filters: project, model, instance, since, until, q, id, limit<=500, offset. New analytics additions must degrade gracefully when unavailable. Backend may add richer aggregate fields while retaining data arrays.
 

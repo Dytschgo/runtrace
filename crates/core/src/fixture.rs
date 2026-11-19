@@ -537,7 +537,13 @@ impl<'a> Fx<'a> {
         } else {
             "completed"
         };
-        let data = json!({"duration_ms":(end - r.at).num_milliseconds(),"provider":r.model.map(driver).unwrap_or(r.unnamed_driver),"requested_model":r.model,"resolved_model":null,"status":status,"started_at":iso(r.at),"completed_at":iso(end),"user_message_id":prompt,"input_tokens":null,"cached_input_tokens":null,"output_tokens":null,"reasoning_tokens":null,"total_tokens":null});
+        let attempts = if self.serial.is_multiple_of(11) {
+            json!({"coverage":"unsupported","observed":null,"reattempts":null,"steering_restarts":null})
+        } else {
+            let retries = u64::from(self.serial.is_multiple_of(7));
+            json!({"coverage":"complete","observed":1+retries,"reattempts":retries,"steering_restarts":retries})
+        };
+        let data = json!({"duration_ms":(end - r.at).num_milliseconds(),"provider":r.model.map(driver).unwrap_or(r.unnamed_driver),"requested_model":r.model,"resolved_model":null,"status":status,"started_at":iso(r.at),"completed_at":iso(end),"user_message_id":prompt,"attempts":attempts,"input_tokens":null,"cached_input_tokens":null,"output_tokens":null,"reasoning_tokens":null,"total_tokens":null});
         self.put(
             "run", &run_id, r.project, r.thread, &run_id, r.at, end, data,
         )?;
@@ -1465,6 +1471,13 @@ fn fill(fx: &mut Fx) -> Result<()> {
             "t3_usage_cache",
         )?;
     }
+    // A synthetic overnight observer sleep: remove readings during it so the
+    // visual fixture never claims observations while its observer was asleep.
+    let sleep = fx.day(0, 2, 10);
+    let wake = fx.day(0, 6, 40);
+    let removed=fx.s.conn.execute("DELETE FROM quota_samples WHERE runtrace_time_us(sampled_at)>? AND runtrace_time_us(sampled_at)<?",duckdb::params![sleep.timestamp_micros(),wake.timestamp_micros()])?;
+    *fx.counts.entry("quota_sample".into()).or_default() -= removed as u64;
+    fx.s.set("quota:power",&json!({"state":"ready","fixture":true,"checked_epoch_ms":now.timestamp_millis(),"intervals":[{"sleep_epoch_ms":sleep.timestamp_millis(),"wake_epoch_ms":wake.timestamp_millis(),"source":"windows_power_event"}]}).to_string())?;
     // What T3 last heard from each harness, matching the newest readings above, with a local harness that has no limit,
     // and the two Runtrace checks itself: one with limits and one whose provider sends no figures.
     let window = |window: &str, label: &str, used: f64, reset: DateTime<Utc>, minutes: i64| json!({"window":window,"label":label,"kind":if minutes == 300 {"session"} else {"weekly"},"used_percentage":used,"reset_at":iso(reset),"window_minutes":minutes});

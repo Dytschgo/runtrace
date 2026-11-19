@@ -1,3 +1,4 @@
+import { sourceKey } from './entities';
 import { contentField, durationMs, parseContent, toAgent, toRun, toTurn, type AgentRow, type ThreadRow } from './entities';
 import { cleanText, fmtDuration } from './format';
 import { flatten, mergeIntervals, type TreeNode } from './tree';
@@ -196,11 +197,11 @@ export function packRows(items: { x0: number; x1: number }[]): { rows: number[];
 
 /** A node for a thread that is not in the forest: its sub-agents come from the timeline alone. */
 export function fallbackRoot(id: string, thread: ThreadRow | null, agentEntities: Entity[]): TreeNode {
-  const root: TreeNode = { key: id, title: thread?.title ?? 'Thread', thread, agent: null, children: [], depth: 0, evidence: null, missingParent: null, cycle: false, start: ms(thread?.occurred_at), end: null };
+  const root: TreeNode = { key: thread?.id ?? id, title: thread?.title ?? 'Thread', thread, agent: null, children: [], depth: 0, evidence: null, missingParent: null, cycle: false, start: ms(thread?.occurred_at), end: null };
   for (const e of agentEntities) {
     const a = toAgent(e);
     root.children.push({
-      key: a.child ?? `agent:${a.source_id}`, title: a.task?.split('\n')[0].slice(0, 120) || 'Sub-agent', thread: null, agent: a, children: [], depth: 1,
+      key: a.child ?? `agent:${a.id}`, title: a.task?.split('\n')[0].slice(0, 120) || 'Sub-agent', thread: null, agent: a, children: [], depth: 1,
       evidence: 'agent_record', missingParent: null, cycle: false, start: ms(a.started) ?? ms(a.occurred_at), end: ms(a.completed),
     });
   }
@@ -209,14 +210,18 @@ export function fallbackRoot(id: string, thread: ThreadRow | null, agentEntities
 }
 
 export function findNode(roots: TreeNode[], key: string): TreeNode | null {
-  for (const r of roots) for (const n of flatten(r)) if (n.key === key) return n;
-  return null;
+  const nodes = roots.flatMap((r) => flatten(r));
+  const exact = nodes.find((n) => n.key === key);
+  if (exact) return exact;
+  const legacy = nodes.filter((n) => n.thread?.source_id === key);
+  return legacy.length === 1 ? legacy[0] : null;
 }
 
 const STUB = 0.025;
 
 export function buildStory(root: TreeNode, events: Entity[], agentsByChild?: Map<string, AgentRow>): Story {
-  const own = events.filter((e) => e.kind !== 'thread');
+  const instance = root.thread?.instance_id ?? root.agent?.instance_id;
+  const own = events.filter((e) => e.kind !== 'thread' && (!instance || e.instance_id === instance));
   const nodes = flatten(root);
   const parentOf = new Map<string, string>();
   for (const n of nodes) for (const c of n.children) parentOf.set(c.key, n.key);
@@ -238,7 +243,11 @@ export function buildStory(root: TreeNode, events: Entity[], agentsByChild?: Map
   }
   // One delegated thread can receive several tasks (a send after the first). Every agent record for a lane is kept.
   const subs = nodes.filter((n) => n.key !== root.key);
-  const nodeKeys = new Set(nodes.map((n) => n.key));
+  const nodeForAgent = (e: Entity) => nodes.find((n) => {
+    const child = typeof e.data?.child_thread_id === 'string' ? e.data.child_thread_id : null;
+    return (child && n.thread?.source_id === child && n.thread.instance_id === e.instance_id)
+      || (n.agent?.source_id === e.source_id && n.agent.instance_id === e.instance_id);
+  });
   const sendsByLane = new Map<string, AgentRow[]>();
   const addSend = (key: string, a: AgentRow) => {
     const list = sendsByLane.get(key) ?? [];
@@ -246,13 +255,13 @@ export function buildStory(root: TreeNode, events: Entity[], agentsByChild?: Map
     sendsByLane.set(key, list);
   };
   for (const n of subs) {
-    const a = n.agent ?? (n.thread ? agentsByChild?.get(n.thread.source_id) ?? null : null);
+    const a = n.agent ?? (n.thread ? agentsByChild?.get(sourceKey(n.thread.instance_id, n.thread.source_id)) ?? null : null);
     if (a) addSend(n.key, a);
   }
   for (const e of own) {
     if (e.kind !== 'agent') continue;
-    const child = typeof e.data?.child_thread_id === 'string' ? e.data.child_thread_id : `agent:${e.source_id}`;
-    if (nodeKeys.has(child)) addSend(child, toAgent(e));
+    const node = nodeForAgent(e);
+    if (node) addSend(node.key, toAgent(e));
   }
   for (const list of sendsByLane.values()) {
     list.sort((p, q) => (ms(p.started) ?? ms(p.occurred_at) ?? 0) - (ms(q.started) ?? ms(q.occurred_at) ?? 0));
@@ -283,7 +292,7 @@ export function buildStory(root: TreeNode, events: Entity[], agentsByChild?: Map
   });
   const packed = packRows(spans);
   const laneOf = (n: TreeNode, row: number, x0: number | null, x1: number | null, sends: Send[]): Lane => {
-    const last = sends[sends.length - 1]?.agent ?? n.agent ?? (n.thread ? agentsByChild?.get(n.thread.source_id) ?? null : null);
+    const last = sends[sends.length - 1]?.agent ?? n.agent ?? (n.thread ? agentsByChild?.get(sourceKey(n.thread.instance_id, n.thread.source_id)) ?? null : null);
     const start = sends.length ? sends[0].start : n.start;
     const latest = sends.length ? sends[sends.length - 1] : null;
     const end = latest ? latest.end : n.end;
@@ -350,8 +359,7 @@ export function buildStory(root: TreeNode, events: Entity[], agentsByChild?: Map
       push({ ...base, kind: 'external', line: 'An external request arrived', text: null });
     } else if (e.kind === 'agent') {
       // Lanes come from the tree. The event is kept only for a sub-agent the tree does not know.
-      const child = typeof d.child_thread_id === 'string' ? d.child_thread_id : `agent:${e.source_id}`;
-      if (laneKeys.has(child)) continue;
+      if (nodeForAgent(e)) continue;
       const a = toAgent(e);
       push({ ...base, kind: 'spawn', failed: false, model: a.model, status: a.status, line: `Delegated to ${a.model ?? 'a sub-agent'}${quote(a.task)}`, text: a.task });
     }

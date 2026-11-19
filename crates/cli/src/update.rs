@@ -117,7 +117,16 @@ pub fn apply(c: &Config, config_path: &Path, restart: bool) -> Result<()> {
         bail!("The download does not match its published checksum, so nothing was changed");
     }
     let was_running = control::stop(c)?;
-    backup(c, tag)?;
+    if let Err(error) = backup(c, tag) {
+        if was_running && let Err(restart_error) = control::start(c, config_path, false) {
+            return Err(error.context(format!(
+                "Backup failed; the previous service also could not restart: {restart_error}"
+            )));
+        }
+        return Err(
+            error.context("Update cancelled before replacement; the previous program is installed")
+        );
+    }
     let exe = std::env::current_exe()?;
     let staged = exe.with_extension("download");
     std::fs::write(&staged, &bin)?;
@@ -150,32 +159,122 @@ fn backups_dir(c: &Config) -> std::path::PathBuf {
     control::run_dir(c).join("backups")
 }
 
-/// Copies the database (with its write-ahead log) before an update, and keeps only the newest such copy.
+fn completed_backup_time(path: &Path) -> Option<std::time::SystemTime> {
+    if !path.file_name()?.to_str()?.starts_with("before-update-")
+        || path.join("backup.incomplete").exists()
+    {
+        return None;
+    }
+    let marker = path.join("backup.complete.json");
+    let value: Value = serde_json::from_str(&std::fs::read_to_string(&marker).ok()?).ok()?;
+    let database = Path::new(value["database"].as_str()?);
+    if value["format"].as_u64() != Some(1)
+        || database.parent() != Some(Path::new("database"))
+        || database.file_name().is_none()
+        || !path.join(database).is_file()
+    {
+        return None;
+    }
+    std::fs::metadata(marker).ok()?.modified().ok()
+}
+
+/// Copies the database, WAL and registered cold files before an update.
+/// Retains its completed predecessor and older copies used by restored data.
 fn backup(c: &Config, tag: &str) -> Result<()> {
+    backup_at(c, tag, &control::stamp())
+}
+
+fn backup_at(c: &Config, tag: &str, stamp: &str) -> Result<()> {
     let db = Path::new(&c.storage.duckdb_path);
     if !db.exists() {
         return Ok(());
     }
     let root = backups_dir(c);
-    let dir = root.join(format!(
-        "before-update-{VERSION}-to-{}-{}",
-        tag.trim_start_matches('v'),
-        control::stamp()
-    ));
-    std::fs::create_dir_all(&dir)?;
-    for file in [db.to_path_buf(), db.with_extension("duckdb.wal")] {
-        if let (true, Some(n)) = (file.exists(), file.file_name()) {
-            std::fs::copy(&file, dir.join(n))?;
+    std::fs::create_dir_all(&root)?;
+    let (major, minor, patch) = parse_version(tag).context("Invalid backup target version")?;
+    let mut selected = None;
+    for attempt in 0..1000 {
+        let candidate = root.join(format!(
+            "before-update-{VERSION}-to-{major}.{minor}.{patch}-{stamp}-{}-{attempt}",
+            std::process::id()
+        ));
+        match std::fs::create_dir(&candidate) {
+            Ok(()) => {
+                selected = Some(candidate);
+                break;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error.into()),
         }
     }
-    println!("Backed up the database to {}", dir.display());
+    let dir = selected.context("Could not allocate a unique backup generation")?;
+    std::fs::write(dir.join("backup.incomplete"), b"Backup in progress\n")?;
+    let database_directory = dir.join("database");
+    std::fs::create_dir(&database_directory)?;
+    let mut wal = db.as_os_str().to_owned();
+    wal.push(".wal");
+    for file in [db.to_path_buf(), std::path::PathBuf::from(wal)] {
+        if let (true, Some(n)) = (file.exists(), file.file_name()) {
+            std::fs::copy(&file, database_directory.join(n))?;
+        }
+    }
+    let copied_database =
+        database_directory.join(db.file_name().context("Database has no filename")?);
+    let source_paths = t3ui_core::cold::make_backup_self_contained(&copied_database, &dir)
+        .context(
+            "The update backup could not be made self-contained; the program was not replaced",
+        )?;
+    let segments = source_paths.len();
+    let completed = dir.join("backup.complete.json");
+    std::fs::write(
+        &completed,
+        json!({"format":1,"database":format!("database/{}",db.file_name().unwrap().to_string_lossy()),"version":VERSION,"target":tag,"cold_segments":segments}).to_string(),
+    )?;
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&completed)?
+        .sync_all()?;
+    std::fs::remove_file(dir.join("backup.incomplete"))?;
+    #[cfg(unix)]
+    {
+        std::fs::File::open(&dir)?.sync_all()?;
+        std::fs::File::open(&root)?.sync_all()?;
+        if let Some(parent) = root.parent() {
+            std::fs::File::open(parent)?.sync_all()?;
+        }
+    }
+    println!(
+        "Backed up the database and {segments} cold segments to {}",
+        dir.display()
+    );
+    let mut previous: Vec<_> = std::fs::read_dir(&root)?
+        .flatten()
+        .filter_map(|entry| {
+            let path = entry.path();
+            if path == dir {
+                return None;
+            }
+            Some((completed_backup_time(&path)?, path))
+        })
+        .collect();
+    previous.sort_unstable();
+    previous.reverse();
+    let predecessor = previous.first().map(|(_, path)| path);
     for old in std::fs::read_dir(&root)?.flatten() {
         let p = old.path();
         if p != dir
+            && predecessor != Some(&p)
+            && completed_backup_time(&p).is_some()
             && p.file_name()
                 .and_then(|n| n.to_str())
                 .is_some_and(|n| n.starts_with("before-update-"))
         {
+            let Ok(resolved) = std::fs::canonicalize(&p) else {
+                continue;
+            };
+            if source_paths.iter().any(|path| path.starts_with(&resolved)) {
+                continue;
+            }
             let _ = std::fs::remove_dir_all(p);
         }
     }
@@ -311,7 +410,7 @@ impl UpdateStatus {
     }
 
     /// The report the dashboard reads. `available` stays a plain flag, as earlier dashboards expect.
-    pub fn to_json(&mut self) -> Value {
+    pub fn report(&mut self) -> Value {
         self.poll();
         let mut v = if self.release.is_object() {
             self.release.clone()
@@ -344,6 +443,245 @@ impl UpdateStatus {
 mod tests {
     use super::*;
 
+    fn backup_fixture(name: &str) -> (tempfile::TempDir, Config) {
+        let temporary = tempfile::tempdir().unwrap();
+        let mut config = Config::load_from(
+            &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../config/default.toml"),
+        )
+        .unwrap();
+        config.storage.duckdb_path = temporary
+            .path()
+            .join("data")
+            .join(name)
+            .to_string_lossy()
+            .into_owned();
+        config.storage.archive_path = temporary
+            .path()
+            .join("archive")
+            .to_string_lossy()
+            .into_owned();
+        config.storage.memory_limit_mb = 128;
+        (temporary, config)
+    }
+
+    fn completed_backup(c: &Config) -> std::path::PathBuf {
+        std::fs::read_dir(backups_dir(c))
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.path())
+            .find(|path| path.join("backup.complete.json").is_file())
+            .unwrap()
+    }
+
+    #[test]
+    fn custom_database_filename_recovers_committed_wal_in_backup() {
+        if let Some(path) = std::env::var_os("RUNTRACE_TEST_BACKUP_WAL_PATH") {
+            let (_temporary, mut config) = backup_fixture("worker.db");
+            config.storage.duckdb_path = std::path::PathBuf::from(path)
+                .to_string_lossy()
+                .into_owned();
+            let source = t3ui_core::storage::Store::open(&config).unwrap();
+            source.conn.execute_batch("CREATE TABLE backup_recovery_probe(value INTEGER); INSERT INTO backup_recovery_probe VALUES(42)").unwrap();
+            // Preserve committed WAL while the OS releases the writer handle.
+            std::process::exit(0);
+        }
+        let (_temporary, config) = backup_fixture("history.db");
+        assert!(
+            Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "update::tests::custom_database_filename_recovers_committed_wal_in_backup"
+                ])
+                .env("RUNTRACE_TEST_BACKUP_WAL_PATH", &config.storage.duckdb_path)
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert!(
+            std::fs::metadata(format!("{}.wal", config.storage.duckdb_path))
+                .unwrap()
+                .len()
+                > 0
+        );
+        backup(&config, "v90.0.0").unwrap();
+        let mut restored = config.clone();
+        restored.storage.duckdb_path = completed_backup(&config)
+            .join("database/history.db")
+            .to_string_lossy()
+            .into_owned();
+        let copy = t3ui_core::storage::Store::open(&restored).unwrap();
+        let value: i32 = copy
+            .conn
+            .query_row("SELECT value FROM backup_recovery_probe", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(value, 42);
+    }
+
+    #[test]
+    fn legacy_database_without_cold_manifest_recovers_independently() {
+        let (temporary, config) = backup_fixture("legacy.db");
+        let source = t3ui_core::storage::Store::open(&config).unwrap();
+        source.conn.execute_batch("DROP TABLE cold_segments; CREATE TABLE backup_recovery_probe(value INTEGER); INSERT INTO backup_recovery_probe VALUES(42)").unwrap();
+        drop(source);
+        backup(&config, "v90.0.0").unwrap();
+        std::fs::rename(
+            &config.storage.duckdb_path,
+            temporary.path().join("unavailable-original.db"),
+        )
+        .unwrap();
+        let mut restored = config.clone();
+        restored.storage.duckdb_path = completed_backup(&config)
+            .join("database/legacy.db")
+            .to_string_lossy()
+            .into_owned();
+        let copy = t3ui_core::storage::Store::open(&restored).unwrap();
+        let value: i32 = copy
+            .conn
+            .query_row("SELECT value FROM backup_recovery_probe", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(value, 42);
+    }
+
+    #[test]
+    fn same_target_and_reserved_database_names_preserve_distinct_complete_backups() {
+        for name in ["backup.complete.json", "backup.incomplete"] {
+            let (_temporary, config) = backup_fixture(name);
+            let source = t3ui_core::storage::Store::open(&config).unwrap();
+            source.conn.execute_batch("CREATE TABLE backup_recovery_probe(value INTEGER); INSERT INTO backup_recovery_probe VALUES(42)").unwrap();
+            drop(source);
+            backup_at(&config, "v90.0.0", "same-second-fixture").unwrap();
+            backup_at(&config, "v90.0.0", "same-second-fixture").unwrap();
+            let copies: Vec<_> = std::fs::read_dir(backups_dir(&config))
+                .unwrap()
+                .flatten()
+                .map(|entry| entry.path())
+                .filter(|path| completed_backup_time(path).is_some())
+                .collect();
+            assert_eq!(
+                copies.len(),
+                2,
+                "same-second attempts must never overwrite a completed generation"
+            );
+            for directory in copies {
+                let mut restored = config.clone();
+                restored.storage.duckdb_path = directory
+                    .join("database")
+                    .join(name)
+                    .to_string_lossy()
+                    .into_owned();
+                let copy = t3ui_core::storage::Store::open(&restored).unwrap();
+                let value: i32 = copy
+                    .conn
+                    .query_row("SELECT value FROM backup_recovery_probe", [], |row| {
+                        row.get(0)
+                    })
+                    .unwrap();
+                assert_eq!(
+                    value, 42,
+                    "database bytes cannot collide with backup markers"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn rollback_dependencies_and_completed_predecessor_survive_backup_rotation() {
+        let (temporary, config) = backup_fixture("history.duckdb");
+        let source = t3ui_core::storage::Store::open(&config).unwrap();
+        source
+            .put(
+                "local",
+                "instance",
+                "neutral",
+                "",
+                "",
+                "",
+                "2026-01-01T00:00:00Z",
+                "2026-01-01T00:00:00Z",
+                "partial",
+                "v1",
+                json!({"title":"Neutral rollback fixture"}),
+            )
+            .unwrap();
+        t3ui_core::cold::compact(&config, &source).unwrap();
+        drop(source);
+        backup(&config, "v90.0.0").unwrap();
+        let first = completed_backup(&config);
+        std::fs::copy(
+            first.join("database/history.duckdb"),
+            &config.storage.duckdb_path,
+        )
+        .unwrap();
+        backup(&config, "v90.0.1").unwrap();
+        let second = std::fs::read_dir(backups_dir(&config))
+            .unwrap()
+            .flatten()
+            .map(|e| e.path())
+            .find(|p| p != &first)
+            .unwrap();
+        backup(&config, "v90.0.2").unwrap();
+        let third = std::fs::read_dir(backups_dir(&config))
+            .unwrap()
+            .flatten()
+            .map(|e| e.path())
+            .find(|p| p != &first && p != &second)
+            .unwrap();
+        let segment = std::fs::read_dir(first.join("cold"))
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        let unavailable = segment.with_extension("temporarily-unavailable");
+        std::fs::rename(&segment, &unavailable).unwrap();
+        let failed = backup(&config, "v90.0.99");
+        std::fs::rename(&unavailable, &segment).unwrap();
+        assert!(
+            failed.is_err(),
+            "a missing source segment must reject the new backup"
+        );
+        assert!(
+            third.join("backup.complete.json").is_file(),
+            "failure cannot retire the previous completed copy"
+        );
+        let partial = backups_dir(&config).join("before-update-partial-fixture");
+        std::fs::create_dir_all(&partial).unwrap();
+        std::fs::write(partial.join("backup.incomplete"), b"partial").unwrap();
+        std::fs::write(partial.join("backup.complete.json"), b"{}").unwrap();
+        backup(&config, "v90.0.3").unwrap();
+        assert!(
+            first.is_dir(),
+            "active cold paths still depend on this rollback copy"
+        );
+        assert!(
+            third.is_dir(),
+            "the completed predecessor must remain available"
+        );
+        assert!(
+            !second.exists(),
+            "unreferenced older completed copies can rotate"
+        );
+        assert!(
+            partial.is_dir(),
+            "an incomplete attempt cannot replace the predecessor"
+        );
+        std::fs::rename(
+            &config.storage.archive_path,
+            temporary.path().join("unavailable-original-archive"),
+        )
+        .unwrap();
+        let restored = t3ui_core::storage::Store::open(&config).unwrap();
+        t3ui_core::cold::verify(&restored).unwrap();
+        assert_eq!(
+            restored.stats().unwrap()["rows"],
+            json!([{"table":"instance","rows":1}])
+        );
+    }
+
     fn release(newer: bool) -> Result<Value> {
         Ok(
             json!({"current": VERSION, "latest": "9.9.9", "available": newer, "url": "https://example.test/r"}),
@@ -353,14 +691,14 @@ mod tests {
     #[test]
     fn checks_move_between_up_to_date_and_available_and_a_failure_forgets_nothing() {
         let mut u = UpdateStatus::new(true);
-        assert_eq!(u.to_json()["state"], "not_checked");
+        assert_eq!(u.report()["state"], "not_checked");
         u.checked(release(true), "t1".into());
         assert_eq!(
-            (u.state, u.to_json()["available"].clone()),
+            (u.state, u.report()["available"].clone()),
             (UpdateState::Available, json!(true))
         );
         u.checked(Err(anyhow::anyhow!("offline")), "t2".into());
-        let j = u.to_json();
+        let j = u.report();
         assert_eq!(
             (
                 j["state"].clone(),
@@ -371,9 +709,9 @@ mod tests {
         );
         u.checked(release(false), "t3".into());
         assert_eq!(u.state, UpdateState::UpToDate);
-        assert!(u.to_json().get("check_failed_at").is_none());
+        assert!(u.report().get("check_failed_at").is_none());
         assert!(matches!(u.may_apply(), Err(ApplyRefused::NothingNewer)));
-        assert_eq!(UpdateStatus::new(false).to_json()["state"], "disabled");
+        assert_eq!(UpdateStatus::new(false).report()["state"], "disabled");
     }
 
     #[test]
@@ -401,10 +739,10 @@ mod tests {
             "a check does not undo an update in progress"
         );
         let deadline = std::time::Instant::now() + Duration::from_secs(15);
-        while u.to_json()["state"] == "applying" && std::time::Instant::now() < deadline {
+        while u.report()["state"] == "applying" && std::time::Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(50));
         }
-        let j = u.to_json();
+        let j = u.report();
         assert_eq!(
             (j["state"].clone(), j["log"].clone()),
             (json!("apply_failed"), json!("update.log"))

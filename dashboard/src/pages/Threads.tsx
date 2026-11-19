@@ -1,5 +1,6 @@
 import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import { ModelName } from '../components/model';
+import { Efficiency } from '../components/Efficiency';
 import { useInfiniteQuery } from '@tanstack/react-query';
 import { ArrowLeft, ChevronRight, CornerDownRight, GitBranch, History, Network, Play } from 'lucide-react';
 import { DataTable, type Column } from '../components/DataTable';
@@ -8,8 +9,8 @@ import { getJson } from '../lib/api';
 import { useAgents, useFilters, useLiveTurns, useModelSlots, useProjects, useThreads, useThreadTokens } from '../lib/data';
 import { seriesColor } from '../lib/modelColors';
 import { windowTokens } from '../lib/analytics';
-import { contentField, parseContent, toRun, toTurn, type ThreadRow } from '../lib/entities';
-import { inTimeRange, isFuture } from '../lib/filters';
+import { sourceKey, contentField, parseContent, toRun, toTurn, type ThreadRow } from '../lib/entities';
+import { apiParams, inTimeRange, isFuture } from '../lib/filters';
 import { fmtClock, fmtCompact, fmtDateTime, fmtDay, fmtDuration, fmtInt, fmtRelative, fmtShortDateTime, isKnown, cleanText, repairText } from '../lib/format';
 import { useSettings } from '../lib/settings';
 import { durationMs } from '../lib/entities';
@@ -58,14 +59,14 @@ function ThreadList() {
 
   const kids = useMemo(() => {
     const m = new Map<string, number>();
-    for (const a of agents.data?.rows ?? []) m.set(a.thread_id, (m.get(a.thread_id) ?? 0) + 1);
+    for (const a of agents.data?.rows ?? []) m.set(sourceKey(a.instance_id, a.thread_id), (m.get(sourceKey(a.instance_id, a.thread_id)) ?? 0) + 1);
     return m;
   }, [agents.data]);
 
   // A thread is in view when it started in the window or used tokens in it, so long threads are not cut out of the total.
   const inScope = useMemo<Row[]>(() => (threads.data?.rows ?? [])
-    .filter((t) => (inTimeRange(t.occurred_at, f) || win.byThread.has(t.source_id)) && (!f.model || t.model === f.model || win.byThread.has(t.source_id)))
-    .map((t) => { const u = win.byThread.get(t.source_id); return { ...t, kids: kids.get(t.source_id) ?? 0, tokenTotal: u?.total ?? null, turns: u?.turns ?? 0, short: !!u && (u.withTotal ?? u.withUsage) < u.turns }; }), [threads.data, f, kids, win]);
+    .filter((t) => (inTimeRange(t.occurred_at, f) || win.byThread.has(sourceKey(t.instance_id, t.source_id))) && (!f.model || t.model === f.model || win.byThread.has(sourceKey(t.instance_id, t.source_id))))
+    .map((t) => { const u = win.byThread.get(sourceKey(t.instance_id, t.source_id)); return { ...t, kids: kids.get(sourceKey(t.instance_id, t.source_id)) ?? 0, tokenTotal: u?.total ?? null, turns: u?.turns ?? 0, short: !!u && (u.withTotal ?? u.withUsage) < u.turns }; }), [threads.data, f, kids, win]);
   const startedHere = inScope.filter((t) => inTimeRange(t.occurred_at, f)).length;
   const rows = useMemo(() => {
     const needle = tq.trim().toLowerCase();
@@ -78,25 +79,25 @@ function ThreadList() {
   const atLeast = win.total !== null && win.reported < win.turns;
   const outsideThreads = [win.logTotal ? `${fmtCompact(win.logTotal)} from session logs` : '', win.unthreaded ? `${fmtCompact(win.unthreaded)} with no thread` : ''].filter(Boolean).join(' · ');
   const manyProjects = (projects.data?.length ?? 0) > 1;
-  const projectName = (id: string) => { const p = projects.data?.find((r) => r.source_id === id); return p ? repairText(String(p.data?.name ?? id)) : id; };
+  const projectName = (instance: string, id: string) => { const p = projects.data?.find((r) => r.instance_id === instance && r.source_id === id); return p ? repairText(String(p.data?.name ?? id)) : id; };
 
   const slots = useModelSlots();
   // Sorted by start, each sub-agent thread follows the thread it belongs to instead of landing among strangers.
   const treeOrder = useMemo(() => {
-    const byId = new Map(inScope.map((t) => [t.source_id, t]));
+    const byId = new Map(inScope.map((t) => [sourceKey(t.instance_id, t.source_id), t]));
     const rootOf = (t: Row) => {
       let cur: Row = t;
-      for (let i = 0; i < 8; i++) { const up = cur.parent ? byId.get(cur.parent) : undefined; if (!up) break; cur = up; }
+      for (let i = 0; i < 8; i++) { const up = cur.parent ? byId.get(sourceKey(cur.instance_id, cur.parent)) : undefined; if (!up) break; cur = up; }
       return cur;
     };
     const groups = new Map<string, Row[]>();
-    for (const t of inScope) { const r = rootOf(t); (groups.get(r.source_id) ?? groups.set(r.source_id, []).get(r.source_id)!).push(t); }
+    for (const t of inScope) { const r = rootOf(t); const root = sourceKey(r.instance_id, r.source_id); (groups.get(root) ?? groups.set(root, []).get(root)!).push(t); }
     const key = new Map<string, number>();
     for (const [rootId, members] of groups) {
       const root = byId.get(rootId)!;
       const base = Date.parse(root.occurred_at);
       key.set(rootId, base);
-      members.filter((m) => m.source_id !== rootId).sort((x, y) => Date.parse(x.occurred_at) - Date.parse(y.occurred_at)).forEach((m, i) => key.set(m.source_id, base - (i + 1)));
+      members.filter((m) => sourceKey(m.instance_id, m.source_id) !== rootId).sort((x, y) => Date.parse(x.occurred_at) - Date.parse(y.occurred_at)).forEach((m, i) => key.set(sourceKey(m.instance_id, m.source_id), base - (i + 1)));
     }
     return key;
   }, [inScope]);
@@ -106,7 +107,7 @@ function ThreadList() {
       key: 'title', header: 'Thread', sort: (t) => t.title, className: 'cell-title',
       render: (t) => (
         <>
-          <AppLink className="row-link" href={hrefPage('Threads', { id: t.source_id })} style={t.type === 'child' && (t.depth ?? 1) > 1 ? { paddingInlineStart: `${1.15 * ((t.depth ?? 1) - 1)}rem` } : undefined}>
+          <AppLink className="row-link" href={hrefPage('Threads', { id: t.source_id, instance: t.instance_id })} style={t.type === 'child' && (t.depth ?? 1) > 1 ? { paddingInlineStart: `${1.15 * ((t.depth ?? 1) - 1)}rem` } : undefined}>
             {t.type === 'child' && <CornerDownRight size={13} aria-hidden="true" className="row-link-lead" />}
             <span>{t.title}</span>
             <ChevronRight size={14} aria-hidden="true" />
@@ -114,7 +115,7 @@ function ThreadList() {
           <span className={t.type === 'child' ? 'thread-meta is-child' : 'thread-meta'} style={t.type === 'child' && (t.depth ?? 1) > 1 ? { paddingInlineStart: `${1.15 * (t.depth ?? 1)}rem` } : undefined}>
             {t.model ? <ModelName model={t.model} /> : <Unknown label="Model unknown" why="The thread has no recorded model selection." />}
             {t.type === 'child' && <span>depth {t.depth ?? '?'}</span>}
-            {manyProjects && <span>{projectName(t.project_id)}</span>}
+            {manyProjects && <span>{projectName(t.instance_id, t.project_id)}</span>}
             {t.branch && <span className="mono cell-clip" title={t.branch}><GitBranch size={11} aria-hidden="true" /> {t.branch.length > 34 ? `${t.branch.slice(0, 16)}…${t.branch.slice(-16)}` : t.branch}</span>}
           </span>
         </>
@@ -130,14 +131,14 @@ function ThreadList() {
       ),
     },
     { key: 'kids', header: 'Sub-agents', align: 'end', sort: (t) => t.kids, render: (t) => (t.kids ? <span className="kid-count"><Network size={12} aria-hidden="true" />{fmtInt(t.kids)}</span> : <span className="dim" aria-label="None">–</span>) },
-    { key: 'started', header: 'Started', sort: (t) => treeOrder.get(t.source_id) ?? Date.parse(t.occurred_at), csv: (t) => t.occurred_at, render: (t) => <time dateTime={t.occurred_at}>{fmtShortDateTime(t.occurred_at, timezone)}</time> },
+    { key: 'started', header: 'Started', sort: (t) => treeOrder.get(sourceKey(t.instance_id, t.source_id)) ?? Date.parse(t.occurred_at), csv: (t) => t.occurred_at, render: (t) => <time dateTime={t.occurred_at}>{fmtShortDateTime(t.occurred_at, timezone)}</time> },
     { key: 'updated', header: 'Last update', className: 'hide-narrow', sort: (t) => t.updated_at, render: (t) => (t.updated_at ? <span title={fmtDateTime(t.updated_at, timezone)}>{fmtRelative(t.updated_at)}</span> : <span className="fine">Unknown</span>) },
-    { key: 'story', header: 'Play', render: (t) => <AppLink className="icon-btn" href={hrefPage('Threads', { id: t.source_id, story: '1' })} ariaLabel={`Play the story of ${t.title}`} title="Play the story"><Play size={14} aria-hidden="true" /></AppLink> },
+    { key: 'story', header: 'Play', render: (t) => <AppLink className="icon-btn" href={hrefPage('Threads', { id: t.source_id, instance: t.instance_id, story: '1' })} ariaLabel={`Play the story of ${t.title}`} title="Play the story"><Play size={14} aria-hidden="true" /></AppLink> },
     { key: 'type', header: 'Type', csvOnly: true, sort: (t) => t.type, render: () => null },
     { key: 'depth', header: 'Depth', csvOnly: true, sort: (t) => t.depth ?? null, render: () => null },
     { key: 'model', header: 'Model', csvOnly: true, sort: (t) => t.model, render: () => null },
     { key: 'branch', header: 'Branch', csvOnly: true, sort: (t) => t.branch, render: () => null },
-    { key: 'project', header: 'Project', csvOnly: true, sort: (t) => projectName(t.project_id), render: () => null },
+    { key: 'project', header: 'Project', csvOnly: true, sort: (t) => projectName(t.instance_id, t.project_id), render: () => null },
     { key: 'quality', header: 'Capture', csvOnly: true, sort: (t) => t.quality, render: () => null },
   ];
 
@@ -147,7 +148,7 @@ function ThreadList() {
     <>
       <PageHeader title="Threads" lead={(() => {
         const big = turnsReady ? [...inScope].sort((a, b) => (b.tokenTotal ?? 0) - (a.tokenTotal ?? 0))[0] : undefined;
-        return big?.tokenTotal ? <>The biggest, <AppLink className="link" href={hrefPage('Threads', { id: big.source_id })}>{big.title}</AppLink>, used {fmtCompact(big.tokenTotal)} tokens. Open any thread to read it or play it back.</> : 'Open one to read it, or play it back.';
+        return big?.tokenTotal ? <>The biggest, <AppLink className="link" href={hrefPage('Threads', { id: big.source_id, instance: big.instance_id })}>{big.title}</AppLink>, used {fmtCompact(big.tokenTotal)} tokens. Open any thread to read it or play it back.</> : 'Open one to read it, or play it back.';
       })()} />
       <StatRow label="Thread summary">
         <Stat label="Threads in view" value={threads.isError || turnsFailed ? <NotLoaded /> : threads.isPending || !turnsReady ? '…' : fmtInt(inScope.length)} sub={threads.data ? <>{startedHere < inScope.length && <>{fmtInt(startedHere)} started here · </>}{threads.data.complete ? <span className="fine">of {fmtInt(threads.data.scanned)} stored</span> : <ScanNote scanned={threads.data.scanned} complete={threads.data.complete} noun="threads" />}</> : undefined} />
@@ -159,6 +160,7 @@ function ThreadList() {
           sub={turnsFailed ? 'Turns could not be read' : !turnsReady ? 'Reading turns' : outsideThreads ? `Used in this window · ${outsideThreads}` : 'Used in this window'}
         />
       </StatRow>
+      <Efficiency filters={f} />
       {/* The block keeps its height while turns load, so the list below never jumps when it fills in. */}
       {(!turnsReady ? !turnsFailed && (threads.data?.rows.length ?? 0) > 0 : inScope.some((t) => (t.tokenTotal ?? 0) > 0)) && (
         <div className="thread-split" aria-busy={!turnsReady}>
@@ -206,31 +208,31 @@ function ThreadDetail({ id }: { id: string }) {
   const { params, set, hrefPage, hrefPatch } = useUrl();
   const { timezone } = useSettings();
   const f = useFilters();
-  const threads = useThreads({ instance: f.instance });
-  const agents = useAgents({ instance: f.instance });
-  const tokens = useThreadTokens({ instance: f.instance });
-  const threadUsage = tokens.get(id);
+  const threads = useThreads({ instance: f.instance, status: f.status });
+  const agents = useAgents({ instance: f.instance, status: f.status });
+  const tokens = useThreadTokens({ instance: f.instance, status: f.status });
   const view = (params.get('view') ?? 'conversation') as keyof typeof VIEWS;
 
   const timeline = useInfiniteQuery({
-    queryKey: ['thread-timeline', id],
+    queryKey: ['thread-timeline', id, f.instance, f.status],
     initialPageParam: 0,
-    queryFn: async ({ pageParam, signal }) => (await getJson<Envelope<Entity>>('timeline', new URLSearchParams({ id, limit: String(PAGE), offset: String(pageParam) }), signal)).data ?? [],
+    queryFn: async ({ pageParam, signal }) => (await getJson<Envelope<Entity>>('timeline', apiParams('timeline', { instance: f.instance, status: f.status }, { id, limit: PAGE, offset: pageParam }), signal)).data ?? [],
     getNextPageParam: (last, pages) => (last.length === PAGE ? pages.length * PAGE : undefined),
   });
 
   const thread = threads.data?.rows.find((t) => t.source_id === id) ?? null;
+  const threadUsage = thread ? tokens.get(sourceKey(thread.instance_id, id)) : undefined;
   const events = useMemo(() => (timeline.data?.pages.flat() ?? []).filter((e) => e.kind !== 'thread').slice().reverse(), [timeline.data]);
   const shown = useMemo(() => events.filter((e) => (VIEWS[view] as readonly string[]).includes(e.kind)), [events, view]);
   const runs = useMemo(() => events.filter((e) => e.kind === 'run').map(toRun), [events]);
   const turns = useMemo(() => events.filter((e) => e.kind === 'model_turn').map(toTurn), [events]);
-  const children = useMemo(() => (agents.data?.rows ?? []).filter((a) => a.thread_id === id), [agents.data, id]);
+  const children = useMemo(() => (agents.data?.rows ?? []).filter((a) => a.thread_id === id && a.instance_id === thread?.instance_id), [agents.data, id, thread?.instance_id]);
   const byKind = useMemo(() => {
     const m: Record<string, number> = {};
     for (const e of events) m[e.kind] = (m[e.kind] ?? 0) + 1;
     return m;
   }, [events]);
-  const parent = thread?.parent ? threads.data?.rows.find((t) => t.source_id === thread.parent) ?? null : null;
+  const parent = thread?.parent ? threads.data?.rows.find((t) => t.source_id === thread.parent && t.instance_id === thread.instance_id) ?? null : null;
   const more = timeline.hasNextPage;
   // Busy threads end in a run of tool calls, so a filtered view reads further back until it has something to show.
   const loadedPages = timeline.data?.pages.length ?? 0;
@@ -266,7 +268,7 @@ function ThreadDetail({ id }: { id: string }) {
             <div><dt>Complete-turn tokens</dt><dd>{threadUsage && threadUsage.total === 0 && (threadUsage.withTotal ?? threadUsage.withUsage) < threadUsage.turns ? <Unknown label="No complete total" why="The turns with a total summed to 0, and others reported only parts or nothing." /> : <>{threadUsage && !!threadUsage.total && (threadUsage.withTotal ?? threadUsage.withUsage) < threadUsage.turns && <span className="lower-bound" title="Some turns reported no total"><span aria-hidden="true">≥</span><span className="sr-only">at least </span></span>}<Tokens v={threadUsage?.total ?? thread.tokens} why={TOKEN_WHY} /></>}{threadUsage && threadUsage.withUsage < threadUsage.turns && <small className="fine"> {fmtInt(threadUsage.withUsage)} of {fmtInt(threadUsage.turns)} turns reported</small>}</dd></div>
             <div><dt>Branch</dt><dd>{thread.branch ? <span className="mono cell-clip"><GitBranch size={12} aria-hidden="true" /> {thread.branch}</span> : <span className="fine">None recorded</span>}</dd></div>
             <div><dt>Last update</dt><dd title={thread.updated_at ?? undefined}>{thread.updated_at ? fmtShortDateTime(thread.updated_at, timezone) : <Unknown label="Unknown" />}</dd></div>
-            <div><dt>Parent</dt><dd>{thread.parent ? (parent ? <AppLink className="link" href={hrefPage('Threads', { id: parent.source_id })}>{parent.title}</AppLink> : <span className="fine">Not imported</span>) : <span className="fine">None</span>}</dd></div>
+            <div><dt>Parent</dt><dd>{thread.parent ? (parent ? <AppLink className="link" href={hrefPage('Threads', { id: parent.source_id, instance: parent.instance_id })}>{parent.title}</AppLink> : <span className="fine">Not imported</span>) : <span className="fine">None</span>}</dd></div>
             <div><dt>Tool capture</dt><dd><QualityBadge quality={thread.toolCoverage ?? 'unavailable'} /></dd></div>
             <div><dt>Archived</dt><dd>{thread.archived ? fmtShortDateTime(thread.archived, timezone) : <span className="fine">No</span>}</dd></div>
           </dl>
@@ -280,10 +282,10 @@ function ThreadDetail({ id }: { id: string }) {
               <thead><tr><th scope="col">Thread</th><th scope="col">Model</th><th scope="col">Status</th><th scope="col" className="num">Time</th><th scope="col">Result delivered</th></tr></thead>
               <tbody>
                 {children.slice(0, 100).map((a) => {
-                  const t = threads.data?.rows.find((x) => x.source_id === a.child);
+                  const t = threads.data?.rows.find((x) => x.source_id === a.child && x.instance_id === a.instance_id);
                   return (
                     <tr key={a.id}>
-                      <td className="cell-title">{a.child ? <AppLink className="row-link" href={hrefPage('Threads', { id: a.child })}><span>{t?.title ?? a.task?.split('\n')[0].slice(0, 90) ?? 'Child thread'}</span><ChevronRight size={14} aria-hidden="true" /></AppLink> : a.task?.slice(0, 90) ?? 'Provider-native sub-agent'}</td>
+                      <td className="cell-title">{a.child ? <AppLink className="row-link" href={hrefPage('Threads', { id: a.child, instance: a.instance_id })}><span>{t?.title ?? a.task?.split('\n')[0].slice(0, 90) ?? 'Child thread'}</span><ChevronRight size={14} aria-hidden="true" /></AppLink> : a.task?.slice(0, 90) ?? 'Provider-native sub-agent'}</td>
                       <td>{a.model ? <ModelName model={a.model} /> : <Unknown label="Unknown" />}</td>
                       <td><StatusBadge status={a.status} /></td>
                       <td className="num">{a.duration === null ? <Unknown label="Unknown" why="No completion time recorded." /> : fmtDuration(a.duration)}</td>
@@ -367,7 +369,7 @@ function ThreadDetail({ id }: { id: string }) {
                   </div>
                 )}
                 {shown.length ? (
-                  <ol className="timeline">{shown.map((e) => <TimelineItem key={e.id} e={e} tz={timezone} detailHref={e.kind === 'agent' && typeof e.data?.child_thread_id === 'string' ? hrefPage('Threads', { id: e.data.child_thread_id }) : undefined} />)}</ol>
+                  <ol className="timeline">{shown.map((e) => <TimelineItem key={e.id} e={e} tz={timezone} detailHref={e.kind === 'agent' && typeof e.data?.child_thread_id === 'string' ? hrefPage('Threads', { id: e.data.child_thread_id, instance: e.instance_id }) : undefined} />)}</ol>
                 ) : (
                   <EmptyState compact title="Nothing of this kind in the loaded events">
                     <p>{more ? 'Load earlier events, or show everything.' : <>Show <AppLink className="link" href={hrefPatch({ view: 'all' })}>everything</AppLink>. Records that were not captured are not listed.</>}</p>

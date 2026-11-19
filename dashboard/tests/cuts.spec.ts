@@ -869,7 +869,7 @@ test('a model whose turns did not all report a total reads as a lower bound on M
   test.skip(!partial && LIVE, 'Every model reported complete totals.');
   expect(partial, 'the fixture has a model with turns that reported no total').toBeTruthy();
   await page.goto('/?page=Models&range=all');
-  const row = page.getByRole('table', { name: 'Usage by requested model' }).locator('tbody tr', { hasText: partial!.model! }).first();
+  const row = page.getByRole('table', { name: 'Usage by requested model and configured thread counts' }).locator('tbody tr', { hasText: partial!.model! }).first();
   await expect(row.locator('.lower-bound').first()).toBeVisible({ timeout: 30_000 });
 });
 

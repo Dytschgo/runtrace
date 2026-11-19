@@ -24,6 +24,25 @@ pub const LIVE: &str = "quota:live";
 /// A reading that has not changed is still kept this often, so a window's readings show it was watched the whole time.
 const HEARTBEAT_MS: i64 = 15 * 60_000;
 
+struct QuotaTransaction<'a> {
+    connection: &'a duckdb::Connection,
+    committed: bool,
+}
+impl QuotaTransaction<'_> {
+    fn commit(mut self) -> Result<()> {
+        self.connection.execute_batch("COMMIT")?;
+        self.committed = true;
+        Ok(())
+    }
+}
+impl Drop for QuotaTransaction<'_> {
+    fn drop(&mut self) {
+        if !self.committed {
+            let _ = self.connection.execute_batch("ROLLBACK");
+        }
+    }
+}
+
 /// T3's cache folder, next to the folder that holds its database (`.t3/userdata/statev2.sqlite` → `.t3/caches`).
 pub fn t3_caches(sqlite_path: &str) -> Option<PathBuf> {
     Path::new(sqlite_path)
@@ -213,8 +232,8 @@ impl Writer<'_> {
         source: &str,
     ) -> Result<()> {
         let n = self.s.conn.execute(
-            "INSERT INTO quota_samples VALUES (?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING",
-            duckdb::params![provider, window, at, used, reset, minutes, plan, source],
+            "INSERT INTO quota_samples SELECT ?,?,?,?,?,?,?,? WHERE NOT EXISTS(SELECT 1 FROM cold_quota_sample_keys WHERE provider=? AND window_kind=? AND sampled_at=?) ON CONFLICT DO NOTHING",
+            duckdb::params![provider, window, at, used, reset, minutes, plan, source,provider,window,at],
         )?;
         self.samples += n as u64;
         if let Some(at_ms) = iso_ms(at) {
@@ -235,8 +254,8 @@ impl Writer<'_> {
         source: &str,
     ) -> Result<()> {
         let n = self.s.conn.execute(
-            "INSERT INTO quota_events VALUES (?,?,?,?,?,?) ON CONFLICT DO NOTHING",
-            duckdb::params![provider, kind, at, window, reset, source],
+            "INSERT INTO quota_events SELECT ?,?,?,?,?,? WHERE NOT EXISTS(SELECT 1 FROM cold_quota_event_keys WHERE provider=? AND kind=? AND happened_at=?) ON CONFLICT DO NOTHING",
+            duckdb::params![provider, kind, at, window, reset, source,provider,kind,at],
         )?;
         self.events += n as u64;
         Ok(())
@@ -538,6 +557,13 @@ pub fn collect(s: &Store, t3_caches: Option<&Path>) -> Result<Value> {
 
 /// [`collect`] with the agents' home folder given, so a test can point it at its own.
 pub fn collect_from(s: &Store, home: &Path, t3_caches: Option<&Path>) -> Result<Value> {
+    // Manifest, hot rows and sampling offsets must share one snapshot while
+    // cold maintenance is running on the independent import connection.
+    s.conn.execute_batch("BEGIN")?;
+    let transaction = QuotaTransaction {
+        connection: &s.conn,
+        committed: false,
+    };
     let mut offsets: HashMap<String, u64> = s
         .setting(OFFSETS)
         .and_then(|v| serde_json::from_str(&v).ok())
@@ -550,8 +576,10 @@ pub fn collect_from(s: &Store, home: &Path, t3_caches: Option<&Path>) -> Result<
         resets: HashMap::new(),
         stored: HashMap::new(),
     };
+    let samples = crate::cold::source(&s.conn, "quota_samples", s.content_retention_days)?;
+    let events = crate::cold::source(&s.conn, "quota_events", s.content_retention_days)?;
     {
-        let mut stmt = s.conn.prepare("SELECT provider, window_kind, max(sampled_at), arg_max(used_percent, sampled_at), arg_max(reset_at, sampled_at) FROM quota_samples GROUP BY ALL")?;
+        let mut stmt = s.conn.prepare(&format!("SELECT provider, window_kind, max(sampled_at), arg_max(used_percent, sampled_at), arg_max(reset_at, sampled_at) FROM {samples} GROUP BY ALL"))?;
         let rows = stmt.query_map([], |r| {
             Ok((
                 r.get::<_, String>(0)?,
@@ -570,7 +598,7 @@ pub fn collect_from(s: &Store, home: &Path, t3_caches: Option<&Path>) -> Result<
         }
     }
     {
-        let mut stmt = s.conn.prepare("SELECT DISTINCT provider, window_kind, reset_at FROM quota_samples UNION SELECT DISTINCT provider, window_kind, reset_at FROM quota_events WHERE reset_at IS NOT NULL")?;
+        let mut stmt = s.conn.prepare(&format!("SELECT DISTINCT provider, window_kind, reset_at FROM {samples} UNION SELECT DISTINCT provider, window_kind, reset_at FROM {events} WHERE reset_at IS NOT NULL"))?;
         let rows = stmt.query_map([], |r| {
             Ok((
                 r.get::<_, String>(0)?,
@@ -585,7 +613,6 @@ pub fn collect_from(s: &Store, home: &Path, t3_caches: Option<&Path>) -> Result<
             }
         }
     }
-    s.conn.execute_batch("BEGIN")?;
     let result = (|| -> Result<()> {
         // Codex, including its separate homes for other accounts.
         for (dir, provider) in [
@@ -708,22 +735,33 @@ pub fn collect_from(s: &Store, home: &Path, t3_caches: Option<&Path>) -> Result<
         }
         Ok(())
     })();
-    match &result {
-        Ok(()) => {
-            s.set(OFFSETS, &serde_json::to_string(&offsets)?)?;
-            s.conn.execute_batch("COMMIT")?;
-        }
-        Err(_) => {
-            let _ = s.conn.execute_batch("ROLLBACK");
-        }
-    }
     result?;
+    s.set(OFFSETS, &serde_json::to_string(&offsets)?)?;
+    transaction.commit()?;
     Ok(json!({"samples_added": w.samples, "events_added": w.events}))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failed_history_read_releases_sampling_transaction() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut config: crate::config::Config =
+            toml::from_str(include_str!("../../../config/default.toml")).unwrap();
+        config.storage.duckdb_path = temp.path().join("test.duckdb").to_string_lossy().into();
+        config.storage.archive_path = temp.path().join("archive").to_string_lossy().into();
+        let store = Store::open(&config).unwrap();
+        store
+            .conn
+            .execute_batch("DROP TABLE quota_samples")
+            .unwrap();
+        assert!(collect_from(&store, temp.path(), None).is_err());
+        // A subsequent operation can own a fresh transaction, including callers
+        // of standalone collect that continue maintenance after a quota error.
+        store.conn.execute_batch("BEGIN; ROLLBACK").unwrap();
+    }
 
     #[test]
     fn windows_are_named_by_length() {

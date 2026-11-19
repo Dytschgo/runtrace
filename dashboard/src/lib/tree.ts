@@ -39,38 +39,41 @@ const ms = (iso: string | null | undefined) => {
  * relationship_to_parent is "subagent". Forks, shared titles, timing and root_thread_id never create an edge.
  */
 export function buildForest(threads: ThreadRow[], agents: AgentRow[]): Forest {
+  const lookup = (instance: string, source: string, kind = 'thread') => JSON.stringify([instance, kind, source]);
   const nodes = new Map<string, TreeNode>();
   const agentByChild = new Map<string, AgentRow>();
   const recordsByChild = new Map<string, AgentRow[]>();
-  for (const a of agents) if (a.child) { agentByChild.set(a.child, a); recordsByChild.set(a.child, [...(recordsByChild.get(a.child) ?? []), a]); }
+  for (const a of agents) if (a.child) { const child = lookup(a.instance_id, a.child); agentByChild.set(child, a); recordsByChild.set(child, [...(recordsByChild.get(child) ?? []), a]); }
 
   for (const t of threads) {
-    const a = agentByChild.get(t.source_id) ?? null;
-    nodes.set(t.source_id, {
-      key: t.source_id, title: t.title, thread: t, agent: a, children: [], depth: 0, evidence: null, missingParent: null, cycle: false,
-      start: ms(a?.started) ?? ms(t.occurred_at), end: ms(a?.completed), records: recordsByChild.get(t.source_id),
+    const a = agentByChild.get(lookup(t.instance_id, t.source_id)) ?? null;
+    nodes.set(lookup(t.instance_id, t.source_id), {
+      key: t.id, title: t.title, thread: t, agent: a, children: [], depth: 0, evidence: null, missingParent: null, cycle: false,
+      start: ms(a?.started) ?? ms(t.occurred_at), end: ms(a?.completed), records: recordsByChild.get(lookup(t.instance_id, t.source_id)),
     });
   }
 
-  const parentOf = new Map<string, { parent: string; evidence: EdgeEvidence }>();
+  const parentOf = new Map<string, { parent: string; sourceParent: string; evidence: EdgeEvidence }>();
   let conflicts = 0;
   for (const a of agents) {
     // An agent without an imported thread of its own stays an explicit leaf of the thread that recorded it.
-    const key = a.child ?? `agent:${a.source_id}`;
+    const key = lookup(a.instance_id, a.child ?? a.source_id, a.child ? 'thread' : 'agent');
     if (!nodes.has(key)) {
       nodes.set(key, {
-        key, title: a.task?.split('\n')[0].slice(0, 120) || (a.agentType === 'provider_native_subagent' ? 'Provider-native sub-agent' : 'Sub-agent'),
+        key: a.child ? `thread:${key}` : `agent:${a.id}`, title: a.task?.split('\n')[0].slice(0, 120) || (a.agentType === 'provider_native_subagent' ? 'Provider-native sub-agent' : 'Sub-agent'),
         thread: null, agent: a, children: [], depth: 0, evidence: null, missingParent: null, cycle: false,
-        start: ms(a.started) ?? ms(a.occurred_at), end: ms(a.completed), records: a.child ? recordsByChild.get(a.child) : [a],
+        start: ms(a.started) ?? ms(a.occurred_at), end: ms(a.completed), records: a.child ? recordsByChild.get(lookup(a.instance_id, a.child)) : [a],
       });
     }
-    if (a.thread_id) parentOf.set(key, { parent: a.thread_id, evidence: 'agent_record' });
+    if (a.thread_id) parentOf.set(key, { parent: lookup(a.instance_id, a.thread_id), sourceParent: a.thread_id, evidence: 'agent_record' });
   }
   for (const t of threads) {
     if (t.relationship !== 'subagent' || !t.parent) continue;
-    const known = parentOf.get(t.source_id);
-    if (!known) parentOf.set(t.source_id, { parent: t.parent, evidence: 'thread_lineage' });
-    else if (known.parent === t.parent) known.evidence = 'both';
+    const key = lookup(t.instance_id, t.source_id);
+    const parent = lookup(t.instance_id, t.parent);
+    const known = parentOf.get(key);
+    if (!known) parentOf.set(key, { parent, sourceParent: t.parent, evidence: 'thread_lineage' });
+    else if (known.parent === parent) known.evidence = 'both';
     else conflicts++;
   }
 
@@ -81,7 +84,7 @@ export function buildForest(threads: ThreadRow[], agents: AgentRow[]): Forest {
   for (const [key, link] of parentOf) {
     const node = nodes.get(key)!;
     if (!nodes.has(link.parent)) {
-      node.missingParent = link.parent;
+      node.missingParent = link.sourceParent;
       missingParents++;
       continue;
     }
@@ -107,8 +110,8 @@ export function buildForest(threads: ThreadRow[], agents: AgentRow[]): Forest {
     for (const c of n.children) place(c, depth + 1);
   };
   const roots: TreeNode[] = [];
-  for (const n of nodes.values()) {
-    if (!linked.has(n.key)) { roots.push(n); place(n, 0); }
+  for (const [key, n] of nodes) {
+    if (!linked.has(key)) { roots.push(n); place(n, 0); }
   }
   roots.sort((a, b) => latest(b) - latest(a));
   return { roots, edges, standalone: roots.filter((r) => !r.children.length).length, missingParents, cycles, conflicts };
@@ -126,6 +129,33 @@ export function flatten(root: TreeNode, collapsed?: Set<string>): TreeNode[] {
   };
   walk(root);
   return out;
+}
+
+/** Explicit run spans, including repeated delegations; no end is inferred from now. */
+export function recordedSpans(n: TreeNode): { start: number | null; end: number | null }[] {
+  const records = n.records?.length ? n.records : n.agent ? [n.agent] : null;
+  return records ? records.map((a) => ({ start: ms(a.started), end: ms(a.completed) })) : [{ start: n.start, end: n.end }];
+}
+
+const validSpan = (s: { start: number | null; end: number | null }): s is { start: number; end: number } => s.start !== null && s.end !== null && s.end >= s.start;
+
+/** Longest root-to-leaf observed timing union, not an inferred wait/dependency path. */
+export function observedCriticalPath(root: TreeNode): { keys: Set<string>; elapsedMs: number | null; tiedChains: number; agents: number; timedAgents: number; complete: boolean } {
+  const agents = flatten(root).slice(1);
+  const timedAgents = agents.filter((n) => recordedSpans(n).every(validSpan)).length;
+  let longest = -1, tiedChains = 0;
+  let keys = new Set<string>();
+  const visit = (n: TreeNode, chain: string[], spans: [number, number][]) => {
+    const next = n === root ? spans : [...spans, ...recordedSpans(n).filter(validSpan).map((s) => [s.start, s.end] as [number,number])];
+    const path = [...chain, n.key];
+    if (n.children.length) { n.children.forEach((c) => visit(c, path, next)); return; }
+    if (!next.length) return;
+    const elapsed = mergeIntervals(next).reduce((total, [a,b]) => total + b-a, 0);
+    if (elapsed > longest) { longest = elapsed; tiedChains = 1; keys = new Set(path); }
+    else if (elapsed === longest) { tiedChains++; path.forEach((key) => keys.add(key)); }
+  };
+  visit(root, [], []);
+  return { keys, elapsedMs: longest < 0 ? null : longest, tiedChains, agents: agents.length, timedAgents, complete: agents.length > 0 && timedAgents === agents.length };
 }
 
 export interface TreeStats {
@@ -161,10 +191,8 @@ export function treeStats(root: TreeNode, win?: StatsWindow): TreeStats {
   const delegated = [...new Set(records.map((r) => r.node))];
   const inView = new Set(delegated);
   // Busy time and parallel runs count whatever was running in the window, wherever it started.
-  const intervals = everyDelegated.flatMap((n) => {
-    if (n.start === null || n.end === null || n.end < n.start) return [];
-    return [[Math.max(n.start, from), Math.min(n.end, to)] as [number, number]];
-  }).filter(([a, b]) => b >= a);
+  const intervals = everyDelegated.flatMap((n) => recordedSpans(n).filter(validSpan)
+    .map((s) => [Math.max(s.start, from), Math.min(s.end, to)] as [number, number])).filter(([a, b]) => b >= a);
   const merged = mergeIntervals(intervals);
   return {
     nodes: all.length, delegated: records.length,
@@ -176,8 +204,8 @@ export function treeStats(root: TreeNode, win?: StatsWindow): TreeStats {
     returned: records.filter((r) => r.returned === true).length,
     notReturned: records.filter((r) => r.returned === false).length,
     returnUnknown: records.filter((r) => r.returned !== true && r.returned !== false).length,
-    openEnded: delegated.filter((n) => n.start === null || n.end === null || n.end < n.start).length,
-    timed: delegated.length - delegated.filter((n) => n.start === null || n.end === null || n.end < n.start).length,
+    openEnded: delegated.filter((n) => !recordedSpans(n).every(validSpan)).length,
+    timed: delegated.length - delegated.filter((n) => !recordedSpans(n).every(validSpan)).length,
     wholeTree,
   };
 }

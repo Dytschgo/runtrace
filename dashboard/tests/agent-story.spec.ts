@@ -47,7 +47,9 @@ test('a thread opens as a story with a real URL, plays, pauses into the URL and 
   await mockApi(page);
   await page.goto('/?page=Threads');
   await page.getByRole('link', { name: 'Play the story of Ship the thing' }).click();
-  await expect(page).toHaveURL(/page=Threads&id=root&story=1/);
+  await expect.poll(() => new URL(page.url()).searchParams.get('id')).toBe('root');
+  await expect.poll(() => new URL(page.url()).searchParams.get('story')).toBe('1');
+  await expect.poll(() => new URL(page.url()).searchParams.get('instance')).toBe('local');
   await expect(page.getByRole('heading', { level: 1 })).toHaveText('Ship the thing');
   await expect(page.locator('.page-head p')).toContainText('1 prompt, 2 tool calls (1 failed), 2 sub-agents (1 did not finish cleanly)');
   // It plays by itself, then can be paused, and the pause lands in the URL so the moment can be linked.
@@ -109,7 +111,7 @@ test('lanes are keyboard reachable, a selected sub-agent reads its own thread, a
   await expect(detail.locator('.unknown', { hasText: 'No thread' })).toBeVisible();
   await page.keyboard.press('ArrowUp');
   await detail.getByRole('link', { name: 'Play its story' }).click();
-  await expect(page).toHaveURL(/id=kid&story=1/);
+  await expect.poll(() => { const p = new URL(page.url()).searchParams; return { id: p.get('id'), instance: p.get('instance'), story: p.get('story') }; }).toEqual({ id: 'kid', instance: 'local', story: '1' });
   await expect(page.getByRole('heading', { level: 1 })).toHaveText('Check the tests');
 });
 

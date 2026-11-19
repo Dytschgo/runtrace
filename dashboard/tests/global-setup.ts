@@ -14,12 +14,13 @@ export const FIXTURE_PORT = Number(process.env.RUNTRACE_FIXTURE_PORT ?? 4398);
 
 function executable() {
   const named = process.env.RUNTRACE_EXE ?? process.env.RUNTRACE_T3UI;
-  const exe = named ?? path.join(repo, 'target', 'release', process.platform === 'win32' ? 'runtrace.exe' : 'runtrace');
+  const cargoTarget = path.resolve(repo, process.env.CARGO_TARGET_DIR || 'target');
+  const exe = named ?? path.join(cargoTarget, 'release', process.platform === 'win32' ? 'runtrace.exe' : 'runtrace');
   if (!fs.existsSync(exe)) throw new Error(`No service binary at ${exe}. Build it with "cargo build --release", or name one in RUNTRACE_EXE.`);
   return exe;
 }
 
-/** DuckDB is linked dynamically on Windows, so its DLL must be on the PATH when it is not beside the binary. */
+/** Optional dynamic Windows builds need their DuckDB DLL; bundled builds are self-contained. */
 function duckdbDir(exe: string) {
   if (fs.existsSync(path.join(path.dirname(exe), 'duckdb.dll'))) return null;
   const build = path.join(path.dirname(exe), 'build');
@@ -90,6 +91,12 @@ export default async function globalSetup() {
   fs.writeFileSync(path.join(dir, 'serve.pid'), String(pid));
   try {
     await ready(FIXTURE_PORT, pid, child, log);
+    // Release builds embed assets and ignore assets_path. A successful UI build
+    // after compiling Rust otherwise tests an older dashboard without warning.
+    const servedIndex = await (await fetch(`http://127.0.0.1:${FIXTURE_PORT}/`)).text();
+    if (servedIndex !== fs.readFileSync(path.join(dist, 'index.html'), 'utf8')) {
+      throw new Error('The service embeds a different dashboard than dashboard/dist. Run npm run build first, then cargo build --release, before browser tests.');
+    }
   } catch (error) {
     child.kill();
     throw error;

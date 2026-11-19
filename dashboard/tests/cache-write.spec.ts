@@ -16,7 +16,7 @@ test('cache writes expose real API values and coverage across token panels', asy
   await expect(panel).toContainText(`recorded for ${display(covered)} of ${display(turns)} turns`);
   // Each model's cache writes, with how many turns recorded them, are exact on the mix bar's hover.
   const named = values.find((m) => m.model)!;
-  const table = page.getByRole('table', {name:'Usage by requested model'});
+  const table = page.getByRole('table', {name:'Usage by requested model and configured thread counts'});
   const cell = table.locator('tbody tr', {hasText:named.model!}).first().locator('.mix-cell');
   await expect(cell).toHaveAttribute('title', new RegExp(`Cache writes: ${display(named.cache_write_tokens!)} tokens \\(${display(named.cache_write_observed_turns)} of ${display(named.observed_provider_turns)} turns recorded\\)`));
 

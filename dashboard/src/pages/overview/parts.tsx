@@ -32,7 +32,7 @@ export function GroupLine({ line, total, top, by, unit, draft, focused, seriesKe
   const share = isKnown(total) && total > 0 ? value / total : 0;
   const body: ReactNode = (
     <>
-      <Icon size={15} aria-hidden="true" style={{ color: info.color }} />
+      <Icon size={15} aria-hidden="true" />
       <span className={by === 'model' ? 'model-line-name mono' : 'model-line-name'}>{info.label}</span>
       {unknown ? <b><Unknown label={unknown.title} why={unknown.text} /></b> : silent ? <b><Unknown label={line.partial ? 'Parts only' : 'Not reported'} why={why} /></b> : <b title={`${atLeast ? 'At least ' : ''}${fmtInt(value)} ${unit}`}>{atLeast && <span className="lower-bound"><span aria-hidden="true">≥</span><span className="sr-only">at least </span></span>}<Counter value={value} ms={draft ? 160 : 900} /></b>}
       <small title={logOnly ? "These tokens come from the agents' session logs, kept per hour. Session-log hours are never counted as turns." : undefined}>{unknown ? 'Unknown' : silent ? 'Share unknown' : turns === 0 && value === 0 ? 'No turns here' : fmtPct(share, 1)}{unknown || (turns === 0 && value === 0) ? '' : unit !== 'provider turns' ? ` · ${logOnly ? (turns ? `session logs only · ${plural(turns, 'turn')} reported nothing` : 'session logs only') : reported < turns ? `${fmtInt(reported)} of ${plural(turns, 'turn')}` : plural(turns, 'turn')}` : ''}</small>

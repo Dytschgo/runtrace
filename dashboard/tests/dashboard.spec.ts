@@ -75,7 +75,7 @@ test('verified tokens match the API and cover the models that report them', asyn
     await expect(page.locator('.model-lines li', { hasText: m.model! }).locator('.unknown').first()).toBeVisible();
   }
   await page.goto('/?page=Models&range=all');
-  await expect(page.locator('.table-gap')).toContainText('Model calls');
+  await expect(page.locator('.table-gap').filter({ hasText: 'Model calls' })).toContainText('Model calls');
   const named = models.find((m) => m.model && m.total_tokens);
   await expect(page.locator('tbody tr', { hasText: named!.model! }).first().locator('[title$="tokens"]').first()).toHaveAttribute('title', `${display(named!.total_tokens!)} tokens`);
 });

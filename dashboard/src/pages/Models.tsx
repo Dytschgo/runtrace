@@ -92,7 +92,7 @@ export default function Models() {
       key: 'model', header: 'Model', sort: (r) => r.name,
       render: (r) => (
         <span className="cell-model">
-          <ModelGlyph model={r.model} color={seriesColor(r.model ? slots.get(r.model) : undefined)} />
+          <ModelGlyph model={r.model} />
           {r.model
             ? <AppLink className="mono row-link" href={hrefPatch({ model: f.model === r.model ? null : r.model })} ariaCurrent={f.model === r.model ? 'true' : undefined} title={f.model === r.model ? 'Clear this model filter' : 'Filter the dashboard to this model'}>{r.name}</AppLink>
             : <span className="mono fine" title="Usage was reported for these turns but no model was recorded.">{r.name}</span>}
@@ -140,7 +140,7 @@ export default function Models() {
         ? <span className="cell-pair"><span title="Median turn">{fmtDuration(r.median_latency_ms)}</span>{isKnown(r.p95_latency_ms) && <small title="95th percentile turn">p95 {fmtDuration(r.p95_latency_ms)}</small>}</span>
         : <Unknown label="n/a" why="No completed turn with timing." />),
     }] : []),
-    { key: 'threads', header: 'Threads', align: 'end', className: 'hide-narrow', sort: (r) => r.threads, render: (r) => <CountCell row={r} v={r.threads} /> },
+    { key: 'threads', header: 'Configured threads', align: 'end', className: 'hide-narrow', sort: (r) => r.threads, render: (r) => <CountCell row={r} v={r.threads} /> },
     { key: 'agents', header: 'Sub-agents', align: 'end', className: 'hide-narrow', sort: (r) => r.agents, render: (r) => <CountCell row={r} v={r.agents} /> },
     // Every figure stays in the download.
     { key: 'runs', header: 'Runs', csvOnly: true, render: () => null, sort: (r) => r.observed_runs },
@@ -160,7 +160,7 @@ export default function Models() {
 
   return (
     <>
-      <PageHeader title="Models" lead={top && top.share > 0 ? <><span className="mono">{top.name}</span> did {fmtPct(top.share)} of the {hasTotals ? 'reported tokens' : 'runs'}{rows.filter((r) => r.model).length > 1 ? `, across ${fmtInt(rows.filter((r) => r.model).length)} models` : ''}.</> : 'Which models did the work.'} />
+      <PageHeader title="Models" lead={top && top.share > 0 ? hasTotals ? <>Requests for <span className="mono">{top.name}</span> account for {fmtPct(top.share)} of reported tokens.</> : <>{fmtPct(top.share)} of matching runs requested <span className="mono">{top.name}</span>.</> : 'Requested models and their recorded usage.'} />
       <Async query={models} skeleton={<Skeleton height="6rem" label="Loading models" />} isEmpty={(d) => !d.length} empty={<Panel><NoRecords /></Panel>}>
         {() => (
           <>
@@ -185,15 +185,16 @@ export default function Models() {
             </Panel>
 
             <Panel title="Model ledger" hint={<>Tokens are per provider turn, not per model call; model calls are not captured. Totals count only turns that reported one, so input can exceed them. The CSV holds every field.</>} action={mixKnown ? <MixKey /> : undefined} flush>
+              <p className="table-gap">Runs and turns use requested models. Configured threads are thread starts in this range grouped by their configured model.</p>
               {absent.length > 0 && <p className="table-gap">{absent.map(([name, , why]) => <span key={name}>{name} <Unknown why={why} /></span>)}<small>for every model</small></p>}
-              <DataTable rows={rows} columns={columns} rowKey={(r) => r.name} caption="Usage by requested model" defaultSort={hasTokens ? { key: 'tokens', dir: 'desc' } : { key: 'runs', dir: 'desc' }} paged={false} exportName="runtrace-models" />
+              <DataTable rows={rows} columns={columns} rowKey={(r) => r.name} caption="Usage by requested model and configured thread counts" defaultSort={hasTokens ? { key: 'tokens', dir: 'desc' } : { key: 'runs', dir: 'desc' }} paged={false} exportName="runtrace-models" />
             </Panel>
 
             <div className="split">
               <ChartPanel
                 className="grow-2"
-                title={metric === 'tokens' && hasTokens ? `Tokens per ${per}, by model` : metric === 'turns' && hasTokens ? `Provider turns per ${per}, by model` : `Threads started per ${per}, by model`}
-                hint={metric === 'tokens' && hasTokens ? 'Complete-turn totals only, in the display timezone. Partial token fields are in the ledger.' : 'In the display timezone.'}
+                title={metric === 'tokens' && hasTokens ? `Tokens per ${per}, by model` : metric === 'turns' && hasTokens ? `Provider turns per ${per}, by model` : `Threads started per ${per}, by configured model`}
+                hint={metric === 'tokens' && hasTokens ? 'Complete-turn totals only, in the display timezone. Partial token fields are in the ledger.' : metric === 'turns' && hasTokens ? 'In the display timezone.' : `${f.status ? 'Includes threads containing a run with the selected status. ' : ''}Dates are when threads started, in the display timezone. A thread's configured model can differ from the models requested by its runs.`}
                 chart={metric === 'tokens' && hasTokens && !hasTotals ? <p className="fine">No complete token totals. Partial token fields are shown in the ledger.</p> : <Async query={metric === 'threads' || !hasTokens ? threads : turns as unknown as typeof threads} skeleton={<SkeletonRows label="Loading chart" />} isEmpty={() => !stack.data.length} compact>{() => <StackedDays rows={stack.data} series={stack.series} compactValues={metric === 'tokens'} legendByTotal />}</Async>}
                 table={
                   <table>
@@ -234,7 +235,7 @@ function CountCell({ row, v }: { row: Row; v: number | null }) {
   return v === null ? <span className="fine" aria-label="Loading">…</span> : <>{fmtInt(v)}</>;
 }
 
-function ModelGlyph({ model, color }: { model: string | null; color: string }) {
+function ModelGlyph({ model }: { model: string | null }) {
   const Icon = modelIcon(model);
-  return <Icon size={14} aria-hidden="true" style={{ color }} />;
+  return <Icon size={14} aria-hidden="true" />;
 }

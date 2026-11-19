@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { bucketActivity, buildHeatmap, coverageRows, delta, percentile, redactionTotals, stackByDay, tokensByKey, tokenSummary, toolStats, toolSummary, usageByProvider, captureGaps, weeklyWhenLong } from './analytics';
 import { ApiError, getEntities, getJson, scanHourly, scanPages, toCsv } from './api';
-import { commandPreview, durationMs, parseContent, readCutField, toAgent, toThread, toTool, toTurn, type ThreadRow, type ToolRow } from './entities';
+import { sourceKey, commandPreview, durationMs, parseContent, readCutField, toAgent, toThread, toTool, toTurn, type ThreadRow, type ToolRow } from './entities';
 import { apiParams, inTimeRange, previousWindow, resolveFilters } from './filters';
 import { providerFromThread } from './entities';
 import { cleanText, fmtDuration, fmtPct, fmtRelative, localParts, repairText, snippet, zonedDayStart } from './format';
@@ -149,7 +149,7 @@ describe('analytics', () => {
     expect(percentile([], 0.5)).toBeNull();
   });
   const tool = (o: Partial<ToolRow>): ToolRow => ({
-    id: Math.random().toString(), source_id: 's', thread_id: 't', run_id: 'r', project_id: 'p', occurred_at: '2026-11-05T10:00:00Z', quality: 'partial',
+    id: Math.random().toString(), source_id: 's', instance_id: 'local', thread_id: 't', run_id: 'r', project_id: 'p', occurred_at: '2026-11-05T10:00:00Z', quality: 'partial',
     name: 'shell', category: 'shell', model: null, status: 'completed', exit: 0, duration: 100, chars: 10, redactions: 0, categories: [], preview: '', parent: null, ...o,
   });
   it('excludes unknown durations from tool percentiles rather than counting zero', () => {
@@ -466,8 +466,8 @@ describe('page totals', () => {
       t('d', '', '2026-11-05T12:00:00Z', 5, true),
       t('e', '', '2026-11-05T12:00:00Z', 2),
     ], { since: '2026-11-01T00:00:00Z', until: '2026-11-08T00:00:00Z' });
-    expect(w.byThread.get('t1')).toEqual({ total: 10, turns: 2, withUsage: 1, withTotal: 1 });
-    expect(w.byThread.has('t2')).toBe(false);
+    expect(w.byThread.get(sourceKey('local', 't1'))).toEqual({ total: 10, turns: 2, withUsage: 1, withTotal: 1 });
+    expect(w.byThread.has(sourceKey('local', 't2'))).toBe(false);
     expect(w.logTotal).toBe(5);
     expect(w.unthreaded).toBe(2);
     expect(w.total).toBe(17);

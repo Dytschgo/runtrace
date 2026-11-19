@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { AgentRow, ThreadRow } from './entities';
-import { buildForest, compressAxis, flatten, forestInView, mergeIntervals, peakConcurrency, treeStats } from './tree';
+import { buildForest, observedCriticalPath, compressAxis, flatten, forestInView, mergeIntervals, peakConcurrency, treeStats } from './tree';
 
 const thread = (id: string, o: Partial<ThreadRow> = {}): ThreadRow => ({
   id, source_id: id, instance_id: 'local', project_id: 'p', occurred_at: '2026-11-05T10:00:00Z', updated_at: null, quality: 'partial', version: null,
@@ -149,5 +149,78 @@ describe('repeat delegations', () => {
     const root = node('r', 0, 0, undefined, [node('a', 1, 0, [rec('x1', 0, true), rec('x2', 5 * H, true), rec('x3', 6 * H, false)]), node('b', 1, 2 * H, [rec('y', 2 * H, null)])]);
     expect(treeStats(root)).toMatchObject({ delegated: 4, returned: 2, notReturned: 1, returnUnknown: 1, maxFanout: 2 });
     expect(treeStats(root, { since: new Date(4 * H).toISOString(), until: new Date(7 * H).toISOString() })).toMatchObject({ delegated: 2, wholeTree: 4, maxFanout: 1, returned: 1, notReturned: 1 });
+  });
+});
+
+
+describe('machine-local source identities', () => {
+  it('keeps identical source thread and agent IDs on two machines in separate trees', () => {
+    const threads = ['east', 'west'].flatMap((instance_id) => ['root', 'kid'].map((source) => thread(source, { id: `${instance_id}-${source}`, instance_id })));
+    const agents = ['east', 'west'].map((instance_id) => agent('same-agent', 'root', 'kid', { id: `${instance_id}-agent`, instance_id }));
+    const f = buildForest(threads, agents);
+    expect(f.roots).toHaveLength(2);
+    expect(f.edges).toBe(2);
+    for (const root of f.roots) {
+      expect(root.children).toHaveLength(1);
+      expect(root.children[0].thread?.instance_id).toBe(root.thread?.instance_id);
+      expect(root.children[0].agent?.instance_id).toBe(root.thread?.instance_id);
+    }
+    expect(new Set(f.roots.flatMap((r) => flatten(r).map((n) => n.key))).size).toBe(4);
+  });
+  it('does not attach a child to a same-ID parent imported only from another machine', () => {
+    const f = buildForest([thread('parent', { instance_id: 'east' }), thread('kid', { instance_id: 'west', relationship: 'subagent', parent: 'parent' })], []);
+    expect(f.edges).toBe(0);
+    expect(f.missingParents).toBe(1);
+  });
+});
+
+
+describe('observed critical path', () => {
+  const at = (seconds: number) => new Date(Date.parse('2026-11-05T10:00:00Z') + seconds * 1000).toISOString();
+  it('selects the longest timed chain without counting nested intervals twice', () => {
+    const f = buildForest([thread('root'), thread('a'), thread('b'), thread('grand')], [
+      agent('one', 'root', 'a', { started: at(0), completed: at(60) }),
+      agent('two', 'root', 'b', { started: at(0), completed: at(90) }),
+      agent('three', 'a', 'grand', { started: at(10), completed: at(50) }),
+    ]);
+    const path = observedCriticalPath(f.roots[0]);
+    expect([...path.keys]).toEqual(['root', 'b']);
+    expect(path.elapsedMs).toBe(90_000);
+    expect(path.complete).toBe(true);
+    expect(path.timedAgents).toBe(3);
+  });
+  it('includes time after a parent completed and preserves all equally long chains', () => {
+    const f = buildForest([thread('root'), thread('a'), thread('b'), thread('grand')], [
+      agent('one', 'root', 'a', { started: at(0), completed: at(30) }),
+      agent('two', 'root', 'b', { started: at(0), completed: at(60) }),
+      agent('three', 'a', 'grand', { started: at(20), completed: at(60) }),
+    ]);
+    const path = observedCriticalPath(f.roots[0]);
+    expect(path.elapsedMs).toBe(60_000);
+    expect(path.tiedChains).toBe(2);
+    expect(path.keys).toEqual(new Set(['root','a','grand','b']));
+  });
+  it('keeps missing/reversed endpoints partial, without inventing a current end time', () => {
+    const f = buildForest([thread('root'), thread('a'), thread('b')], [
+      agent('one', 'root', 'a', { started: at(0), completed: null }),
+      agent('two', 'root', 'b', { started: at(60), completed: at(30) }),
+    ]);
+    const path = observedCriticalPath(f.roots[0]);
+    expect(path.complete).toBe(false);
+    expect(path.timedAgents).toBe(0);
+    expect(path.keys.size).toBe(0);
+    expect(path.elapsedMs).toBeNull();
+  });
+  it('counts every recorded delegation to a repeated child and marks a missing attempt end', () => {
+    const f = buildForest([thread('root'), thread('kid')], [
+      agent('one', 'root', 'kid', { started: at(0), completed: at(10) }),
+      agent('two', 'root', 'kid', { started: at(20), completed: at(40) }),
+      agent('three', 'root', 'kid', { started: at(50), completed: null }),
+    ]);
+    const path = observedCriticalPath(f.roots[0]);
+    expect(path.elapsedMs).toBe(30_000);
+    expect(path.complete).toBe(false);
+    expect(path.timedAgents).toBe(0);
+    expect(path.agents).toBe(1);
   });
 });

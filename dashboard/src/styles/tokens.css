@@ -15,16 +15,16 @@
   --ink-2: oklch(0.84 0 none);
   --ink-3: oklch(0.68 0 none);
 
-  /* White is the interface's only accent. Colour is reserved for models and status. */
+  /* White is the interface's only accent. Colour is reserved for swatches and chart lines. */
   --accent: oklch(1 0 none);
   --accent-ink: oklch(1 0 none);
   --accent-wash: oklch(1 0 none / 0.1);
   --on-accent: oklch(0 0 none);
 
-  /* Status colours always travel with an icon and a label. */
-  --good: oklch(0.78 0.15 150);
-  --warn: oklch(0.85 0.15 88);
-  --crit: oklch(0.72 0.18 25);
+  /* Status uses shape, wording and neutral contrast; it never needs colour. */
+  --good: oklch(0.84 0 none);
+  --warn: oklch(0.92 0 none);
+  --crit: oklch(1 0 none);
 
   /* The product's one rule for absence: measured is solid, missing is hatched. */
   --hatch-ink: oklch(0.55 0 none / 0.6);

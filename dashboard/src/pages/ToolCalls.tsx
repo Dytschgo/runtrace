@@ -8,7 +8,7 @@ import { AppLink, Async, ChartPanel, NoRecords, PageHeader, Panel, RankedBars, S
 import { getEntities } from '../lib/api';
 import { stackByDay, toolHeadline, weeklyWhenLong, toolStats, toolSummary, type ToolStat } from '../lib/analytics';
 import { useFilters, useToolAggregates, useToolAnalysis, useToolHours, type ToolHour, useToolSummary } from '../lib/data';
-import { isFuture } from '../lib/filters';
+import { apiParams, isFuture } from '../lib/filters';
 import { fmtCompact, fmtDateTime, fmtDuration, fmtInt, fmtPct, fmtShortDateTime, isKnown } from '../lib/format';
 import type { ToolRow } from '../lib/entities';
 import { useSettings } from '../lib/settings';
@@ -90,7 +90,7 @@ export default function ToolCalls() {
     { key: 'status', header: 'Status', sort: (r) => r.status, render: (r) => <StatusBadge status={r.status} /> },
     { key: 'exit', header: 'Exit', align: 'end', sort: (r) => r.exit, render: (r) => (r.exit === null ? (r.category === 'shell' ? <Unknown label="Unknown" why="No exit code recorded." /> : <span className="dim" aria-label="Does not apply" title="Only shell commands have an exit code">–</span>) : r.exit === 0 ? '0' : <Tag tone="crit">{r.exit}</Tag>) },
     { key: 'duration', header: 'Time', align: 'end', sort: (r) => r.duration, render: (r) => (r.duration === null ? <Unknown label="Unknown" why="No completion time recorded." /> : fmtDuration(r.duration)) },
-    { key: 'thread', header: 'Thread', render: (r) => (r.thread_id ? <AppLink className="link" href={hrefPage('Threads', { id: r.thread_id })}>Open thread</AppLink> : <span className="fine">None</span>) },
+    { key: 'thread', header: 'Thread', render: (r) => (r.thread_id ? <AppLink className="link" href={hrefPage('Threads', { id: r.thread_id, instance: r.instance_id })}>Open thread</AppLink> : <span className="fine">None</span>) },
     { key: 'time', header: 'Started', sort: (r) => r.occurred_at, render: (r) => <time dateTime={r.occurred_at}>{fmtShortDateTime(r.occurred_at, timezone)}</time> },
   ];
 
@@ -175,14 +175,15 @@ function CallDialog({ id, onClose }: { id: string; onClose: () => void }) {
   const ref = useRef<HTMLDialogElement>(null);
   const { hrefPage } = useUrl();
   const { timezone } = useSettings();
+  const { instance, status } = useFilters();
   const titleId = 'call-title';
   useEffect(() => {
     const d = ref.current;
     if (d && !d.open) d.showModal();
   }, []);
   const q = useQuery({
-    queryKey: ['tool-call', id],
-    queryFn: async ({ signal }) => (await getEntities<Entity>('tool-calls', new URLSearchParams({ id, limit: '1', include_content: 'true' }), signal))[0] ?? null,
+    queryKey: ['tool-call', id, instance, status],
+    queryFn: async ({ signal }) => (await getEntities<Entity>('tool-calls', apiParams('tool-calls', { instance, status }, { id, limit: 1, include_content: 'true' }), signal))[0] ?? null,
   });
   const e = q.data;
   const d = e?.data ?? {};
@@ -203,7 +204,7 @@ function CallDialog({ id, onClose }: { id: string; onClose: () => void }) {
                 <div><dt>Redactions</dt><dd>{isKnown(d.redaction_count) ? fmtInt(d.redaction_count) : <Unknown label="Unknown" />}</dd></div>
               </dl>
               <ToolContent data={d} />
-              {row!.thread_id && <AppLink className="btn" href={hrefPage('Threads', { id: row!.thread_id })}>Open thread</AppLink>}
+              {row!.thread_id && <AppLink className="btn" href={hrefPage('Threads', { id: row!.thread_id, instance: row!.instance_id })}>Open thread</AppLink>}
             </>
           )}
         </Async>

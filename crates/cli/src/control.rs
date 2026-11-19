@@ -86,6 +86,59 @@ pub fn running(c: &Config) -> Option<Value> {
     }
 }
 
+#[cfg(windows)]
+mod stdio_inheritance {
+    use std::ffi::c_void;
+    use std::sync::{Mutex, MutexGuard};
+    static SERIAL: Mutex<()> = Mutex::new(());
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetStdHandle(which: u32) -> *mut c_void;
+        fn GetHandleInformation(handle: *mut c_void, flags: *mut u32) -> i32;
+        fn SetHandleInformation(handle: *mut c_void, mask: u32, flags: u32) -> i32;
+    }
+    pub struct Guard {
+        handles: Vec<(*mut c_void, u32)>,
+        _lock: MutexGuard<'static, ()>,
+    }
+    impl Guard {
+        pub fn new() -> Self {
+            let lock = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+            let mut saved = vec![];
+            for which in [(-10i32) as u32, (-11i32) as u32, (-12i32) as u32] {
+                // These borrowed process-standard handles stay owned by the runtime.
+                // Only their inheritance bit changes; reads/writes are unaffected.
+                unsafe {
+                    let handle = GetStdHandle(which);
+                    let mut flags = 0;
+                    if !handle.is_null()
+                        && handle as isize != -1
+                        && GetHandleInformation(handle, &mut flags) != 0
+                        && flags & 1 != 0
+                        && SetHandleInformation(handle, 1, 0) != 0
+                    {
+                        saved.push((handle, flags & 1));
+                    }
+                }
+            }
+            Self {
+                handles: saved,
+                _lock: lock,
+            }
+        }
+    }
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            for (handle, flags) in &self.handles {
+                // Restore the caller's flags after CreateProcess, including errors.
+                unsafe {
+                    SetHandleInformation(*handle, 1, *flags);
+                }
+            }
+        }
+    }
+}
+
 /// Starts a program that keeps running after this one exits, with its output in a log file.
 pub fn spawn_detached(mut cmd: Command, log: &Path) -> Result<std::process::Child> {
     if let Some(dir) = log.parent() {
@@ -107,6 +160,11 @@ pub fn spawn_detached(mut cmd: Command, log: &Path) -> Result<std::process::Chil
         use std::os::unix::process::CommandExt;
         cmd.process_group(0);
     }
+    // Windows can inherit unused native-command pipes in addition to the new
+    // standard handles. A redirected PowerShell caller then waits for the server
+    // to exit. The child gets its explicit log handles, never the caller's pipes.
+    #[cfg(windows)]
+    let _stdio = stdio_inheritance::Guard::new();
     Ok(cmd.spawn()?)
 }
 
@@ -136,13 +194,13 @@ pub fn start(c: &Config, config_path: &Path, open_after: bool) -> Result<()> {
     if began.elapsed() > Duration::from_secs(2) {
         println!("Database updated in {:.0} s", began.elapsed().as_secs_f64());
     }
-    let log = logs_dir(c).join(format!("server-{}.log", stamp()));
+    std::fs::write(desired_file(c), b"running")?;
+    let log = logs_dir(c).join(format!("supervisor-{}.log", stamp()));
     let mut cmd = Command::new(std::env::current_exe()?);
-    cmd.arg("serve")
+    cmd.arg("supervise")
         .env("RUNTRACE_CONFIG", config_path)
         .env_remove("T3UI_CONFIG");
     let mut child = spawn_detached(cmd, &log)?;
-    std::fs::write(pid_file(c), child.id().to_string())?;
     let deadline = Instant::now() + Duration::from_secs(60);
     while Instant::now() < deadline {
         if let Some(code) = child.try_wait()? {
@@ -151,7 +209,7 @@ pub fn start(c: &Config, config_path: &Path, open_after: bool) -> Result<()> {
                 log.display()
             );
         }
-        if running(c).is_some_and(|h| h["pid"].as_u64() == Some(child.id() as u64)) {
+        if running(c).is_some() {
             println!("Runtrace is running at {}", url(c));
             if open_after {
                 open(c)?;
@@ -160,7 +218,7 @@ pub fn start(c: &Config, config_path: &Path, open_after: bool) -> Result<()> {
         }
         std::thread::sleep(Duration::from_millis(250));
     }
-    let _ = child.kill();
+    let _ = stop(c);
     bail!(
         "Runtrace did not answer within a minute. See {}",
         log.display()
@@ -169,9 +227,29 @@ pub fn start(c: &Config, config_path: &Path, open_after: bool) -> Result<()> {
 
 /// Stops this install's service. Only a process that answers as this install is stopped.
 pub fn stop(c: &Config) -> Result<bool> {
+    let was_running = desired_file(c).exists() || running(c).is_some();
+    // Clear intent before killing anything, including when the child is between restarts.
+    match std::fs::remove_file(desired_file(c)) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e.into()),
+    }
+    // Wait for the supervisor to release its lifetime lock. This also lets updates
+    // replace the executable on Windows without racing an automatic restart.
+    let lock = supervisor_lock(c)?;
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        match lock.try_lock() {
+            Ok(()) => break,
+            Err(std::fs::TryLockError::WouldBlock) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            Err(e) => bail!("Could not stop the supervisor: {e}"),
+        }
+    }
     let Some(h) = running(c) else {
         let _ = std::fs::remove_file(pid_file(c));
-        return Ok(false);
+        return Ok(was_running);
     };
     let pid = h["pid"]
         .as_u64()
@@ -348,5 +426,69 @@ pub fn autostart(on: bool, config_path: &Path) -> Result<()> {
             "Runtrace will no longer start at login."
         }
     );
+    Ok(())
+}
+
+fn desired_file(c: &Config) -> PathBuf {
+    run_dir(c).join("runtrace.running")
+}
+
+fn supervisor_lock(c: &Config) -> Result<std::fs::File> {
+    std::fs::create_dir_all(run_dir(c))?;
+    Ok(std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(run_dir(c).join("runtrace.supervisor.lock"))?)
+}
+
+/// Owns one child and retries crashes until an explicit stop clears the intent file.
+/// The OS releases this lock even if the supervisor itself exits unexpectedly.
+pub fn supervise(c: &Config, config_path: &Path) -> Result<()> {
+    let lock = supervisor_lock(c)?;
+    if let Err(e) = lock.try_lock() {
+        return match e {
+            std::fs::TryLockError::WouldBlock => Ok(()),
+            e => Err(anyhow::anyhow!("Cannot lock supervisor: {e}")),
+        };
+    }
+    while desired_file(c).exists() {
+        // Never adopt or terminate a process we did not create.
+        if !matches!(probe(c), Service::Stopped) {
+            bail!("The configured port is already occupied");
+        }
+        let log = logs_dir(c).join(format!("server-{}.log", stamp()));
+        let mut cmd = Command::new(std::env::current_exe()?);
+        cmd.arg("serve")
+            .env("RUNTRACE_CONFIG", config_path)
+            .env_remove("T3UI_CONFIG");
+        match spawn_detached(cmd, &log) {
+            Ok(mut child) => {
+                std::fs::write(pid_file(c), child.id().to_string())?;
+                loop {
+                    if !desired_file(c).exists() {
+                        let _ = child.kill();
+                        child.wait()?;
+                        let _ = std::fs::remove_file(pid_file(c));
+                        return Ok(());
+                    }
+                    if let Some(code) = child.try_wait()? {
+                        eprintln!("Service exited ({code}); retrying in two seconds");
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(250));
+                }
+            }
+            Err(e) => eprintln!("Service could not start: {e}; retrying in two seconds"),
+        }
+        // Bounded retry delay also keeps intentional stop responsive.
+        for _ in 0..8 {
+            if !desired_file(c).exists() {
+                return Ok(());
+            }
+            std::thread::sleep(Duration::from_millis(250));
+        }
+    }
     Ok(())
 }

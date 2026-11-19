@@ -53,8 +53,330 @@ CREATE TABLE orchestration_v2_projection_messages(payload_json TEXT,updated_at T
     c.source.sqlite_path = source.to_string_lossy().into();
     c.storage.duckdb_path = tmp.path().join("test.duckdb").to_string_lossy().into();
     c.storage.archive_path = tmp.path().join("archive").to_string_lossy().into();
+    // Fixed historical records exercise capture/search independently of wall-clock expiry.
+    c.storage.content_retention_days = 3650;
     (tmp, c)
 }
+#[test]
+fn global_machine_and_run_status_filters_use_related_runs_without_cross_machine_leaks() {
+    let (_tmp, c) = fixture();
+    let s = Store::open(&c).unwrap();
+    let at = "2026-01-01T00:00:00Z";
+    let scopes = [
+        ("machine-east", "completed"),
+        ("machine-west", "failed"),
+        ("machine-active", "running"),
+        ("machine-stopped", "cancelled"),
+    ];
+    for (machine, status) in scopes {
+        for (kind, source, thread, run, data) in [
+            ("project", "p", "", "", json!({"name":"Neutral project"})),
+            ("thread", "t", "t", "", json!({"title":"Neutral thread"})),
+            (
+                "run",
+                "r",
+                "t",
+                "r",
+                json!({"status":status,"provider":"codex","model":"gpt-example"}),
+            ),
+            (
+                "model_turn",
+                "turn",
+                "t",
+                "r",
+                json!({"status":"completed","provider":"codex","model":"gpt-example"}),
+            ),
+            (
+                "tool",
+                "tool",
+                "t",
+                "r",
+                json!({"status":"completed","tool_name":"inspect","content_redacted":"neutral"}),
+            ),
+            ("agent", "agent", "t", "r", json!({"status":"completed"})),
+        ] {
+            s.put(
+                machine, kind, source, "p", thread, run, at, at, "partial", "fixture", data,
+            )
+            .unwrap();
+        }
+    }
+    // A containing run's status is independent of its completed tools/turns.
+    // Reused source IDs must stay on the right machine for all four states.
+    for (machine, status) in scopes {
+        for instance in [None, Some(machine.to_string())] {
+            let filter = Filter {
+                instance,
+                status: Some(status.into()),
+                ..Default::default()
+            };
+            for route in [
+                "projects",
+                "threads",
+                "tool-calls",
+                "agents",
+                "model-turns",
+                "timeline",
+                "search",
+            ] {
+                let result = analytics::query(&s, route, &filter).unwrap();
+                let rows = result["data"].as_array().unwrap();
+                assert!(!rows.is_empty(), "{status} {route}");
+                assert!(
+                    rows.iter().all(|row| row["instance_id"] == machine),
+                    "{status} {route}"
+                );
+            }
+        }
+    }
+    s.put(
+        "machine-west",
+        "instance",
+        "machine-west",
+        "",
+        "",
+        "",
+        "1970-01-01T00:00:00Z",
+        at,
+        "partial",
+        "fixture",
+        json!({}),
+    )
+    .unwrap();
+    let filter = Filter {
+        instance: Some("machine-west".into()),
+        status: Some("failed".into()),
+        ..Default::default()
+    };
+    for route in [
+        "projects",
+        "threads",
+        "tool-calls",
+        "agents",
+        "model-turns",
+        "timeline",
+        "search",
+    ] {
+        let result = analytics::query(&s, route, &filter).unwrap();
+        let rows = result["data"].as_array().unwrap();
+        assert!(!rows.is_empty(), "{route}");
+        assert!(
+            rows.iter().all(|r| r["instance_id"] == "machine-west"),
+            "{route}"
+        );
+    }
+    let none = Filter {
+        instance: Some("machine-east".into()),
+        ..filter.clone()
+    };
+    for route in [
+        "overview",
+        "threads",
+        "tool-calls",
+        "models",
+        "usage/projects",
+        "usage/machines",
+        "data-quality",
+    ] {
+        assert!(
+            analytics::query(&s, route, &none).unwrap()["data"]
+                .as_array()
+                .unwrap()
+                .is_empty(),
+            "{route}"
+        );
+    }
+    let scoped = analytics::query(&s, "storage", &filter).unwrap();
+    assert_eq!(
+        scoped["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["rows"].as_u64().unwrap())
+            .sum::<u64>(),
+        7
+    );
+    assert_eq!(scoped["oldest_at"], at);
+    let global_storage = analytics::query(&s, "storage", &Filter::default()).unwrap();
+    assert_eq!(scoped["duckdb_bytes"], global_storage["duckdb_bytes"]);
+    assert_eq!(scoped["events"], global_storage["events"]);
+    assert_eq!(scoped["physical_scope"], "installation");
+    assert!(scoped["scope_reason"].is_string());
+    s.conn.execute_batch("INSERT INTO checkpoints VALUES('machine-east','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z'); INSERT INTO quota_samples VALUES('neutral','five_hour','2026-01-01T00:00:00Z',80,'2026-01-01T05:00:00Z',300,NULL,'fixture')").unwrap();
+    let quality = analytics::query(&s, "data-quality", &filter).unwrap();
+    assert_eq!(quality["checkpoints"][0]["instance_id"], "machine-east");
+    assert_eq!(quality["collection_scope"], "installation");
+    assert!(quality["scope_reason"].is_string());
+    for route in [
+        "quota/current",
+        "quota/live",
+        "quota/windows",
+        "quota/samples",
+        "quota/notifications",
+    ] {
+        let result = analytics::query(&s, route, &filter).unwrap();
+        let unfiltered = analytics::query(&s, route, &Filter::default()).unwrap();
+        assert_eq!(
+            result["data"], unfiltered["data"],
+            "Global readings remain visible on {route}"
+        );
+        assert_eq!(result["scope"], "installation");
+        assert!(result["scope_reason"].is_string());
+    }
+    assert!(
+        analytics::query(
+            &s,
+            "overview",
+            &Filter {
+                status: Some("invalid".into()),
+                ..Default::default()
+            }
+        )
+        .is_err()
+    );
+    // The fallback harness match must not borrow another machine's same-named run.
+    s.put(
+        "machine-west",
+        "run",
+        "r",
+        "p",
+        "t",
+        "r",
+        at,
+        at,
+        "partial",
+        "fixture",
+        json!({"status":"failed","provider":"claudeAgent"}),
+    )
+    .unwrap();
+    let codex = analytics::query(
+        &s,
+        "tool-calls",
+        &Filter {
+            harness: Some("codex".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let mut codex_machines: Vec<_> = codex["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["instance_id"].as_str().unwrap())
+        .collect();
+    codex_machines.sort_unstable();
+    assert_eq!(
+        codex_machines,
+        ["machine-active", "machine-east", "machine-stopped"]
+    );
+    let before_cold = analytics::query(&s, "storage", &filter).unwrap();
+    t3ui_core::cold::compact(&c, &s).unwrap();
+    let after_cold = analytics::query(&s, "storage", &filter).unwrap();
+    for key in [
+        "rows",
+        "redacted_content_characters",
+        "normalized_json_characters",
+        "oldest_at",
+        "newest_at",
+    ] {
+        assert_eq!(
+            after_cold[key], before_cold[key],
+            "Logical scope remains equal after moving data: {key}"
+        );
+    }
+    assert_eq!(
+        after_cold["archive_bytes"],
+        analytics::query(&s, "storage", &Filter::default()).unwrap()["archive_bytes"]
+    );
+}
+
+#[test]
+fn efficiency_uses_explicit_attempts_and_machine_scoped_run_links() {
+    let (_tmp, c) = fixture();
+    let source = rusqlite::Connection::open(&c.source.sqlite_path).unwrap();
+    let s = Store::open(&c).unwrap();
+    let query = |instance: &str| {
+        analytics::query(
+            &s,
+            "usage/efficiency",
+            &Filter {
+                instance: Some(instance.into()),
+                ..Default::default()
+            },
+        )
+        .unwrap()["data"][0]
+            .clone()
+    };
+    importer::import(&c, &s, &Options::default()).unwrap();
+    let unknown = query(&c.source.instance_id);
+    assert!(unknown["retries_per_thread"].is_null());
+    assert_eq!(unknown["covered_runs"], 0);
+    source.execute_batch("CREATE TABLE orchestration_v2_projection_run_attempts(attempt_id TEXT PRIMARY KEY,thread_id TEXT,run_id TEXT,attempt_ordinal INTEGER,payload_json TEXT)").unwrap();
+    let insert = |ordinal: i64, reason: &str| {
+        let value = json!({"id":format!("attempt-{ordinal}"),"runId":"r","attemptOrdinal":ordinal,"reason":reason});
+        source
+            .execute(
+                "INSERT INTO orchestration_v2_projection_run_attempts VALUES(?,'t','r',?,?)",
+                rusqlite::params![format!("attempt-{ordinal}"), ordinal, value.to_string()],
+            )
+            .unwrap();
+    };
+    insert(1, "initial");
+    importer::import(&c, &s, &Options::default()).unwrap();
+    assert_eq!(query(&c.source.instance_id)["retries_per_thread"], 0.0);
+    insert(3, "recovery");
+    importer::import(&c, &s, &Options::default()).unwrap();
+    assert!(
+        query(&c.source.instance_id)["retries_per_thread"].is_null(),
+        "Missing ordinal 2 must not assert a complete rate"
+    );
+    insert(2, "steering_restart");
+    importer::import(&c, &s, &Options::default()).unwrap();
+    let at = "2026-01-01T00:00:00Z";
+    let put = |instance: &str, kind: &str, source_id: &str, run: &str| {
+        s.put(
+            instance,
+            kind,
+            source_id,
+            "p",
+            "t",
+            run,
+            at,
+            at,
+            "partial",
+            "fixture",
+            json!({}),
+        )
+        .unwrap();
+    };
+    put(&c.source.instance_id, "model_turn", "turn-1", "r");
+    put(&c.source.instance_id, "model_turn", "turn-2", "r");
+    put(&c.source.instance_id, "tool", "tool-1", "r");
+    put(&c.source.instance_id, "tool", "tool-2", "r");
+    put(&c.source.instance_id, "tool", "tool-3", "r");
+    put(&c.source.instance_id, "tool", "unlinked", "");
+    put("other-machine", "tool", "collision", "r");
+    let measured = query(&c.source.instance_id);
+    assert_eq!(measured["retries_per_thread"], 2.0);
+    assert_eq!(measured["steering_restarts"], 1);
+    assert_eq!(measured["covered_threads"], 1);
+    assert_eq!(measured["tools_per_turn"], 1.5);
+    assert_eq!(measured["linked_tools"], 3);
+    assert_eq!(measured["tools"], 4);
+    assert!(query("other-machine")["tools_per_turn"].is_null());
+    let all = analytics::query(&s, "usage/efficiency", &Filter::default()).unwrap();
+    assert_eq!(
+        all["data"][0]["linked_tools"], 3,
+        "A same-named run on another machine is not a link"
+    );
+    t3ui_core::cold::compact(&c, &s).unwrap();
+    assert_eq!(query(&c.source.instance_id), measured);
+    assert_eq!(
+        importer::import(&c, &s, &Options::default()).unwrap()["changed"],
+        0
+    );
+}
+
 #[test]
 fn idempotent_and_nulls() {
     let (_tmp, c) = fixture();
@@ -67,6 +389,336 @@ fn idempotent_and_nulls() {
     let r = analytics::query(&s, "timeline", &Filter::default()).unwrap();
     assert!(!r.to_string().contains("super-secret"));
     assert!(r.to_string().contains("\"input_tokens\":null"));
+}
+
+#[test]
+fn legacy_migration_clock_default_is_removed_and_rust_supplies_the_instant() {
+    let (_tmp, c) = fixture();
+    let s = Store::open(&c).unwrap();
+    s.conn.execute_batch("ALTER TABLE schema_migrations ALTER COLUMN applied_at TYPE TIMESTAMP; ALTER TABLE schema_migrations ALTER COLUMN applied_at SET DEFAULT TIMESTAMP '2000-01-01 00:00:00'; DELETE FROM schema_migrations WHERE version=8").unwrap();
+    drop(s);
+    let reopened = Store::open(&c).unwrap();
+    let default:Option<String>=reopened.conn.query_row("SELECT column_default FROM information_schema.columns WHERE table_name='schema_migrations' AND column_name='applied_at'",[],|r|r.get(0)).unwrap();
+    assert!(default.is_none());
+    let instant: String = reopened
+        .conn
+        .query_row(
+            "SELECT applied_at::VARCHAR FROM schema_migrations WHERE version=8",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(instant.starts_with(&t3ui_core::storage::now()[..10]));
+}
+
+#[test]
+fn large_tool_outputs_commit_without_exhausting_the_import_budget() {
+    let (_tmp, mut c) = fixture();
+    c.storage.memory_limit_mb = 128;
+    let source = rusqlite::Connection::open(&c.source.sqlite_path).unwrap();
+    source.execute_batch("CREATE TABLE orchestration_v2_projection_turn_items(turn_item_id TEXT PRIMARY KEY,thread_id TEXT,run_id TEXT,updated_at TEXT,type TEXT,status TEXT,payload_json TEXT)").unwrap();
+    let date = "2026-01-01T00:00:00Z";
+    let output = "x".repeat(1024 * 1024);
+    for n in 0..64 {
+        let source_id = format!("large-tool-{n}");
+        let payload = json!({"id":source_id,"threadId":"t","runId":"r","type":"command_execution","status":"completed","startedAt":date,"completedAt":date,"output":output});
+        source.execute("INSERT INTO orchestration_v2_projection_turn_items VALUES(?,'t','r',?,'command_execution','completed',?)", rusqlite::params![source_id,date,payload.to_string()]).unwrap();
+    }
+    drop(source);
+    let s = Store::open(&c).unwrap();
+    let report = importer::import(&c, &s, &Options::default()).unwrap();
+    assert_eq!(
+        report["partial_sync"], false,
+        "large rows must not silently leave a partial import: {report}"
+    );
+    assert_eq!(
+        s.conn
+            .query_row("SELECT count(*) FROM records WHERE kind='tool'", [], |r| {
+                r.get::<_, i64>(0)
+            })
+            .unwrap(),
+        64
+    );
+    let expected = json!({"arguments":null,"result":output,"diff":null,"file":null}).to_string();
+    for n in 0..64 {
+        let actual: String = s.conn.query_row("SELECT json_extract_string(data,'$.content_redacted') FROM records WHERE kind='tool' AND source_id=?", [format!("large-tool-{n}")], |r|r.get(0)).unwrap();
+        assert_eq!(
+            actual, expected,
+            "content must survive the smaller transactions exactly"
+        );
+    }
+    let again = importer::import(&c, &s, &Options::default()).unwrap();
+    assert_eq!(again["partial_sync"], false);
+    assert_eq!(
+        again["changed"], 0,
+        "byte-bounded commits must preserve revision skips"
+    );
+}
+#[test]
+fn offline_backfill_spills_large_batches_and_preserves_content_revisions_and_unrelated_hot_rows() {
+    for date in [
+        "2026-01-01T00:00:00Z".to_string(),
+        t3ui_core::storage::now(),
+    ] {
+        let (_tmp, mut c) = fixture();
+        c.storage.memory_limit_mb = 128;
+        let source = rusqlite::Connection::open(&c.source.sqlite_path).unwrap();
+        source.execute_batch("CREATE TABLE orchestration_v2_projection_turn_items(turn_item_id TEXT PRIMARY KEY,thread_id TEXT,run_id TEXT,updated_at TEXT,type TEXT,status TEXT,payload_json TEXT)").unwrap();
+        let output = "x".repeat(1024 * 1024);
+        for n in 0..16 {
+            let source_id = format!("old-tool-{n}");
+            let payload = json!({"id":source_id,"threadId":"t","runId":"r","type":"command_execution","status":"completed","startedAt":date,"completedAt":date,"output":output});
+            source.execute("INSERT INTO orchestration_v2_projection_turn_items VALUES(?,'t','r',?,'command_execution','completed',?)", rusqlite::params![source_id,date,payload.to_string()]).unwrap();
+        }
+        drop(source);
+        let s = Store::open(&c).unwrap();
+        s.conn.execute_batch("SET threads=1").unwrap();
+        let recent = t3ui_core::storage::now();
+        s.put(
+            "local",
+            "tool",
+            "unrelated-hot",
+            "other-project",
+            "other-thread",
+            "other-run",
+            &recent,
+            &recent,
+            "partial",
+            "fixture",
+            json!({"content_redacted":"Unrelated recent content"}),
+        )
+        .unwrap();
+        let options = Options {
+            archive_batches: true,
+            ..Default::default()
+        };
+        let report = importer::import(&c, &s, &options).unwrap();
+        assert_eq!(
+            report["partial_sync"], false,
+            "backfill must complete: {report}"
+        );
+        let hot: i64 = s
+            .conn
+            .query_row(
+                "SELECT count(*) FROM records WHERE kind='tool' AND project_id='p'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(
+            hot < 16,
+            "large committed outputs must spill before a first backfill ends"
+        );
+        let unrelated: i64 = s
+            .conn
+            .query_row(
+                "SELECT count(*) FROM records WHERE source_id='unrelated-hot'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            unrelated, 1,
+            "batch spill must not archive unrelated recent records"
+        );
+        // Offline import and serving have separate budgets in the CLI and qualifier.
+        // This test checks content correctness, not API support at the backfill budget.
+        s.conn
+            .execute_batch("SET memory_limit='2048MB'; SET threads=4")
+            .unwrap();
+        let read_tools = || {
+            analytics::query(
+                &s,
+                "tool-calls",
+                &Filter {
+                    project: Some("p".into()),
+                    include_content: Some(true),
+                    limit: Some(500),
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+        };
+        let tools = read_tools();
+        let rows = tools["data"].as_array().unwrap();
+        assert_eq!(rows.len(), 16);
+        let expected =
+            json!({"arguments":null,"result":output,"diff":null,"file":null}).to_string();
+        for row in rows {
+            assert!(
+                row["data"]["content_redacted"].as_str() == Some(expected.as_str()),
+                "full content must survive intermediate eviction exactly"
+            );
+        }
+        t3ui_core::cold::verify(&s).unwrap();
+        s.conn
+            .execute_batch("SET memory_limit='128MB'; SET threads=1")
+            .unwrap();
+        let again = importer::import(&c, &s, &options).unwrap();
+        assert_eq!(again["partial_sync"], false);
+        assert_eq!(
+            again["changed"], 0,
+            "cold identity/revision skips must survive batch eviction"
+        );
+        s.conn
+            .execute_batch("SET memory_limit='2048MB'; SET threads=4")
+            .unwrap();
+        assert!(
+            read_tools() == tools,
+            "an unchanged import must preserve every cold API value"
+        );
+    }
+}
+
+#[test]
+fn cold_queries_remain_flat_across_many_registered_files() {
+    let (tmp, c) = fixture();
+    let s = Store::open(&c).unwrap();
+    for n in 0..2 {
+        s.put(
+            "local",
+            "tool",
+            &format!("many-files-{n}"),
+            "p",
+            "t",
+            "r",
+            "2026-01-01T00:00:00Z",
+            "2026-01-01T00:00:00Z",
+            "partial",
+            "fixture",
+            json!({"content_redacted":format!("Neutral output {n}")}),
+        )
+        .unwrap();
+    }
+    let filter = Filter {
+        include_content: Some(true),
+        ..Default::default()
+    };
+    let before = analytics::query(&s, "tool-calls", &filter).unwrap();
+    t3ui_core::cold::compact(&c, &s).unwrap();
+    let (base, rows, digest): (String, i64, String) = s
+        .conn
+        .query_row(
+            "SELECT path,row_count,sha256 FROM cold_segments WHERE table_name='records' LIMIT 1",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .unwrap();
+    let second = tmp.path().join("second-base.parquet");
+    std::fs::copy(&base, &second).unwrap();
+    let mut generation = s
+        .conn
+        .query_row("SELECT max(generation) FROM cold_segments", [], |r| {
+            r.get::<_, i64>(0)
+        })
+        .unwrap();
+    for i in 0..1200 {
+        // Keep each physical file below Windows' 1024-hard-link limit.
+        let path = tmp.path().join(format!("segment-{i}.parquet"));
+        std::fs::hard_link(
+            if i < 600 {
+                std::path::Path::new(&base)
+            } else {
+                &second
+            },
+            &path,
+        )
+        .unwrap();
+        generation += 1;
+        s.conn
+            .execute(
+                "INSERT INTO cold_segments VALUES(?,'records',?,?,?,?)",
+                duckdb::params![
+                    generation,
+                    path.to_string_lossy().replace('\\', "/"),
+                    rows,
+                    digest,
+                    t3ui_core::storage::now()
+                ],
+            )
+            .unwrap();
+    }
+    s.conn
+        .execute("UPDATE cold_record_keys SET generation=?", [generation])
+        .unwrap();
+    let after = analytics::query(&s, "tool-calls", &filter)
+        .expect("a large committed manifest must remain queryable");
+    assert!(
+        after == before,
+        "manifest fan-out must preserve every API value"
+    );
+}
+
+#[test]
+fn large_full_tool_pages_survive_hot_and_cold_reads() {
+    let (_tmp, c) = fixture();
+    let s = Store::open(&c).unwrap();
+    let output = "x".repeat(1024 * 1024);
+    for n in 0..64 {
+        s.put(
+            "local",
+            "tool",
+            &format!("large-{n}"),
+            "p",
+            "t",
+            "r",
+            "2026-01-01T00:00:00Z",
+            "2026-01-01T00:00:00Z",
+            "partial",
+            "fixture",
+            json!({"content_redacted":output,"content_ciphertext":"excluded"}),
+        )
+        .unwrap();
+    }
+    let filter = Filter {
+        limit: Some(64),
+        include_content: Some(true),
+        ..Default::default()
+    };
+    for stage in ["hot", "cold"] {
+        if stage == "cold" {
+            t3ui_core::cold::compact(&c, &s).unwrap();
+        }
+        let result = analytics::query(&s, "tool-calls", &filter)
+            .unwrap_or_else(|e| panic!("{stage} full page failed: {e}"));
+        let rows = result["data"].as_array().unwrap();
+        assert_eq!(rows.len(), 64);
+        assert!(rows.iter().all(|r| r["data"]["content_redacted"].as_str()
+            == Some(output.as_str())
+            && r["data"].get("content_ciphertext").is_none()));
+    }
+}
+#[test]
+fn quota_gap_reasons_survive_eviction_and_do_not_guess_sleep() {
+    let (_tmp, c) = fixture();
+    let s = Store::open(&c).unwrap();
+    s.conn.execute_batch("INSERT INTO quota_samples VALUES('synthetic','five_hour','2026-01-01T02:00:00Z',10,'2026-01-01T07:00:00Z',300,NULL,'fixture'),('synthetic','five_hour','2026-01-01T02:10:00Z',20,'2026-01-01T07:00:00Z',300,NULL,'fixture'),('synthetic','five_hour','2026-01-01T06:40:00Z',40,'2026-01-01T07:00:00Z',300,NULL,'fixture'),('synthetic','five_hour','2026-01-01T06:50:00Z',50,'2026-01-01T07:00:00Z',300,NULL,'fixture')").unwrap();
+    let unknown = analytics::query(&s, "quota/windows", &Default::default()).unwrap();
+    assert_eq!(unknown["data"][0]["capture_quality"], "partial");
+    assert_eq!(
+        unknown["data"][0]["coverage_reasons"],
+        json!(["missing_readings"])
+    );
+    let gaps = unknown["data"][0]["gaps"].as_array().unwrap();
+    assert_eq!(gaps.len(), 1);
+    assert_eq!(gaps[0]["causes"], json!([]));
+    let start = t3ui_core::storage::parse_time("2026-01-01T02:10:00Z")
+        .unwrap()
+        .timestamp_millis();
+    let end = t3ui_core::storage::parse_time("2026-01-01T06:40:00Z")
+        .unwrap()
+        .timestamp_millis();
+    s.set("quota:power",&json!({"state":"ready","intervals":[{"sleep_epoch_ms":start,"wake_epoch_ms":end,"source":"windows_power_event"}]}).to_string()).unwrap();
+    let explained = analytics::query(&s, "quota/windows", &Default::default()).unwrap();
+    assert_eq!(
+        explained["data"][0]["gaps"][0]["causes"],
+        json!([{"reason":"observer_asleep","start_epoch_ms":start,"end_epoch_ms":end,"source":"windows_power_event"}])
+    );
+    t3ui_core::cold::compact(&c, &s).unwrap();
+    assert_eq!(
+        analytics::query(&s, "quota/windows", &Default::default()).unwrap(),
+        explained
+    );
 }
 #[test]
 fn hierarchy() {
@@ -82,6 +734,354 @@ fn hierarchy() {
     assert!(rows.iter().any(|r| r["source_id"] == "nested"
         && r["data"]["depth"] == 2
         && r["data"]["root_thread_id"] == "t"));
+}
+
+#[test]
+fn cold_eviction_preserves_all_api_values_and_source_revision_skips() {
+    let (_tmp, mut c) = fixture();
+    c.storage.content_retention_days = 3650;
+    c.storage.archive_path = std::path::Path::new(&c.storage.archive_path)
+        .with_file_name("archive's")
+        .to_string_lossy()
+        .into();
+    let s = Store::open(&c).unwrap();
+    importer::import(&c, &s, &Options::default()).unwrap();
+    let recent = t3ui_core::storage::now();
+    s.put(
+        "local",
+        "tool",
+        "recent",
+        "p",
+        "t",
+        "r",
+        &recent,
+        &recent,
+        "partial",
+        "fixture",
+        json!({"content_redacted":"Synthetic recent output","duration_ms":42}),
+    )
+    .unwrap();
+    s.conn.execute_batch("INSERT INTO quota_samples VALUES('synthetic','daily','2026-01-01T00:00:00Z',40,'2026-01-02T00:00:00Z',1440,NULL,'fixture'); INSERT INTO quota_events VALUES('synthetic','limit_reached','2026-01-01T00:00:00Z','daily','2026-01-02T00:00:00Z','fixture')").unwrap();
+    let routes = [
+        "overview",
+        "threads",
+        "projects",
+        "agents",
+        "tool-calls",
+        "model-turns",
+        "timeline",
+        "models",
+        "usage/projects",
+        "usage/machines",
+        "usage/tools",
+        "data-quality/fields",
+        "quota/current",
+        "quota/windows",
+        "quota/samples",
+        "quota/resets",
+    ];
+    let filter = Filter {
+        include_content: Some(true),
+        ..Default::default()
+    };
+    let before: Vec<_> = routes
+        .iter()
+        .map(|route| analytics::query(&s, route, &filter).unwrap())
+        .collect();
+    let moved = t3ui_core::cold::compact(&c, &s).unwrap();
+    assert!(moved["moved_rows"].as_i64().unwrap() > 0);
+    assert!(moved["restore_verified"].as_bool().unwrap());
+    assert_eq!(
+        s.conn
+            .query_row(
+                "SELECT count(*) FROM main.records WHERE runtrace_time_us(occurred_at)<?",
+                [(t3ui_core::storage::clock() - chrono::Duration::days(30)).timestamp_micros()],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+        0
+    );
+    for (route, expected) in routes.iter().zip(before) {
+        assert_eq!(
+            analytics::query(&s, route, &filter).unwrap(),
+            expected,
+            "hot/cold mismatch on {route}"
+        );
+    }
+    assert!(s.stats().unwrap()["archive_bytes"].as_u64().unwrap() > 0);
+    t3ui_core::cold::verify(&s).unwrap();
+    assert_eq!(t3ui_core::cold::compact(&c, &s).unwrap()["moved_rows"], 0);
+    assert_eq!(
+        importer::import(&c, &s, &Options::default()).unwrap()["changed"],
+        0,
+        "archiving must not trigger historical reimports"
+    );
+    let snapshot = t3ui_core::archive::run(&c, &s, "run").unwrap();
+    let mut restored_config = c.clone();
+    restored_config.storage.duckdb_path = std::path::Path::new(&c.storage.duckdb_path)
+        .with_file_name("restored.duckdb")
+        .to_string_lossy()
+        .into();
+    let restored = Store::open(&restored_config).unwrap();
+    t3ui_core::archive::restore(
+        &restored,
+        std::path::Path::new(snapshot["path"].as_str().unwrap()),
+    )
+    .unwrap();
+    for route in routes {
+        assert_eq!(
+            analytics::query(&restored, route, &filter).unwrap(),
+            analytics::query(&s, route, &filter).unwrap(),
+            "post-eviction restore mismatch on {route}"
+        );
+    }
+    let recent = t3ui_core::storage::now();
+    assert!(
+        s.put(
+            "local",
+            "tool",
+            "after-snapshot",
+            "p",
+            "t",
+            "r",
+            &recent,
+            &recent,
+            "partial",
+            "fixture",
+            json!({"status":"completed"})
+        )
+        .unwrap(),
+        "snapshot temporary views must not shadow later writes"
+    );
+}
+
+#[test]
+fn cold_versions_keep_fresh_metadata_reader_snapshots_and_purges() {
+    let (_tmp, mut c) = fixture();
+    c.storage.content_retention_days = 3650;
+    let s = Store::open(&c).unwrap();
+    let old = (t3ui_core::storage::clock() - chrono::Duration::days(40)).to_rfc3339();
+    let first = json!({"content_redacted":"Synthetic first output","duration_ms":1});
+    s.put(
+        "local",
+        "tool",
+        "a",
+        "p",
+        "t",
+        "r",
+        &old,
+        &old,
+        "partial",
+        "v1",
+        first.clone(),
+    )
+    .unwrap();
+    let reader = s.try_clone().unwrap();
+    let snapshot = t3ui_core::cold::read_snapshot(&reader).unwrap();
+    assert_eq!(
+        reader
+            .conn
+            .query_row("SELECT count(*) FROM records", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        t3ui_core::cold::maintain_due(&c, &s).unwrap()["state"],
+        "synced"
+    );
+    assert_eq!(
+        reader
+            .conn
+            .query_row("SELECT count(*) FROM records", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        1,
+        "an old reader keeps the hot rows across publication"
+    );
+    drop(snapshot);
+    let updated = t3ui_core::storage::now();
+    assert!(
+        !s.put(
+            "local", "tool", "a", "p", "t", "r", &old, &updated, "partial", "v2", first
+        )
+        .unwrap()
+    );
+    let f = Filter {
+        include_content: Some(true),
+        ..Default::default()
+    };
+    let read = analytics::query(&s, "tool-calls", &f).unwrap();
+    assert_eq!(read["data"][0]["source_updated_at"], updated);
+    assert_eq!(read["data"][0]["source_version"], "v2");
+    let reader_snapshot = t3ui_core::cold::read_snapshot(&reader).unwrap();
+    assert!(
+        s.put(
+            "local",
+            "tool",
+            "a",
+            "p",
+            "t",
+            "r",
+            &old,
+            &updated,
+            "partial",
+            "v3",
+            json!({"content_redacted":"Synthetic second output","duration_ms":2})
+        )
+        .unwrap()
+    );
+    t3ui_core::cold::compact(&c, &s).unwrap();
+    assert_eq!(
+        reader
+            .conn
+            .query_row(
+                "SELECT json_extract_string(data,'$.content_redacted') FROM records",
+                [],
+                |r| r.get::<_, String>(0)
+            )
+            .unwrap(),
+        "Synthetic first output"
+    );
+    drop(reader_snapshot);
+    let read = analytics::query(&s, "tool-calls", &f).unwrap();
+    assert_eq!(read["data"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        read["data"][0]["data"]["content_redacted"],
+        "Synthetic second output"
+    );
+    s.purge("thread", "t").unwrap();
+    assert!(
+        analytics::query(&s, "tool-calls", &f).unwrap()["data"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(s.stats().unwrap()["events"], 0);
+    drop(reader);
+    drop(s);
+    let reopened = Store::open(&c).unwrap();
+    assert!(
+        analytics::query(&reopened, "tool-calls", &f).unwrap()["data"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn cold_expiry_clears_text_ciphertext_preview_and_search() {
+    let (_tmp, mut c) = fixture();
+    let old = (t3ui_core::storage::clock() - chrono::Duration::days(40)).to_rfc3339();
+    let s = Store::open(&c).unwrap();
+    s.put("local","tool","a","p","t","r",&old,&old,"partial","fixture",json!({"content_redacted":"Synthetic expiring output","content_ciphertext":"synthetic ciphertext"})).unwrap();
+    drop(s);
+    c.storage.content_retention_days = 1;
+    let s = Store::open(&c).unwrap();
+    t3ui_core::cold::compact(&c, &s).unwrap();
+    let f = Filter {
+        include_content: Some(true),
+        ..Default::default()
+    };
+    let row = analytics::query(&s, "tool-calls", &f).unwrap();
+    assert!(row["data"][0]["data"]["content_redacted"].is_null());
+    assert!(row["data"][0]["data"]["content_ciphertext"].is_null());
+    assert!(
+        analytics::query(
+            &s,
+            "search",
+            &Filter {
+                q: Some("expiring".into()),
+                ..Default::default()
+            }
+        )
+        .unwrap()["data"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    let preview = analytics::query(&s, "tool-calls", &Filter::default()).unwrap();
+    assert!(preview["data"][0]["data"]["content_redacted"].is_null());
+    let path: String = s
+        .conn
+        .query_row(
+            "SELECT path FROM cold_segments WHERE table_name='records'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let stored: Option<String> = s
+        .conn
+        .query_row(
+            &format!(
+                "SELECT json_extract_string(data,'$.content_redacted') FROM read_parquet('{}')",
+                path.replace('\'', "''")
+            ),
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(
+        stored.is_none(),
+        "already expired text must not enter a new cold segment"
+    );
+    s.put("local","tool","b","p","t","r",&old,&old,"partial","fixture",json!({"content_redacted":"Synthetic expired correction","content_ciphertext":"synthetic ciphertext"})).unwrap();
+    assert!(
+        !analytics::query(&s, "tool-calls", &f)
+            .unwrap()
+            .to_string()
+            .contains("expired correction")
+    );
+}
+
+#[test]
+fn time_filters_and_purge_use_instants_with_microsecond_precision() {
+    let (_tmp, c) = fixture();
+    let s = Store::open(&c).unwrap();
+    for (source, date) in [
+        ("utc", "2026-01-01T00:00:00Z"),
+        ("offset", "2026-01-01T01:00:00+01:00"),
+        ("micro", "2026-01-01T00:00:00.000001Z"),
+        ("negative", "1969-12-31T23:59:59.999999Z"),
+    ] {
+        s.put(
+            "local",
+            "tool",
+            source,
+            "p",
+            "t",
+            "r",
+            date,
+            date,
+            "partial",
+            "fixture",
+            json!({"status":"completed"}),
+        )
+        .unwrap();
+    }
+    let boundary = "2026-01-01T00:00:00.000001Z";
+    let result = analytics::query(
+        &s,
+        "tool-calls",
+        &Filter {
+            since: Some(boundary.into()),
+            until: Some(boundary.into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(result["data"].as_array().unwrap().len(), 1);
+    assert_eq!(result["data"][0]["source_id"], "micro");
+    s.purge("before", boundary).unwrap();
+    assert_eq!(
+        s.conn
+            .query_row("SELECT count(*) FROM records", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    drop(s);
+    let reopened = Store::open(&c).unwrap();
+    let result = analytics::query(&reopened, "tool-calls", &Filter::default()).unwrap();
+    assert_eq!(result["data"].as_array().unwrap().len(), 1);
+    assert_eq!(result["data"][0]["source_id"], "micro");
 }
 #[test]
 fn purge_and_reimport() {
@@ -996,7 +1996,7 @@ fn search_cache_matches_json_semantics_and_tracks_replacements() {
         "absent",
     ] {
         let pattern = format!("%{q}%");
-        let expected: Vec<String> = s.conn.prepare("SELECT id FROM records WHERE json_extract_string(data,'$.content_redacted') ILIKE ? ORDER BY try_cast(occurred_at AS TIMESTAMPTZ) DESC NULLS LAST,id LIMIT 500").unwrap().query_map([pattern], |r|r.get(0)).unwrap().collect::<duckdb::Result<_>>().unwrap();
+        let expected: Vec<String> = s.conn.prepare("SELECT id FROM records WHERE json_extract_string(data,'$.content_redacted') ILIKE ? ORDER BY runtrace_time_us(occurred_at) DESC NULLS LAST,id LIMIT 500").unwrap().query_map([pattern], |r|r.get(0)).unwrap().collect::<duckdb::Result<_>>().unwrap();
         let actual = analytics::query(
             &s,
             "search",
@@ -1139,9 +2139,24 @@ fn bulk_tools_bound_topn_memory_and_recover_after_failed_query() {
         offset: Some(1500),
         ..Default::default()
     };
-    let failed = analytics::query(&s, "timeline", &f).unwrap_err();
+    // The former wide JSON envelope remains a failing control at this budget.
+    // The API now assembles full envelopes per row in Rust and must succeed.
+    let failed = match s.rows("SELECT json_object('data',json_merge_patch(data,'{\"content_ciphertext\":null}'))::VARCHAR FROM records ORDER BY runtrace_time_us(occurred_at) DESC NULLS LAST,id LIMIT 500 OFFSET 1500",&[]) {
+        Err(error) => error,
+        Ok(_) => panic!("wide JSON control must exceed the budget"),
+    };
     assert_eq!(importer::error_category(&failed), "database_memory_limit");
     assert!(analytics::query(&s, "overview", &Filter::default()).is_ok());
+    let full = analytics::query(&s, "timeline", &f).unwrap();
+    assert_eq!(full["data"].as_array().unwrap().len(), 500);
+    assert!(
+        full["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|row| row["data"].get("content_ciphertext").is_none()
+                && row["data"]["content_redacted"].as_str().unwrap().len() == 8192)
+    );
     let actual = analytics::query(&s, "tool-calls", &f).unwrap();
     assert_eq!(actual["data"].as_array().unwrap().len(), 500);
     let expected: Vec<String> = s
@@ -1463,7 +2478,7 @@ fn lowercase_search_cache_preserves_unicode_wildcards_and_migrates_v1() {
         "",
     ] {
         let pattern = format!("%{q}%");
-        let expected:Vec<String>=s.conn.prepare("SELECT id FROM records WHERE json_extract_string(data,'$.content_redacted') ILIKE ? ORDER BY try_cast(occurred_at AS TIMESTAMPTZ) DESC NULLS LAST,id").unwrap().query_map([&pattern],|r|r.get(0)).unwrap().collect::<duckdb::Result<_>>().unwrap();
+        let expected:Vec<String>=s.conn.prepare("SELECT id FROM records WHERE json_extract_string(data,'$.content_redacted') ILIKE ? ORDER BY runtrace_time_us(occurred_at) DESC NULLS LAST,id").unwrap().query_map([&pattern],|r|r.get(0)).unwrap().collect::<duckdb::Result<_>>().unwrap();
         let actual = analytics::query(
             &s,
             "search",
@@ -2352,4 +3367,683 @@ fn quota_windows_are_complete_only_when_readings_cover_them() {
         ]
     );
     assert!(windows["data"][0].get("sample_times").is_none());
+}
+
+#[test]
+fn review_purge_after_attribution_change_cannot_resurrect_cold_or_snapshot_content() {
+    let (_tmp, c) = fixture();
+    let s = Store::open(&c).unwrap();
+    let at = "2026-01-01T00:00:00Z";
+    s.put(
+        "local",
+        "tool",
+        "review-entity",
+        "project-a",
+        "thread-a",
+        "run-a",
+        at,
+        at,
+        "partial",
+        "v1",
+        json!({"content_redacted":"Original neutral content"}),
+    )
+    .unwrap();
+    t3ui_core::cold::compact(&c, &s).unwrap();
+    let old_snapshot = t3ui_core::archive::run(&c, &s, "run").unwrap();
+    s.put(
+        "local",
+        "tool",
+        "review-entity",
+        "project-b",
+        "thread-b",
+        "run-b",
+        at,
+        at,
+        "partial",
+        "v2",
+        json!({"content_redacted":"Corrected neutral content"}),
+    )
+    .unwrap();
+    s.purge("project", "project-b").unwrap();
+    let filter = Filter {
+        include_content: Some(true),
+        ..Default::default()
+    };
+    assert!(
+        analytics::query(&s, "tool-calls", &filter).unwrap()["data"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "purging a hot correction must not reveal its obsolete cold revision"
+    );
+    t3ui_core::archive::run(&c, &s, "verify")
+        .expect("purge must not look like cold-index corruption");
+    let after_snapshot = t3ui_core::archive::run(&c, &s, "run")
+        .expect("purged data must remain snapshot-exportable");
+    s.conn
+        .execute_batch("BEGIN; DELETE FROM cold_record_keys")
+        .unwrap();
+    assert!(
+        t3ui_core::cold::verify(&s).is_err(),
+        "missing physical index entries must still fail corruption checks"
+    );
+    s.conn.execute_batch("ROLLBACK").unwrap();
+    assert_eq!(
+        s.stats().unwrap()["events"],
+        0,
+        "purge must hide older event metadata for the same identity"
+    );
+    let mut target = c.clone();
+    target.storage.duckdb_path = format!("{}.purge-review-restore", c.storage.duckdb_path);
+    let restored = Store::open(&target).unwrap();
+    t3ui_core::archive::restore(
+        &restored,
+        std::path::Path::new(old_snapshot["path"].as_str().unwrap()),
+    )
+    .unwrap();
+    assert!(
+        analytics::query(&restored, "tool-calls", &filter).unwrap()["data"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "the current purge ledger must also protect a snapshot with the older attribution"
+    );
+    assert_eq!(
+        restored.stats().unwrap()["events"],
+        0,
+        "older snapshot event metadata must respect identity tombstones"
+    );
+    target.storage.duckdb_path = format!("{}.post-purge-review-restore", c.storage.duckdb_path);
+    let after_restore = Store::open(&target).unwrap();
+    t3ui_core::archive::restore(
+        &after_restore,
+        std::path::Path::new(after_snapshot["path"].as_str().unwrap()),
+    )
+    .unwrap();
+    assert!(
+        analytics::query(&after_restore, "tool-calls", &filter).unwrap()["data"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(after_restore.stats().unwrap()["events"], 0);
+    let source = rusqlite::Connection::open(&c.source.sqlite_path).unwrap();
+    source.execute_batch("CREATE TABLE orchestration_v2_projection_turn_items(turn_item_id TEXT PRIMARY KEY,thread_id TEXT,run_id TEXT,updated_at TEXT,type TEXT,status TEXT,payload_json TEXT)").unwrap();
+    let payload = json!({"id":"review-entity","threadId":"t","runId":"r","type":"command_execution","status":"completed","startedAt":at,"completedAt":at,"output":"Attempted neutral reimport"});
+    source.execute("INSERT INTO orchestration_v2_projection_turn_items VALUES('review-entity','t','r',?,'command_execution','completed',?)", rusqlite::params![at,payload.to_string()]).unwrap();
+    drop(source);
+    assert_eq!(
+        importer::import(&c, &s, &Options::default()).unwrap()["partial_sync"],
+        false
+    );
+    assert!(
+        analytics::query(&s, "tool-calls", &filter).unwrap()["data"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "changing attribution in the source must not bypass the record purge"
+    );
+}
+
+#[test]
+fn review_repeated_payload_keeps_original_cold_event_fields() {
+    let (_tmp, c) = fixture();
+    let s = Store::open(&c).unwrap();
+    let at = "2026-01-01T00:00:00Z";
+    let put = |version: &str, value: &str| {
+        s.put(
+            "local",
+            "tool",
+            "review-event",
+            "p",
+            "t",
+            "r",
+            at,
+            at,
+            "partial",
+            version,
+            json!({"content_redacted":value}),
+        )
+        .unwrap()
+    };
+    put("v1", "Payload A");
+    let original = s
+        .rows("SELECT to_json(e) FROM events e", &[])
+        .unwrap()
+        .remove(0);
+    t3ui_core::cold::compact(&c, &s).unwrap();
+    put("v2", "Payload B");
+    put("v3", "Payload A");
+    let actual = {
+        let _snapshot = t3ui_core::cold::read_snapshot(&s).unwrap();
+        s.rows(
+            "SELECT to_json(e) FROM events e WHERE event_id=?",
+            &[&original["event_id"].as_str().unwrap()],
+        )
+        .unwrap()
+    };
+    assert!(
+        actual == vec![original],
+        "the first event's timestamp, attribution and source version must survive A/B/A corrections"
+    );
+}
+
+#[test]
+fn review_restore_applies_current_content_retention_before_hydration() {
+    let (_tmp, mut c) = fixture();
+    c.storage.content_retention_days = 90;
+    let s = Store::open(&c).unwrap();
+    let at = (t3ui_core::storage::clock() - chrono::Duration::days(40)).to_rfc3339();
+    s.put("local", "tool", "review-expiry", "p", "t", "r", &at, &at, "partial", "v1", json!({"content_redacted":"Retained neutral value","content_ciphertext":"neutral-ciphertext"})).unwrap();
+    t3ui_core::cold::compact(&c, &s).unwrap();
+    let snapshot = t3ui_core::archive::run(&c, &s, "run").unwrap();
+    drop(s);
+    let mut current = c.clone();
+    current.storage.content_retention_days = 30;
+    let current_source = Store::open(&current).unwrap();
+    let filter = Filter {
+        include_content: Some(true),
+        ..Default::default()
+    };
+    let expected = analytics::query(&current_source, "tool-calls", &filter).unwrap();
+    let mut target = current.clone();
+    target.storage.duckdb_path = format!("{}.expiry-review-restore", c.storage.duckdb_path);
+    let restored = Store::open(&target).unwrap();
+    t3ui_core::archive::restore(
+        &restored,
+        std::path::Path::new(snapshot["path"].as_str().unwrap()),
+    )
+    .unwrap();
+    assert!(
+        analytics::query(&restored, "tool-calls", &filter).unwrap() == expected,
+        "restored content must expire under the current policy immediately"
+    );
+    let search = analytics::query(
+        &restored,
+        "search",
+        &Filter {
+            q: Some("Retained neutral".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert!(
+        search["data"].as_array().unwrap().is_empty(),
+        "expired text must not re-enter the search cache"
+    );
+}
+
+#[test]
+fn review_relative_archive_publication_persists_absolute_paths() {
+    let (_tmp, mut c) = fixture();
+    let cwd = std::env::current_dir().unwrap();
+    let parent = cwd.join("target");
+    std::fs::create_dir_all(&parent).unwrap();
+    let relative_tmp = tempfile::Builder::new()
+        .prefix("relative-cold-")
+        .tempdir_in(&parent)
+        .unwrap();
+    c.storage.archive_path = relative_tmp
+        .path()
+        .strip_prefix(&cwd)
+        .unwrap()
+        .join("archive")
+        .to_string_lossy()
+        .into();
+    assert!(std::path::Path::new(&c.storage.archive_path).is_relative());
+    let s = Store::open(&c).unwrap();
+    s.put(
+        "local",
+        "tool",
+        "review-path",
+        "p",
+        "t",
+        "r",
+        "2026-01-01T00:00:00Z",
+        "2026-01-01T00:00:00Z",
+        "partial",
+        "v1",
+        json!({"content_redacted":"Neutral output"}),
+    )
+    .unwrap();
+    t3ui_core::cold::compact(&c, &s).unwrap();
+    let paths = s
+        .rows(
+            "SELECT to_json(struct_pack(path:=path)) FROM cold_segments",
+            &[],
+        )
+        .unwrap();
+    assert!(
+        paths
+            .iter()
+            .all(|row| std::path::Path::new(row["path"].as_str().unwrap()).is_absolute()),
+        "registered files must not depend on a future launch directory"
+    );
+}
+
+#[test]
+fn review_old_relative_manifest_reanchors_against_verified_archive_directory() {
+    let (_tmp, c) = fixture();
+    let s = Store::open(&c).unwrap();
+    s.put(
+        "local",
+        "tool",
+        "review-legacy-path",
+        "p",
+        "t",
+        "r",
+        "2026-01-01T00:00:00Z",
+        "2026-01-01T00:00:00Z",
+        "partial",
+        "v1",
+        json!({"content_redacted":"Neutral legacy output"}),
+    )
+    .unwrap();
+    let filter = Filter {
+        include_content: Some(true),
+        ..Default::default()
+    };
+    let expected = analytics::query(&s, "tool-calls", &filter).unwrap();
+    t3ui_core::cold::compact(&c, &s).unwrap();
+    let paths = s
+        .rows(
+            "SELECT to_json(struct_pack(path:=path)) FROM cold_segments",
+            &[],
+        )
+        .unwrap();
+    for row in paths {
+        let path = row["path"].as_str().unwrap();
+        let relative = std::path::Path::new("old-launch-directory")
+            .join(std::path::Path::new(path).file_name().unwrap())
+            .to_string_lossy()
+            .replace('\\', "/");
+        s.conn
+            .execute(
+                "UPDATE cold_segments SET path=? WHERE path=?",
+                duckdb::params![relative, path],
+            )
+            .unwrap();
+    }
+    drop(s);
+    let reopened = Store::open(&c).unwrap();
+    assert!(
+        analytics::query(&reopened, "tool-calls", &filter).unwrap() == expected,
+        "a verified configured archive directory must resolve legacy relative entries"
+    );
+}
+
+#[test]
+fn offline_backfill_bounds_small_recent_batches_and_keeps_logical_results() {
+    let (_tmp, mut c) = fixture();
+    c.storage.memory_limit_mb = 128;
+    let source = rusqlite::Connection::open(&c.source.sqlite_path).unwrap();
+    source.execute_batch("CREATE TABLE orchestration_v2_projection_turn_items(turn_item_id TEXT PRIMARY KEY,thread_id TEXT,run_id TEXT,updated_at TEXT,type TEXT,status TEXT,payload_json TEXT)").unwrap();
+    let date = t3ui_core::storage::now();
+    let source_id = |n| {
+        let padding = t3ui_core::privacy::hash(&format!("neutral-source-{n}"));
+        format!("tool-{n}:{padding}{padding}")
+            .chars()
+            .take(128)
+            .collect::<String>()
+    };
+    for n in 0..3005 {
+        let id = source_id(n);
+        let payload = json!({"id":id,"threadId":"t","runId":"r","type":"command_execution","status":"completed","startedAt":date,"completedAt":date,"output":format!("Neutral small output {n} {}", "x".repeat(1024))});
+        source.execute("INSERT INTO orchestration_v2_projection_turn_items VALUES(?,'t','r',?,'command_execution','completed',?)", rusqlite::params![id,date,payload.to_string()]).unwrap();
+    }
+    drop(source);
+    let s = Store::open(&c).unwrap();
+    s.conn.execute_batch("SET threads=1").unwrap();
+    let options = Options {
+        archive_batches: true,
+        ..Default::default()
+    };
+    let report = importer::import(&c, &s, &options).unwrap();
+    assert_eq!(report["partial_sync"], false);
+    let hot: i64 = s
+        .conn
+        .query_row("SELECT count(*) FROM records WHERE kind='tool'", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(
+        hot, 0,
+        "small recent outputs must not accumulate throughout offline backfill, including its final tail"
+    );
+    let mut outputs = std::collections::HashMap::new();
+    for offset in (0..3005).step_by(500) {
+        let page = analytics::query(
+            &s,
+            "tool-calls",
+            &Filter {
+                limit: Some(500),
+                offset: Some(offset),
+                include_content: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        for row in page["data"].as_array().unwrap() {
+            outputs.insert(
+                row["source_id"].as_str().unwrap().to_string(),
+                row["data"]["content_redacted"]
+                    .as_str()
+                    .unwrap()
+                    .to_string(),
+            );
+        }
+    }
+    assert_eq!(outputs.len(), 3005);
+    for n in 0..3005 {
+        let expected = json!({"arguments":null,"result":format!("Neutral small output {n} {}", "x".repeat(1024)),"diff":null,"file":null}).to_string();
+        assert_eq!(outputs[&source_id(n)], expected);
+    }
+    assert_eq!(importer::import(&c, &s, &options).unwrap()["changed"], 0);
+    t3ui_core::cold::verify(&s).unwrap();
+}
+
+#[test]
+fn offline_backfill_retries_a_committed_tail_and_acknowledges_publication_after_restart() {
+    for thread_limited in [true, false] {
+        let (_tmp, c) = fixture();
+        let source = rusqlite::Connection::open(&c.source.sqlite_path).unwrap();
+        source.execute_batch("CREATE TABLE orchestration_v2_projection_turn_items(turn_item_id TEXT PRIMARY KEY,thread_id TEXT,run_id TEXT,updated_at TEXT,type TEXT,status TEXT,payload_json TEXT)").unwrap();
+        let date = t3ui_core::storage::now();
+        let payload = json!({"id":"tail-retry","threadId":"t","runId":"r","type":"command_execution","status":"completed","startedAt":date,"completedAt":date,"output":"Neutral recoverable tail"});
+        source.execute("INSERT INTO orchestration_v2_projection_turn_items VALUES('tail-retry','t','r',?,'command_execution','completed',?)",rusqlite::params![date,payload.to_string()]).unwrap();
+        drop(source);
+        let s = Store::open(&c).unwrap();
+        s.put(
+            "local",
+            "tool",
+            "unrelated-hot",
+            "other",
+            "other",
+            "other",
+            &date,
+            &date,
+            "partial",
+            "v1",
+            json!({"content_redacted":"Unrelated neutral content"}),
+        )
+        .unwrap();
+        std::fs::write(&c.storage.archive_path, "Publication must fail").unwrap();
+        let options = Options {
+            archive_batches: true,
+            thread_limit: thread_limited.then_some(100),
+            ..Default::default()
+        };
+        let failed = importer::import(&c, &s, &options);
+        if thread_limited {
+            assert!(failed.is_err());
+        } else {
+            assert_eq!(failed.unwrap()["partial_sync"], true);
+        }
+        let pending: (String, String) = s
+            .conn
+            .query_row(
+                "SELECT key,value FROM settings WHERE starts_with(key,'cold:pending:')",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .expect("committed rows need a durable pending spill");
+        assert_eq!(
+            s.conn
+                .query_row(
+                    "SELECT count(*) FROM records WHERE source_id='tail-retry'",
+                    [],
+                    |r| r.get::<_, i64>(0)
+                )
+                .unwrap(),
+            1
+        );
+        let other_queue = format!(
+            "cold:pending:{}:unrelated",
+            t3ui_core::privacy::hash("other-machine")
+        );
+        s.set(&other_queue, "This belongs to another instance")
+            .unwrap();
+        if !thread_limited {
+            let source = rusqlite::Connection::open(&c.source.sqlite_path).unwrap();
+            source
+                .execute("UPDATE projection_projects SET deleted_at=?", [&date])
+                .unwrap();
+        }
+        drop(s);
+        std::fs::remove_file(&c.storage.archive_path).unwrap();
+        let s = Store::open(&c).unwrap();
+        // The normal retry deadline has arrived. Do not bypass revision skipping.
+        s.conn
+        .execute(
+            "UPDATE settings SET value='{\"retry_at\":0}' WHERE starts_with(key,'source_retry:')",
+            [],
+        )
+        .unwrap();
+        let options = Options {
+            archive_batches: true,
+            ..Default::default()
+        };
+        let resumed = importer::import(&c, &s, &options).unwrap();
+        assert_eq!(resumed["partial_sync"], false);
+        assert_eq!(
+            resumed["changed"], 0,
+            "unchanged rows must resume their pending spill"
+        );
+        assert_eq!(
+            s.conn
+                .query_row(
+                    "SELECT count(*) FROM records WHERE source_id='tail-retry'",
+                    [],
+                    |r| r.get::<_, i64>(0)
+                )
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            s.conn
+                .query_row(
+                    "SELECT count(*) FROM records WHERE source_id='unrelated-hot'",
+                    [],
+                    |r| r.get::<_, i64>(0)
+                )
+                .unwrap(),
+            1
+        );
+        assert!(s.setting(&pending.0).is_none());
+        assert_eq!(
+            s.setting(&other_queue).as_deref(),
+            Some("This belongs to another instance")
+        );
+        let segments: i64 = s
+            .conn
+            .query_row("SELECT count(*) FROM cold_segments", [], |r| r.get(0))
+            .unwrap();
+        // A crash after publication but before acknowledgement leaves the same queue.
+        s.set(&pending.0, &pending.1).unwrap();
+        assert_eq!(importer::import(&c, &s, &options).unwrap()["changed"], 0);
+        assert!(s.setting(&pending.0).is_none());
+        assert_eq!(
+            s.conn
+                .query_row("SELECT count(*) FROM cold_segments", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            segments
+        );
+        t3ui_core::cold::verify(&s).unwrap();
+    }
+}
+
+#[test]
+fn structured_payload_metadata_stays_distinct_from_projection_revision_identity() {
+    let (_tmp, c) = fixture();
+    let source = rusqlite::Connection::open(&c.source.sqlite_path).unwrap();
+    source.execute_batch("CREATE TABLE orchestration_v2_projection_turn_items(turn_item_id TEXT PRIMARY KEY,thread_id TEXT,run_id TEXT,updated_at TEXT,type TEXT,status TEXT,payload_json TEXT)").unwrap();
+    let started = t3ui_core::storage::clock() - chrono::Duration::hours(2);
+    let payload_updated = (started + chrono::Duration::hours(1)).to_rfc3339();
+    let projection_updated = (started + chrono::Duration::minutes(30)).to_rfc3339();
+    let payload = json!({"id":"payload-item","threadId":"t","runId":"r","type":"command_execution","status":"completed","startedAt":started.to_rfc3339(),"completedAt":payload_updated,"updatedAt":payload_updated,"output":"Neutral distinct metadata"});
+    source.execute("INSERT INTO orchestration_v2_projection_turn_items VALUES('projection-item','t','r',?,'command_execution','completed',?)",rusqlite::params![projection_updated,payload.to_string()]).unwrap();
+    drop(source);
+    let s = Store::open(&c).unwrap();
+    assert_eq!(
+        importer::import(
+            &c,
+            &s,
+            &Options {
+                archive_batches: true,
+                ..Default::default()
+            }
+        )
+        .unwrap()["partial_sync"],
+        false
+    );
+    let row = analytics::query(
+        &s,
+        "tool-calls",
+        &Filter {
+            include_content: Some(true),
+            ..Default::default()
+        },
+    )
+    .unwrap()["data"][0]
+        .clone();
+    assert_eq!(row["source_id"], "payload-item");
+    assert_eq!(row["source_updated_at"], payload_updated);
+    assert_eq!(
+        t3ui_core::storage::parse_time(row["occurred_at"].as_str().unwrap()),
+        Some(started)
+    );
+    assert!(
+        row["data"]["content_redacted"]
+            .as_str()
+            .unwrap()
+            .contains("Neutral distinct metadata")
+    );
+    let revisions=s.rows("SELECT to_json(struct_pack(source_id:=source_id)) FROM source_revisions WHERE kind='tool'",&[]).unwrap();
+    assert_eq!(revisions, vec![json!({"source_id":"projection-item"})]);
+    assert_eq!(
+        importer::import(&c, &s, &Options::default()).unwrap()["changed"],
+        0
+    );
+}
+
+#[test]
+fn persisted_search_text_matches_native_json_extraction_for_all_value_shapes() {
+    let (_tmp, c) = fixture();
+    let s = Store::open(&c).unwrap();
+    let values = vec![
+        json!(null),
+        json!(""),
+        json!("Plain TEXT λ İ"),
+        json!("prefix\u{0000}SUFFIX"),
+        json!(42),
+        json!(-0.0),
+        json!(1e20),
+        json!([1e20]),
+        json!({"large": 1e20, "small": 1e-20}),
+        json!(true),
+        json!([null, "", 1.25, "λ"]),
+        json!({"z":"Line\nQuote\"","a":true}),
+    ];
+    for (n, value) in values.into_iter().enumerate() {
+        s.put(
+            "local",
+            "instance",
+            &format!("search-shape-{n}"),
+            "p",
+            "t",
+            "r",
+            "2026-01-01T00:00:00Z",
+            "2026-01-01T00:00:00Z",
+            "partial",
+            "v1",
+            json!({"content_redacted":value}),
+        )
+        .unwrap();
+    }
+    s.put(
+        "local",
+        "instance",
+        "search-missing",
+        "p",
+        "t",
+        "r",
+        "2026-01-01T00:00:00Z",
+        "2026-01-01T00:00:00Z",
+        "partial",
+        "v1",
+        json!({}),
+    )
+    .unwrap();
+    let mismatches:i64=s.conn.query_row("SELECT count(*) FROM records WHERE search_text IS DISTINCT FROM lower(json_extract_string(data,'$.content_redacted'))",[],|r|r.get(0)).unwrap();
+    assert_eq!(
+        mismatches, 0,
+        "the write cache must preserve DuckDB JSON extraction and lowercase semantics"
+    );
+    let before = s
+        .rows(
+            "SELECT to_json(struct_pack(id:=id,search_text:=search_text)) FROM records ORDER BY id",
+            &[],
+        )
+        .unwrap();
+    s.conn
+        .execute("UPDATE records SET search_version=0", [])
+        .unwrap();
+    t3ui_core::storage::hydrate_search(&s.conn).unwrap();
+    let after = s
+        .rows(
+            "SELECT to_json(struct_pack(id:=id,search_text:=search_text)) FROM records ORDER BY id",
+            &[],
+        )
+        .unwrap();
+    assert_eq!(
+        before, after,
+        "search must stay stable after cache hydration"
+    );
+}
+
+#[test]
+fn canonical_payload_hash_preserves_legacy_utf8_ciphertext_and_scalar_goldens() {
+    let (_tmp, c) = fixture();
+    let s = Store::open(&c).unwrap();
+    let cases = [
+        (
+            r#"{"content_redacted":"quoted \" line\n λ 🟦","content_ciphertext":"neutral-cipher","repository_path_encrypted":null,"extra":[null,"",true,1.25]}"#,
+            "2d6045980693eb29d283f6d996ff7d5764a5b8f3472ca05b4139c0ab06086121",
+        ),
+        (
+            r#"{"content_redacted":"neutral","content_ciphertext":"","repository_path_encrypted":"neutral-path","_source_attribution":"replaced"}"#,
+            "0f175ca5fb67558d0a38eb9695345915078be67e8bad4e29a55d7e27fa1df28d",
+        ),
+        (
+            r#"["λ",null,"",9223372036854775807]"#,
+            "1e8f1f883839c1ac85dbbe2a1decdbdca486030d43dd4c355454a8a2325873fd",
+        ),
+    ];
+    for (n, (raw, expected)) in cases.into_iter().enumerate() {
+        let source = format!("canonical-compat-{n}");
+        s.put(
+            "local",
+            "instance",
+            &source,
+            "neutral-p",
+            "neutral-t",
+            "neutral-r",
+            "2026-01-01T00:00:00Z",
+            "2026-01-01T00:00:00Z",
+            "partial",
+            "v1",
+            serde_json::from_str(raw).unwrap(),
+        )
+        .unwrap();
+        let actual: String = s
+            .conn
+            .query_row(
+                "SELECT payload_hash FROM records WHERE source_id=?",
+                [source],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(actual, expected);
+    }
 }

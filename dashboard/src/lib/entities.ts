@@ -16,6 +16,9 @@ export function durationMs(d: Json): number | null {
   return ms >= 0 ? ms : null;
 }
 
+/** Source IDs belong to one machine; tuple encoding also handles delimiters in IDs. */
+export const sourceKey = (instance: string, source: string) => JSON.stringify([instance, source]);
+
 export interface ThreadRow {
   id: string; source_id: string; instance_id: string; project_id: string;
   occurred_at: string; updated_at: string | null; quality: string; version: string | null;
@@ -109,7 +112,7 @@ export function commandPreview(args: string): string {
 }
 
 export interface ToolRow {
-  id: string; source_id: string; thread_id: string; run_id: string; project_id: string; occurred_at: string; quality: string;
+  id: string; source_id: string; instance_id: string; thread_id: string; run_id: string; project_id: string; occurred_at: string; quality: string;
   name: string; category: string; model: string | null; status: string | null; exit: number | null; duration: number | null; chars: number | null;
   redactions: number | null; categories: string[]; preview: string; parent: string | null;
 }
@@ -122,7 +125,7 @@ export function toTool(e: Entity): ToolRow {
     ? contentField(c.fields.arguments) ?? contentField(c.fields.diff) ?? contentField(c.fields.result) ?? ''
     : (c.raw ?? '').replace(/^\{"(arguments|diff|result)":(null,"(diff|result)":)?"?/, '').replace(/\\n/g, ' ').replace(/\\"/g, '"');
   return {
-    id: e.id, source_id: e.source_id, thread_id: e.thread_id, run_id: e.run_id, project_id: e.project_id, occurred_at: e.occurred_at,
+    id: e.id, source_id: e.source_id, instance_id: e.instance_id, thread_id: e.thread_id, run_id: e.run_id, project_id: e.project_id, occurred_at: e.occurred_at,
     quality: e.capture_quality ?? 'unavailable', name: str(d.tool_name) ?? 'unknown', category: str(d.tool_category) ?? 'unknown', model: str(d.model),
     status: str(d.status), exit: num(d.exit_code), duration: durationMs(d), chars: num(d.character_count), redactions: num(d.redaction_count),
     categories: Array.isArray(d.redaction_categories) ? (d.redaction_categories as string[]) : [],

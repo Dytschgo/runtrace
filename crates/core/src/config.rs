@@ -19,10 +19,16 @@ pub struct Config {
 pub struct Quota {
     #[serde(default = "default_true")]
     pub checks: bool,
+    /// Native Windows quota warnings, once per window at 20% and 5% remaining.
+    #[serde(default = "default_true")]
+    pub notifications: bool,
 }
 impl Default for Quota {
     fn default() -> Self {
-        Self { checks: true }
+        Self {
+            checks: true,
+            notifications: true,
+        }
     }
 }
 /// Where new versions come from. Checking only reads the latest release; installing always needs a person to ask for it.
@@ -54,6 +60,9 @@ fn default_api() -> String {
 pub struct Server {
     pub host: String,
     pub port: u16,
+    /// Additional exact HTTP authorities, including a non-default port. Binding stays loopback-only.
+    #[serde(default)]
+    pub allowed_hosts: Vec<String>,
 }
 #[derive(Clone, Deserialize, Serialize)]
 pub struct Dashboard {
@@ -149,6 +158,7 @@ pub fn default_config(home: &std::path::Path) -> String {
 # Only this computer can reach the dashboard.
 host = "127.0.0.1"
 port = 4310
+allowed_hosts = []
 
 [dashboard]
 assets_path = ""

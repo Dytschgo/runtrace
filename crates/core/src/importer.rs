@@ -25,6 +25,8 @@ pub struct Options {
     pub since: Option<String>,
     pub dry_run: bool,
     pub thread_limit: Option<usize>,
+    /// Exclusive offline backfills publish each committed batch to cold storage.
+    pub archive_batches: bool,
 }
 pub fn lineage(id: &str, threads: &HashMap<String, Value>) -> (String, usize, bool) {
     let mut cur = id.to_string();
@@ -49,9 +51,59 @@ pub fn lineage(id: &str, threads: &HashMap<String, Value>) -> (String, usize, bo
     let known = threads.contains_key(&cur);
     (cur, depth, known)
 }
+fn pending_spill_prefix(c: &Config) -> String {
+    format!("cold:pending:{}:", privacy::hash(&c.source.instance_id))
+}
+/// Full offline recovery includes queues whose projects were deleted or whose
+/// original import selected threads without an explicit project.
+fn resume_instance_spills(c: &Config, s: &Store) -> Result<()> {
+    let keys: Vec<String> = s
+        .conn
+        .prepare("SELECT key FROM settings WHERE starts_with(key,?) ORDER BY key")?
+        .query_map([pending_spill_prefix(c)], |r| r.get(0))?
+        .collect::<duckdb::Result<_>>()?;
+    for key in keys {
+        resume_pending_spill(c, s, &key)?;
+    }
+    Ok(())
+}
+/// Hot commits and their pending publication intent are atomic. Publication and
+/// acknowledgement are idempotent, including a restart between those two steps.
+fn resume_pending_spill(c: &Config, s: &Store, key: &str) -> Result<()> {
+    let pending: Option<String> = s.conn.query_row(
+        "SELECT (SELECT value FROM settings WHERE key=?)",
+        [key],
+        |r| r.get(0),
+    )?;
+    let Some(pending) = pending else {
+        return Ok(());
+    };
+    let ids: Vec<String> = serde_json::from_str(&pending)?;
+    anyhow::ensure!(
+        ids.len() <= 1000,
+        "Pending cold batch exceeds its row bound"
+    );
+    crate::cold::spill_committed(c, s, &ids)?;
+    s.conn.execute("DELETE FROM settings WHERE key=?", [key])?;
+    // Exclusive offline imports otherwise retain resident index and deleted-row
+    // state across many published batches. Publication and its acknowledgement
+    // are durable before checkpointing; recovery must not republish the batch.
+    s.conn
+        .execute_batch("CHECKPOINT")
+        .context("Cold publication committed and acknowledged; offline memory checkpoint failed")?;
+    Ok(())
+}
 fn import_project(c: &Config, s: &Store, o: &Options) -> Result<Value> {
     if pause_path(c).exists() || c.capture.default_policy == "disabled" {
         return Ok(json!({"paused":true}));
+    }
+    let pending_spill_key = format!(
+        "{}{}",
+        pending_spill_prefix(c),
+        privacy::hash(&serde_json::to_string(&o.project)?)
+    );
+    if o.archive_batches && !o.dry_run {
+        resume_pending_spill(c, s, &pending_spill_key)?;
     }
     let source = rusqlite::Connection::open_with_flags(
         &c.source.sqlite_path,
@@ -68,8 +120,9 @@ fn import_project(c: &Config, s: &Store, o: &Options) -> Result<Value> {
         .unwrap_or("unknown".into());
     // Per-project freshness must never inherit another project's global watermark.
     // This is observation metadata; source revision scans remain the catch-up authority.
+    let record_index = crate::cold::record_index_source(&s.conn)?;
     let checkpoint = s.conn.query_row(
-        "SELECT source_updated_at FROM records WHERE instance_id=? AND (? IS NULL OR project_id=?) AND kind<>'instance' ORDER BY try_cast(source_updated_at AS TIMESTAMPTZ) DESC NULLS LAST LIMIT 1",
+        &format!("SELECT source_updated_at FROM {record_index} WHERE instance_id=? AND (? IS NULL OR project_id=?) AND kind<>'instance' ORDER BY runtrace_time_us(source_updated_at) DESC NULLS LAST LIMIT 1"),
         duckdb::params![c.source.instance_id,o.project,o.project], |r| r.get::<_,String>(0),
     ).ok().unwrap_or_default();
     let has_project_column = source
@@ -127,6 +180,23 @@ fn import_project(c: &Config, s: &Store, o: &Options) -> Result<Value> {
             run_map.insert(text(&v, "id").to_string(), v);
         }
     }
+    // Attempts are separate projection rows. A run's ordinal is its position in
+    // the conversation, and must never be mistaken for a retry count.
+    let mut attempts: HashMap<String, Vec<Value>> = HashMap::new();
+    let attempts_supported = table_exists(&source, "orchestration_v2_projection_run_attempts")?;
+    if attempts_supported {
+        let mut stmt = source.prepare("SELECT payload_json FROM orchestration_v2_projection_run_attempts WHERE thread_id=? ORDER BY attempt_ordinal,attempt_id")?;
+        for tid in selected.keys() {
+            let rows = stmt.query_map([tid], |r| r.get::<_, String>(0))?;
+            for row in rows {
+                let value: Value = serde_json::from_str(&row?)?;
+                attempts
+                    .entry(text(&value, "runId").into())
+                    .or_default()
+                    .push(value);
+            }
+        }
+    }
     let revisions = s.revisions(&c.source.instance_id, o.project.as_deref())?;
     let mut policies = HashMap::new();
     for t in selected.values() {
@@ -144,7 +214,7 @@ fn import_project(c: &Config, s: &Store, o: &Options) -> Result<Value> {
                 .unwrap_or(c.capture.default_policy.clone())
         });
     }
-    let tombstones = s.rows(
+    let all_tombstones = s.rows(
         "SELECT json_object('scope',scope,'id',source_id)::VARCHAR FROM tombstones",
         &[],
     )?;
@@ -153,13 +223,25 @@ fn import_project(c: &Config, s: &Store, o: &Options) -> Result<Value> {
     } else {
         None
     };
+    let record_tombstones: std::collections::HashSet<String> = all_tombstones
+        .iter()
+        .filter(|t| t["scope"] == "record")
+        .filter_map(|t| t["id"].as_str().map(str::to_owned))
+        .collect();
+    let tombstones: Vec<Value> = all_tombstones
+        .into_iter()
+        .filter(|t| t["scope"] != "record")
+        .collect();
     let mut changed = 0;
+    let mut batch_content_bytes = 0usize;
+    let mut batch_record_ids = Vec::new();
     let skipped = std::cell::Cell::new(0usize);
     let cached = std::cell::Cell::new(0usize);
     let mut newest = checkpoint;
     if !o.dry_run {
         s.conn.execute_batch("BEGIN")?;
     }
+    let transaction_active = std::cell::Cell::new(!o.dry_run);
     let result = (|| {
         let mut put = |kind: &str,
                        v: &Value,
@@ -188,17 +270,30 @@ fn import_project(c: &Config, s: &Store, o: &Options) -> Result<Value> {
             if updated > newest.as_str() {
                 newest = updated.into();
             }
-            if tombstones.iter().any(|t| match t["scope"].as_str() {
-                Some("thread") => t["id"] == thread,
-                Some("project") => t["id"] == project,
-                Some("before") => t["id"]
-                    .as_str()
-                    .is_some_and(|d| crate::storage::time_before(date, d)),
-                _ => false,
-            }) {
+            if (!record_tombstones.is_empty()
+                && record_tombstones.contains(&crate::storage::id(
+                    &c.source.instance_id,
+                    kind,
+                    text(v, "id"),
+                )))
+                || tombstones.iter().any(|t| match t["scope"].as_str() {
+                    Some("thread") => t["id"] == thread,
+                    Some("project") => t["id"] == project,
+                    Some("before") => t["id"]
+                        .as_str()
+                        .is_some_and(|d| crate::storage::time_before(date, d)),
+                    _ => false,
+                })
+            {
                 skipped.set(skipped.get() + 1);
                 return Ok(());
             }
+            // Row count alone does not bound a transaction: a tool result can
+            // contain megabytes. Count retained text before moving the document.
+            let content_bytes = ["content_redacted", "content_ciphertext"]
+                .into_iter()
+                .filter_map(|field| data.get(field).and_then(Value::as_str))
+                .fold(2048usize, |bytes, text| bytes.saturating_add(text.len()));
             if !o.dry_run
                 && s.put(
                     &c.source.instance_id,
@@ -215,7 +310,15 @@ fn import_project(c: &Config, s: &Store, o: &Options) -> Result<Value> {
                 )?
             {
                 changed += 1;
-                if changed % 1000 == 0 {
+                if o.archive_batches {
+                    batch_record_ids.push(crate::storage::id(
+                        &c.source.instance_id,
+                        kind,
+                        text(v, "id"),
+                    ));
+                }
+                batch_content_bytes = batch_content_bytes.saturating_add(content_bytes);
+                if changed % 1000 == 0 || batch_content_bytes >= 4 * 1024 * 1024 {
                     let progress_key = format!("collector_progress:{}", c.source.instance_id);
                     let mut progress = s
                         .setting(&progress_key)
@@ -225,7 +328,21 @@ fn import_project(c: &Config, s: &Store, o: &Options) -> Result<Value> {
                     progress["committed_changes_in_project"] = json!(changed);
                     progress["last_committed_at"] = json!(now());
                     s.set(&progress_key, &progress.to_string())?;
-                    s.conn.execute_batch("COMMIT;BEGIN")?;
+                    if o.archive_batches {
+                        s.set(
+                            &pending_spill_key,
+                            &serde_json::to_string(&batch_record_ids)?,
+                        )?;
+                    }
+                    s.conn.execute_batch("COMMIT")?;
+                    transaction_active.set(false);
+                    if o.archive_batches {
+                        resume_pending_spill(c, s, &pending_spill_key)?;
+                    }
+                    batch_record_ids.clear();
+                    s.conn.execute_batch("BEGIN")?;
+                    transaction_active.set(true);
+                    batch_content_bytes = 0;
                     tracing::info!(
                         operation = "import_batch",
                         instance_id = c.source.instance_id,
@@ -362,6 +479,8 @@ fn import_project(c: &Config, s: &Store, o: &Options) -> Result<Value> {
                 s.save_revision(&c.source.instance_id, "thread", id, &revision)?;
             }
         }
+        // Later phases use selected threads, not the complete lineage index.
+        drop(all);
         for r in run_map.values() {
             let tid = text(r, "threadId");
             let Some(t) = selected.get(tid) else { continue };
@@ -369,14 +488,15 @@ fn import_project(c: &Config, s: &Store, o: &Options) -> Result<Value> {
                 .get(text(t, "projectId"))
                 .map(String::as_str)
                 .unwrap_or(&c.capture.default_policy);
-            let revision = privacy::hash(&format!("run4:{version}:{policy}:{}", r));
+            let attempt_summary = attempt_summary(attempts.get(text(r, "id")), attempts_supported);
+            let revision = privacy::hash(&format!("run5:{version}:{policy}:{r}:{attempt_summary}"));
             if o.since.as_deref() != Some("")
                 && revisions.get(&("run".into(), text(r, "id").into())) == Some(&revision)
             {
                 cached.set(cached.get() + 1);
                 continue;
             }
-            let data = json!({"duration_ms":duration_ms(r),"provider":r.get("providerInstanceId"),"requested_model":r.pointer("/modelSelection/model"),"resolved_model":null,"status":r.get("status"),"started_at":r.get("startedAt"),"completed_at":r.get("completedAt"),"user_message_id":r.get("userMessageId"),"input_tokens":null,"cached_input_tokens":null,"output_tokens":null,"reasoning_tokens":null,"total_tokens":null});
+            let data = json!({"duration_ms":duration_ms(r),"provider":r.get("providerInstanceId"),"requested_model":r.pointer("/modelSelection/model"),"resolved_model":null,"status":r.get("status"),"started_at":r.get("startedAt"),"completed_at":r.get("completedAt"),"user_message_id":r.get("userMessageId"),"attempts":attempt_summary,"input_tokens":null,"cached_input_tokens":null,"output_tokens":null,"reasoning_tokens":null,"total_tokens":null});
             put(
                 "run",
                 r,
@@ -391,6 +511,9 @@ fn import_project(c: &Config, s: &Store, o: &Options) -> Result<Value> {
                 s.save_revision(&c.source.instance_id, "run", text(r, "id"), &revision)?;
             }
         }
+        // Persisted run summaries own their attempt data. Release the source
+        // payloads before messages and tools can trigger further cold spills.
+        drop(attempts);
         let mut message_meta=source.prepare("SELECT message_id,updated_at,run_id FROM orchestration_v2_projection_messages WHERE thread_id=? ORDER BY created_at,message_id")?;
         let mut message_payload = source.prepare(
             "SELECT payload_json FROM orchestration_v2_projection_messages WHERE message_id=?",
@@ -659,6 +782,7 @@ fn import_project(c: &Config, s: &Store, o: &Options) -> Result<Value> {
                     }
                     let raw: String = payload.query_row([&source_id], |r| r.get(0))?;
                     let v: Value = serde_json::from_str(&raw)?;
+                    drop(raw);
                     let content = if kind == "tool" {
                         json!({"arguments":v.get("input"),"result":v.get("output"),"diff":v.get("diffStr"),"file":v.get("fileName")})
                     } else {
@@ -669,6 +793,7 @@ fn import_project(c: &Config, s: &Store, o: &Options) -> Result<Value> {
                         policy,
                         key.as_ref(),
                     )?)?;
+                    drop(content);
                     data["status"] = v["status"].clone();
                     data["duration_ms"] = duration_ms(&v);
                     data["model"] = run
@@ -708,12 +833,17 @@ fn import_project(c: &Config, s: &Store, o: &Options) -> Result<Value> {
                             _ => Value::Null,
                         };
                     }
+                    let metadata = json!({"id":v.get("id"),"updatedAt":v.get("updatedAt")});
+                    let started_at = text(&v, "startedAt").to_string();
+                    // Publication can run inside put. Release the large source
+                    // copies before that work; preserve payload metadata exactly.
+                    drop(v);
                     put(
                         kind,
-                        &v,
+                        &metadata,
                         data,
                         "partial",
-                        text(&v, "startedAt"),
+                        &started_at,
                         tid,
                         project,
                         &rid,
@@ -771,16 +901,50 @@ fn import_project(c: &Config, s: &Store, o: &Options) -> Result<Value> {
         if !o.dry_run && o.project.is_none() && o.thread_limit.is_none() {
             s.conn.execute("INSERT INTO checkpoints VALUES (?,?,?) ON CONFLICT(instance_id) DO UPDATE SET source_updated_at=excluded.source_updated_at,last_successful_sync_at=excluded.last_successful_sync_at",duckdb::params![c.source.instance_id,newest,now()])?;
         }
+        if o.archive_batches && !o.dry_run && !batch_record_ids.is_empty() {
+            s.set(
+                &pending_spill_key,
+                &serde_json::to_string(&batch_record_ids)?,
+            )?;
+        }
         Ok::<_, anyhow::Error>(())
     })();
-    if !o.dry_run {
-        s.conn
-            .execute_batch(if result.is_ok() { "COMMIT" } else { "ROLLBACK" })?;
+    if transaction_active.get() {
+        if result.is_ok() {
+            s.conn.execute_batch("COMMIT")?;
+        } else if let Err(error) = s.conn.execute_batch("ROLLBACK") {
+            // Preserve the initiating error if a failed commit/checkpoint has
+            // already invalidated the transaction or connection.
+            tracing::warn!(operation="import_rollback",error=%error);
+        }
     }
     result?;
+    if o.archive_batches && !o.dry_run {
+        resume_pending_spill(c, s, &pending_spill_key)?;
+    }
     Ok(
         json!({"changed":changed,"unchanged_source_rows_skipped":cached.get(),"skipped_incomplete_or_purged":skipped.get(),"foreign_thread_parse_errors":foreign_thread_errors,"threads_discovered":selected.len(),"checkpoint":newest,"dry_run":o.dry_run,"capture_quality":"partial"}),
     )
+}
+
+fn attempt_summary(rows: Option<&Vec<Value>>, supported: bool) -> Value {
+    if !supported {
+        return json!({"coverage":"unsupported","observed":null,"reattempts":null,"steering_restarts":null});
+    }
+    let rows = rows.map(Vec::as_slice).unwrap_or_default();
+    let ordinals: std::collections::BTreeSet<_> = rows
+        .iter()
+        .filter_map(|v| v["attemptOrdinal"].as_u64().filter(|n| *n > 0))
+        .collect();
+    let complete = !rows.is_empty()
+        && ordinals.len() == rows.len()
+        && ordinals.last().copied() == Some(rows.len() as u64);
+    let steering: std::collections::BTreeSet<_> = rows
+        .iter()
+        .filter(|v| v["reason"] == "steering_restart")
+        .filter_map(|v| v["attemptOrdinal"].as_u64().filter(|n| *n > 1))
+        .collect();
+    json!({"coverage":if complete {"complete"} else {"partial"},"observed":ordinals.len(),"reattempts":ordinals.iter().filter(|n| **n > 1).count(),"steering_restarts":steering.len()})
 }
 
 fn duration_ms(v: &Value) -> Value {
@@ -875,6 +1039,9 @@ pub fn import(c: &Config, s: &Store, o: &Options) -> Result<Value> {
     }
     if pause_path(c).exists() || c.capture.default_policy == "disabled" {
         return Ok(json!({"paused":true}));
+    }
+    if o.archive_batches && !o.dry_run {
+        resume_instance_spills(c, s)?;
     }
     let source = rusqlite::Connection::open_with_flags(
         &c.source.sqlite_path,

@@ -1,3 +1,4 @@
+import { sourceKey } from '../lib/entities';
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { ArrowLeft, ExternalLink, Network, Pause, Play, RotateCcw, TriangleAlert } from 'lucide-react';
 import { ModelName } from '../components/model';
@@ -22,15 +23,15 @@ import '../styles/story.css';
 export default function AgentStory({ id }: { id: string }) {
   const { hrefPage } = useUrl();
   const f = useFilters();
-  const threads = useThreads({ instance: f.instance });
-  const agents = useAgents({ instance: f.instance });
+  const threads = useThreads({ instance: f.instance, status: f.status });
+  const agents = useAgents({ instance: f.instance, status: f.status });
   const events = useThreadEvents(id);
   // Token totals for the lanes need every turn, so they are read once the story itself is in, or taken from what the overview already read.
-  const tokens = useThreadTokens({ instance: f.instance }, !!events.data);
+  const tokens = useThreadTokens({ instance: f.instance, status: f.status }, !!events.data);
 
   const thread = threads.data?.rows.find((t) => t.source_id === id) ?? null;
   const forest = useMemo(() => (threads.data && agents.data ? buildForest(threads.data.rows, agents.data.rows) : null), [threads.data, agents.data]);
-  const agentsByChild = useMemo(() => { const m = new Map<string, AgentRow>(); for (const a of agents.data?.rows ?? []) if (a.child) m.set(a.child, a); return m; }, [agents.data]);
+  const agentsByChild = useMemo(() => { const m = new Map<string, AgentRow>(); for (const a of agents.data?.rows ?? []) if (a.child) m.set(sourceKey(a.instance_id, a.child), a); return m; }, [agents.data]);
   const story = useMemo(() => {
     if (!forest || !events.data) return null;
     const root = findNode(forest.roots, id) ?? fallbackRoot(id, thread, events.data.rows.filter((e) => e.kind === 'agent'));
@@ -99,7 +100,7 @@ function StoryView({ id, story, tokens, scanComplete, scanned }: { id: string; s
   const player = usePlayer({ initial, autoplay: initial === null, onPause });
 
   const selectedKey = params.get('node');
-  const selected = story.lanes.find((l) => l.key === selectedKey) ?? null;
+  const selected = story.lanes.find((l) => l.key === selectedKey || l.thread === selectedKey) ?? null;
   const select = useCallback((key: string | null) => set({ node: key }, { replace: true }), [set]);
 
   const t = story.axis.toT(player.progress);
@@ -221,7 +222,7 @@ function StoryView({ id, story, tokens, scanComplete, scanned }: { id: string; s
         </Panel>
 
         <Panel title={selected ? (selected.row === 0 ? 'This thread' : 'Sub-agent') : 'Select a lane'} sub={selected?.title ?? 'Click a lane on the stage, or a running sub-agent, to read what it was asked and what it returned.'} className="story-detail">
-          {selected && <LaneDetail lane={selected} story={story} tz={tz} tokens={tokens.get(selected.thread ?? selected.key)?.total ?? null} colorOf={colorOf} hrefPage={hrefPage} selfId={id} />}
+          {selected && <LaneDetail lane={selected} story={story} tz={tz} tokens={tokens.get(sourceKey(selected.node.thread?.instance_id ?? selected.node.agent?.instance_id ?? '', selected.thread ?? ''))?.total ?? null} colorOf={colorOf} hrefPage={hrefPage} selfId={id} />}
         </Panel>
       </div>
 
@@ -465,8 +466,8 @@ function LaneDetail({ lane, story, tz, tokens, colorOf, hrefPage, selfId }: { la
       {!isRoot && summary.lastAnswer && <details className="agent-part"><summary>Its last answer</summary><div className="message-text message-small">{summary.lastAnswer}</div></details>}
       {!isRoot && !text?.task && !text?.result && agent && <p className="fine">No task or result text was captured for this sub-agent.</p>}
       <div className="story-detail-actions">
-        {lane.thread && lane.thread !== selfId && <AppLink className="btn" href={hrefPage('Threads', { id: lane.thread, story: '1' })}><Play size={14} aria-hidden="true" /> Play its story</AppLink>}
-        {lane.thread && <AppLink className="btn" href={hrefPage('Threads', { id: lane.thread })}><ExternalLink size={14} aria-hidden="true" /> Open thread</AppLink>}
+        {lane.thread && lane.thread !== selfId && <AppLink className="btn" href={hrefPage('Threads', { id: lane.thread, instance: lane.node.thread?.instance_id ?? lane.node.agent?.instance_id, story: '1' })}><Play size={14} aria-hidden="true" /> Play its story</AppLink>}
+        {lane.thread && <AppLink className="btn" href={hrefPage('Threads', { id: lane.thread, instance: lane.node.thread?.instance_id ?? lane.node.agent?.instance_id })}><ExternalLink size={14} aria-hidden="true" /> Open thread</AppLink>}
       </div>
       <span className="sr-only">Lane colour {colorOf(lane.model)}</span>
     </>

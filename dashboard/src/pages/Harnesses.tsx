@@ -32,7 +32,7 @@ export default function Harnesses() {
   const before = previousWindow(f);
   const previous = useModelTurns({ ...f, model: undefined, range: undefined, since: before?.since, until: before?.until }, !!before);
   // Threads say which ones are sub-agents, which is what tells delegated work from turns a person started.
-  const threads = useThreads({ project: f.project, instance: f.instance });
+  const threads = useThreads({ project: f.project, instance: f.instance, status: f.status });
   const projects = useProjects();
   const resets = useQuota('quota/resets');
   const measure: HarnessMeasure = params.get('hm') === 'tokens' ? 'tokens' : 'turns';
@@ -52,7 +52,7 @@ export default function Harnesses() {
 
   // The pair defaults to Claude Code against Codex, or else the two busiest harnesses.
   const pick = (given: string | null, fallback: string, other?: string) =>
-    given && keys.includes(given) && given !== other ? given : keys.includes(fallback) && fallback !== other ? fallback : keys.find((k) => k !== other) ?? fallback;
+    given && keys.includes(given) && given !== other ? given : keys.includes(fallback) && fallback !== other ? fallback : keys.find((k) => k !== other) ?? (fallback !== other ? fallback : PREFERRED.find((k) => k !== other)!);
   const a = pick(params.get('ha'), PREFERRED[0]);
   const b = pick(params.get('hb'), PREFERRED[1], a);
 
@@ -255,8 +255,10 @@ const rate = (n: number, of: number) => (of ? fmtPct(n / of, n && n / of < 0.01 
 
 function CompareTable({ stats }: { stats: HarnessStats[] }) {
   const none = (why: string) => <Unknown label="n/a" why={why} />;
-  // A rate that is zero for every harness says nothing, so it moves to the download and the note says so.
-  const allZero = (get: (s: HarnessStats) => number) => stats.every((s) => get(s) === 0);
+  const turns = stats.reduce((n, s) => n + s.turns, 0);
+  const statusKnown = stats.reduce((n, s) => n + s.statusKnown, 0);
+  // Hide an all-zero status column only when every turn actually reported a status.
+  const allZero = (get: (s: HarnessStats) => number) => statusKnown === turns && stats.every((s) => get(s) === 0);
   const quietFailed = allZero((s) => s.failed);
   const quietStopped = allZero((s) => s.stopped);
   const maxPer = Math.max(1, ...stats.map((s) => s.tokensPerTurn ?? 0));
@@ -280,6 +282,7 @@ function CompareTable({ stats }: { stats: HarnessStats[] }) {
   ];
  return (
     <>
+      {statusKnown < turns && <p className="fine">Turn status coverage: {fmtInt(statusKnown)} of {fmtInt(turns)} turns reported a status. Failure and stopped rates use reported statuses only.</p>}
       {(quietFailed || quietStopped) && <p className="table-gap"><small>No turn {quietFailed && quietStopped ? 'failed or was stopped' : quietFailed ? 'failed' : 'was stopped'} in this view.</small></p>}
       <DataTable rows={stats} columns={columns} rowKey={(s) => s.key} caption="Harnesses compared" defaultSort={{ key: 'turns', dir: 'desc' }} paged={false} exportName="runtrace-harnesses" />
     </>
@@ -295,6 +298,7 @@ function LimitPanel({ episodes, a, b, tz }: { episodes: LimitEpisode[]; a: strin
   const shown = open ? newest : newest.slice(0, LIMITS_SHOWN);
   return (
     <Panel title="While a limit held" hint={`${harnessName(a)}'s share of ${harnessName(a)} and ${harnessName(b)} until the reset, against the same length of time just before`} flush>
+      <p className="table-gap"><strong>Installation-wide limits.</strong> Hits, refusals and resets span all machines and run statuses. Shares use filtered activity; the selected date range may omit part of the comparison interval.</p>
       <div className="table-scroll card-table" tabIndex={0} role="region" aria-label="Limits reached">
         <table>
           <thead><tr><th scope="col">Reached</th><th scope="col">Limit</th><th scope="col" className="num">Refusals</th><th scope="col" className="num" title={`${harnessName(a)}'s share of ${harnessName(a)} and ${harnessName(b)} in the same length of time before the limit`}>Share before</th><th scope="col" className="num" title={`${harnessName(a)}'s share of the two until the reset`}>Share until reset</th><th scope="col" className="num">Waited</th></tr></thead>
@@ -334,7 +338,7 @@ function ProjectSplits({ rows, name, show, order }: { rows: ReturnType<typeof ha
         <li key={p.project}>
           <div className="project-split-meta"><span className="project-split-name">{name(p.project)}</span><span className="num">{show(p.total)}</span></div>
           <div className="project-split-bar" style={{ inlineSize: `${Math.max(4, (p.total / top) * 100)}%` }} role="img" aria-label={p.parts.map((x) => `${harnessName(x.key)} ${fmtPct(x.value / p.total)}`).join(', ')}>
-            {[...p.parts].sort((x1, x2) => rank(x1.key) - rank(x2.key)).map((x) => <span key={x.key} title={`${harnessName(x.key)}: ${show(x.value)} (${fmtPct(x.value / p.total)})`} style={{ flexGrow: x.value, background: harnessColor(x.key) }} />)}
+            {[...p.parts].sort((x1, x2) => rank(x1.key) - rank(x2.key)).map((x) => <span key={x.key} title={`${harnessName(x.key)}: ${show(x.value)} (${fmtPct(x.value / p.total)})`} style={{ flexGrow: x.value, background: 'var(--surface-2)', borderBlockStart: `2px solid ${harnessColor(x.key)}` }} />)}
           </div>
         </li>
       ))}
@@ -413,8 +417,8 @@ function BalanceChart({ days, a, b, tz, gaps, episodes, hover, onHover, show }: 
             </defs>
             {[0.25, 0.75].map((r) => <line key={r} x1="0" x2={W} y1={H * r} y2={H * r} className="balance-grid" vectorEffect="non-scaling-stroke" />)}
             {marks.map(({ i, e }) => <line key={`${e.harness}-${e.at}`} x1={x(i)} x2={x(i)} y1="0" y2={H} className="balance-limit" stroke={harnessColor(e.harness)} vectorEffect="non-scaling-stroke" />)}
-            <path d={area} fill={colorA} fillOpacity="0.16" clipPath={`url(#up${uid})`} />
-            <path d={area} fill={colorB} fillOpacity="0.1" clipPath={`url(#dn${uid})`} />
+            <path d={area} fill="var(--ink-2)" fillOpacity="0.16" clipPath={`url(#up${uid})`} />
+            <path d={area} fill="var(--ink-2)" fillOpacity="0.1" clipPath={`url(#dn${uid})`} />
             <line x1="0" x2={W} y1={H / 2} y2={H / 2} className="balance-zero" vectorEffect="non-scaling-stroke" />
             <path d={line} fill="none" stroke={colorA} strokeWidth="1.8" strokeLinejoin="round" vectorEffect="non-scaling-stroke" clipPath={`url(#up${uid})`} />
             <path d={line} fill="none" stroke={colorB} strokeWidth="1.8" strokeLinejoin="round" vectorEffect="non-scaling-stroke" clipPath={`url(#dn${uid})`} />

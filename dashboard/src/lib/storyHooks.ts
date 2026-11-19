@@ -2,7 +2,8 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import { useQuery } from '@tanstack/react-query';
 import { prefersStill } from '../components/motion';
 import { getEntities, scanPages, type ScanResult } from './api';
-import { BIG_PAGE } from './data';
+import { apiParams } from './filters';
+import { BIG_PAGE, useFilters } from './data';
 import { toAgent } from './entities';
 import type { Entity } from './types';
 
@@ -13,21 +14,23 @@ export const STORY_EVENT_MAX = 20_000;
  * The whole thread is read up to a bound, and the result says whether anything older was left unread.
  */
 export function useThreadEvents(id: string) {
+  const { instance, status } = useFilters();
   const [progress, setProgress] = useState(0);
   const query = useQuery<ScanResult<Entity>>({
-    queryKey: ['story-events', id],
-    queryFn: ({ signal }) => scanPages<Entity, Entity>('timeline', new URLSearchParams({ id, include_content: 'false' }), (e) => e, STORY_EVENT_MAX, signal, BIG_PAGE, setProgress),
+    queryKey: ['story-events', id, instance, status],
+    queryFn: ({ signal }) => scanPages<Entity, Entity>('timeline', apiParams('timeline', { instance, status }, { id, include_content: 'false' }), (e) => e, STORY_EVENT_MAX, signal, BIG_PAGE, setProgress),
   });
   return { ...query, progress };
 }
 
 /** The full task and result text of one agent record, read on demand because list rows carry a preview only. */
 export function useFullAgent(sourceId: string | null) {
+  const { instance, status } = useFilters();
   return useQuery({
-    queryKey: ['agent-full', sourceId],
+    queryKey: ['agent-full', sourceId, instance, status],
     enabled: !!sourceId,
     queryFn: async ({ signal }) => {
-      const rows = await getEntities<Entity>('agents', new URLSearchParams({ id: sourceId!, limit: '1', include_content: 'true' }), signal);
+      const rows = await getEntities<Entity>('agents', apiParams('agents', { instance, status }, { id: sourceId!, limit: 1, include_content: 'true' }), signal);
       const row = rows.find((r) => r.source_id === sourceId);
       return row ? toAgent(row) : null;
     },
@@ -36,10 +39,11 @@ export function useFullAgent(sourceId: string | null) {
 
 /** The newest page of a sub-agent's own thread, enough to say what it did. Read only when that lane is selected. */
 export function useChildEvents(threadId: string | null) {
+  const { instance, status } = useFilters();
   return useQuery({
-    queryKey: ['story-child', threadId],
+    queryKey: ['story-child', threadId, instance, status],
     enabled: !!threadId,
-    queryFn: ({ signal }) => getEntities<Entity>('timeline', new URLSearchParams({ id: threadId!, limit: '500', include_content: 'false' }), signal),
+    queryFn: ({ signal }) => getEntities<Entity>('timeline', apiParams('timeline', { instance, status }, { id: threadId!, limit: 500, include_content: 'false' }), signal),
   });
 }
 

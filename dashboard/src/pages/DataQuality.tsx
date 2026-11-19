@@ -2,10 +2,10 @@ import { useUrl } from '../lib/url';
 import { useMemo, useState } from 'react';
 import { CheckCircle2, CircleDashed, CircleSlash } from 'lucide-react';
 import { AppLink, Async, CoverageBar, ErrorState, Hint, NoRecords, NotLoaded, PageHeader, Panel, RankedBars, Skeleton, SkeletonRows, SplitBar, SplitKey, Stat, StatRow, Tokens, Unknown, type SplitPart } from '../components/ui';
-import { harnessColor, harnessFamily, harnessName } from '../lib/harness';
+import { harnessFamily, harnessName } from '../lib/harness';
 import { providerIcon } from '../lib/icons';
 import { coverageRows, usageByProvider } from '../lib/analytics';
-import { useAgents, useCollectorReadiness, useFieldReport, useModels, useModelTurns, useQuality, useQualityReport, useQuota, useThreads } from '../lib/data';
+import { useAgents, useCollectorReadiness, useFieldReport, useFilters, useModels, useModelTurns, useQuality, useQualityReport, useQuota, useThreads } from '../lib/data';
 import { fmtInt, fmtPct, fmtRelative, isKnown } from '../lib/format';
 
 const QUALITIES = ['complete', 'partial', 'inferred', 'unavailable'];
@@ -24,16 +24,18 @@ const GAPS: [string, string][] = [
 
 export default function DataQuality() {
   const { hrefPage } = useUrl();
-  const quality = useQuality();
+  const { instance, status } = useFilters();
+  const f = { instance, status };
+  const quality = useQuality(f);
   const [showKinds, setShowKinds] = useState(false);
-  const report = useQualityReport();
+  const report = useQualityReport(f);
   const readiness = useCollectorReadiness();
-  const threads = useThreads({});
-  const agents = useAgents({});
+  const threads = useThreads(f);
+  const agents = useAgents(f);
   // Counted by the service over every tool call, so the coverage is never a sample.
-  const fields = useFieldReport();
-  const turns = useModelTurns({});
-  const models = useModels({});
+  const fields = useFieldReport(f);
+  const turns = useModelTurns(f);
+  const models = useModels(f);
   const quota = useQuota('quota/current');
 
   const matrix = useMemo(() => {
@@ -76,6 +78,7 @@ export default function DataQuality() {
   return (
     <>
       <PageHeader title="Data Quality" lead="What each number can support." />
+      {report.data?.scope_reason && <p className="fine" role="status">{report.data.scope_reason}</p>}
       {(providers.length > 0 || measured.length > 0) && (
         <ul className="dq-verdict" aria-label="In short">
           {readiness.data?.collector?.state && !['running', 'idle', 'starting'].includes(readiness.data.collector.state) && <li><CircleSlash size={14} aria-hidden="true" className="dq-warn" /><span>The collector is <b>{readiness.data.collector.state}</b>, so nothing new is being read. <AppLink className="link" href={hrefPage('Settings')}>Capture settings</AppLink></span></li>}
@@ -86,7 +89,7 @@ export default function DataQuality() {
       )}
 
       {checkpoints !== undefined && (
-        <Panel title="Collection coverage" hint="Source freshness is separate from whether the service is reachable.">
+        <Panel title="Collection coverage" sub={instance || status ? 'Installation-wide · all machines and run statuses' : undefined} hint="Source freshness is separate from whether the service is reachable.">
           {!checkpoints.length && <p role="status">No complete instance sync has finished. Backfill may still be running; totals describe the records imported so far.</p>}
           <dl className="facts-chips">
             <div><dt>Collector</dt><dd>{(() => {
@@ -96,7 +99,7 @@ export default function DataQuality() {
               return <><span className={`status status-${running ? 'good' : st === 'disabled' ? 'warn' : 'crit'}`}>{running ? <CheckCircle2 size={13} aria-hidden="true" /> : <CircleSlash size={13} aria-hidden="true" />}{st === 'starting' ? 'Ingesting retained history' : st}</span></>;
             })()}</dd></div>
             <div><dt>Project checkpoints</dt><dd>{projectCheckpoints ? fmtInt(projectCheckpoints.length) : <Unknown label="Unavailable" />}</dd></div>
-            <div><dt>Missing thread links</dt><dd>{report.data?.missing_thread_relationships === undefined ? <Unknown label="Unavailable" /> : fmtInt(report.data.missing_thread_relationships)}</dd></div>
+            <div><dt>Missing thread links{instance || status ? ' in scope' : ''}</dt><dd>{report.data?.missing_thread_relationships === undefined ? <Unknown label="Unavailable" /> : fmtInt(report.data.missing_thread_relationships)}</dd></div>
             <div><dt>Import reports</dt><dd>{report.data?.import_reports?.length ? fmtInt(report.data.import_reports.length) : 'None yet'}</dd></div>
             <div><dt>Quota</dt><dd>{quota.isError && !quota.data ? <NotLoaded /> : quota.data?.data?.length ? 'Sampling' : quota.isPending ? '…' : <Unknown label="Unavailable" why={quota.data?.reason} />}</dd></div>
             {checkpoints.map((c) => <div key={c.instance_id}><dt>Last sync · {c.instance_id}</dt><dd><time dateTime={c.last_successful_sync_at}>{fmtRelative(c.last_successful_sync_at)}</time></dd></div>)}
@@ -152,7 +155,7 @@ export default function DataQuality() {
                           const Icon = providerIcon(harnessFamily(p.provider));
                           return (
                             <tr key={p.provider}>
-                              <th scope="row"><span className="provider-cell"><Icon size={14} aria-hidden="true" style={{ color: harnessColor(p.provider) }} />{harnessName(p.provider)}</span></th>
+                              <th scope="row"><span className="provider-cell"><Icon size={14} aria-hidden="true" />{harnessName(p.provider)}</span></th>
                               <td className="num" data-label="Turns">{fmtInt(p.turns)}</td>
                               <td className="wide-narrow" data-label="Usage reported">
                                 <span className="mix-cell">

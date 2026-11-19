@@ -1,10 +1,32 @@
 import { type Page } from '@playwright/test';
+import AxeBuilder from '@axe-core/playwright';
 import { expect, NOW, test } from './fixture';
 
 // Page totals must come from the whole window, not from whatever sample happened to load. These replace API responses.
 const envelope = (data: unknown[]) => ({ data, capture_quality: 'partial', limit: 100, offset: 0, timezone: 'UTC', null_semantics: 'null means unavailable, never zero' });
 const entity = (kind: string, id: string, occurred_at: string, data: Record<string, unknown>, extra: Record<string, unknown> = {}) => ({
   id, source_id: id, kind, instance_id: 'local', project_id: 'p1', thread_id: '', run_id: '', occurred_at, capture_quality: 'partial', data, ...extra,
+});
+
+for (const width of [1280, 390]) for (const known of [0, 1, 2]) test(`harness status coverage distinguishes ${known} of 2 known turns at ${width}px`, async ({ page }, testInfo) => {
+  await page.setViewportSize({ width, height: 900 });
+  const rows = [0, 1].map((i) => entity('model_turn', `neutral-turn-${i}`, new Date(NOW - 60_000).toISOString(), {
+    provider: 'codex', model: 'neutral-model', status: i < known ? 'completed' : null,
+  }, { thread_id: 'neutral-thread', run_id: `neutral-run-${i}` }));
+  await mockApi(page, (route, url) => route === 'model-turns' ? paged(rows, url) : undefined);
+  await page.goto('/?page=Harnesses&range=all');
+  await expect(page.getByRole('heading', { name: 'How they compare' })).toBeVisible();
+  await expect(page.locator('.balance-side .harness-label')).toHaveText(['Codex', 'Claude Code']);
+  if (known < 2) {
+    await expect(page.getByText(`Turn status coverage: ${known} of 2 turns reported a status. Failure and stopped rates use reported statuses only.`, { exact: true })).toBeVisible();
+    await expect(page.getByText('No turn failed or was stopped in this view.', { exact: true })).toHaveCount(0);
+  } else {
+    await expect(page.getByText('No turn failed or was stopped in this view.', { exact: true })).toBeVisible();
+    await expect(page.getByText(/^Turn status coverage:/)).toHaveCount(0);
+  }
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  await page.screenshot({ path: testInfo.outputPath(`harness-status-${known}-${width}.png`), fullPage: true });
 });
 
 async function mockApi(page: Page, handler: (route: string, url: URL) => unknown | undefined) {
@@ -119,6 +141,24 @@ test('threads add up the tokens used in the window, like the overview', async ({
   await expect(page.locator('tbody').getByRole('link', { name: 'Started earlier', exact: true })).toBeVisible();
   const row = page.getByRole('row').filter({ hasText: 'Started earlier' });
   await expect(row.locator('[title$="tokens"]')).toHaveAttribute('title', '1,000,000 tokens');
+});
+
+for (const width of [1280, 390]) test(`project daily tokens distinguish missing readings from zero at ${width}px`, async ({ page }, testInfo) => {
+  await page.setViewportSize({ width, height: 900 });
+  const values = [null, 0, 1000];
+  await mockApi(page, (name) => {
+    if (name === 'projects') return envelope(values.map((_, i) => entity('project', `p${i}`, '2026-01-01T00:00:00Z', { name: ['Unreported', 'Measured zero', 'Unloaded daily'][i] }, { project_id: `p${i}` })));
+    if (name === 'usage/projects') return envelope(values.map((total, i) => ({ dimension: 'project_id', identity: `p${i}`, observed_threads: 1, observed_prompts: 1, observed_runs: 1, observed_provider_turns: 1, reported_turns: total === null ? 0 : 1, observed_tool_calls: 0, observed_agents: 0, total_tokens: total })));
+  });
+  await page.goto('/?page=Projects&range=7d');
+  const trendCell = (name: string) => page.getByRole('row').filter({ hasText: name }).locator('td').nth(2);
+  await expect(trendCell('Unreported')).toContainText('Not reported');
+  await expect(trendCell('Measured zero')).toHaveText('0');
+  await expect(trendCell('Unloaded daily')).toContainText('No daily readings');
+  await expect(page.getByLabel('No tokens in this window')).toHaveCount(0);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  await page.screenshot({ path: testInfo.outputPath(`project-daily-coverage-${width}.png`), fullPage: true });
 });
 
 test('projects show true zeros and lower bounds, never "Not loaded"', async ({ page }) => {

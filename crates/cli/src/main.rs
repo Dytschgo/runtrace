@@ -1,7 +1,11 @@
 mod assets;
 mod collector;
 mod control;
+mod hosts;
 mod mcp;
+mod power_history;
+mod quota_notify;
+mod quota_sampler;
 mod update;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -76,6 +80,8 @@ enum Command {
     },
     /// Reads the quota the coding agents recorded since last time, as the collector does on every sync.
     QuotaCollect,
+    /// Send due native quota warnings from the latest stored readings.
+    QuotaNotify,
     ImportLegacy {
         #[arg(long)]
         source: String,
@@ -86,6 +92,8 @@ enum Command {
         #[arg(long)]
         project: Option<String>,
     },
+    #[command(hide = true)]
+    Supervise,
     Serve,
     Collect,
     Import {
@@ -105,6 +113,12 @@ enum Command {
         repair: bool,
         #[arg(long, hide = true)]
         thread_limit: Option<usize>,
+        /// Offline import memory budget. Defaults to at most 128 MB, independently of serving.
+        #[arg(long, value_parser = clap::value_parser!(u32).range(64..=8192))]
+        memory_limit_mb: Option<u32>,
+        /// Database workers for the offline import.
+        #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u16).range(1..=16))]
+        threads: u16,
     },
     Mcp {
         action: String,
@@ -165,9 +179,11 @@ async fn main() -> Result<()> {
     };
     // Absolute, so a service or updater started from here finds the same settings from any folder.
     let config_path = std::path::absolute(&config_path)?;
-    let c = Config::load_from(&config_path)?;
+    let mut c = Config::load_from(&config_path)?;
+    hosts::HostPolicy::new(&c.server)?;
     // These run beside a live service, which holds the database, so they never open it here.
     match &cli.command {
+        Command::Supervise => return control::supervise(&c, &config_path),
         Command::Start { open } => return control::start(&c, &config_path, *open),
         Command::Stop => {
             println!(
@@ -281,9 +297,25 @@ async fn main() -> Result<()> {
         return tokio::task::spawn_blocking(move || mcp::serve_remote(&c)).await?;
     }
     let opened = std::time::Instant::now();
+    if let Command::Import {
+        memory_limit_mb,
+        verify,
+        ..
+    } = &cli.command
+    {
+        let default_limit = if *verify { 128 } else { 112 };
+        c.storage.memory_limit_mb =
+            memory_limit_mb.unwrap_or(c.storage.memory_limit_mb.min(default_limit));
+    }
     let s = Store::open(&c)?;
+    if let Command::Import { threads, .. } = &cli.command {
+        s.conn.execute_batch(&format!(
+            "SET threads={threads}; SET force_compression='uncompressed'"
+        ))?;
+    }
     match cli.command {
-        Command::Start { .. }
+        Command::Supervise
+        | Command::Start { .. }
         | Command::Stop
         | Command::Status { .. }
         | Command::Open
@@ -307,15 +339,9 @@ async fn main() -> Result<()> {
             );
         }
         Command::QuotaCollect => {
-            let caches = t3ui_core::quota_sources::t3_caches(&c.source.sqlite_path);
-            if c.quota.checks {
-                t3ui_core::quota_checks::run_due(&s, caches.as_deref())?;
-            }
-            println!(
-                "{}",
-                t3ui_core::quota_sources::collect(&s, caches.as_deref())?
-            );
+            println!("{}", refresh_quota(&c, &s)?);
         }
+        Command::QuotaNotify => println!("{}", quota_notify::run(&c, &s)?),
         Command::ImportLegacy { source, .. } => {
             println!("{}", t3ui_core::legacy::import_v1(&c, Some(&s), &source)?);
         }
@@ -331,6 +357,7 @@ async fn main() -> Result<()> {
             verify,
             repair,
             thread_limit,
+            threads,
             ..
         } => {
             anyhow::ensure!(
@@ -350,25 +377,30 @@ async fn main() -> Result<()> {
                     }
                     .validate()?;
                 }
-                println!(
-                    "{}",
-                    importer::import(
-                        &c,
-                        &s,
-                        &Options {
-                            project,
-                            since: if repair { Some(String::new()) } else { since },
-                            dry_run,
-                            thread_limit
-                        }
-                    )?
-                )
+                let mut report = importer::import(
+                    &c,
+                    &s,
+                    &Options {
+                        project,
+                        since: if repair { Some(String::new()) } else { since },
+                        dry_run,
+                        thread_limit,
+                        archive_batches: true,
+                    },
+                )?;
+                report["import_memory_limit_mb"] = json!(c.storage.memory_limit_mb);
+                report["import_threads"] = json!(threads);
+                println!("{report}");
             }
         }
         Command::Collect => {
             let mut delay = c.source.poll_seconds;
             loop {
-                match importer::import(&c, &s, &Options::default()) {
+                match importer::import(&c, &s, &Options::default()).and_then(|mut report| {
+                    report["quota"] = refresh_quota(&c, &s)?;
+                    report["storage_maintenance"] = t3ui_core::cold::maintain_due(&c, &s)?;
+                    Ok(report)
+                }) {
                     Ok(report) => {
                         tracing::info!(operation="collect",instance_id=c.source.instance_id,report=%report);
                         delay = c.source.poll_seconds
@@ -458,6 +490,8 @@ async fn main() -> Result<()> {
         Command::Archive { action, path } => {
             if action == "restore" {
                 println!("{}",t3ui_core::archive::restore(&s,std::path::Path::new(path.as_deref().ok_or_else(||anyhow::anyhow!("Use archive restore --path <snapshot-directory> with an empty target database"))?))?)
+            } else if action == "compact" {
+                println!("{}", t3ui_core::cold::compact(&c, &s)?)
             } else {
                 println!("{}", t3ui_core::archive::run(&c, &s, &action)?)
             }
@@ -478,6 +512,18 @@ async fn main() -> Result<()> {
 }
 type Shared = Arc<Mutex<Store>>;
 async fn serve(c: Config, s: Store, config_path: std::path::PathBuf) -> Result<()> {
+    serve_with_quota_refresh(c, s, config_path, refresh_quota).await
+}
+
+async fn serve_with_quota_refresh<F>(
+    c: Config,
+    s: Store,
+    config_path: std::path::PathBuf,
+    refresh: F,
+) -> Result<()>
+where
+    F: Fn(&Config, &Store) -> Result<Value> + Send + Sync + 'static,
+{
     use axum::{Router, routing::get};
     let addr = format!("{}:{}", c.server.host, c.server.port);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
@@ -486,7 +532,9 @@ async fn serve(c: Config, s: Store, config_path: std::path::PathBuf) -> Result<(
         c.source.collect_on_serve,
     )));
     let ready_status = status.clone();
+    let collector_poll_seconds = c.source.poll_seconds;
     let storage_identity = c.storage_identity()?;
+    let (quota_status, _quota_task) = quota_sampler::spawn(c.clone(), s.try_clone()?, refresh);
     if c.source.collect_on_serve {
         // A spare connection, so a crashed import round can be retried with a fresh writer instead of ending collection.
         let spare = s.try_clone()?;
@@ -503,19 +551,14 @@ async fn serve(c: Config, s: Store, config_path: std::path::PathBuf) -> Result<(
                 let started = std::time::Instant::now();
                 let result = tokio::task::spawn_blocking(move || {
                     let report = importer::import(&config, &writer, &Options::default());
-                    let caches = t3ui_core::quota_sources::t3_caches(&config.source.sqlite_path);
-                    // Runtrace's own limit checks, for harnesses T3 does not check; each is due every few minutes.
-                    if config.quota.checks
-                        && let Err(error) =
-                            t3ui_core::quota_checks::run_due(&writer, caches.as_deref())
-                    {
-                        tracing::warn!(operation = "quota_checks", error = %error);
-                    }
-                    if let Err(error) =
-                        t3ui_core::quota_sources::collect(&writer, caches.as_deref())
-                    {
-                        tracing::warn!(operation = "quota_collect", error = %error);
-                    }
+                    let maintenance = t3ui_core::cold::maintain_due(&config, &writer);
+                    let report = match (report, maintenance) {
+                        (Ok(mut report), Ok(maintenance)) => {
+                            report["storage_maintenance"] = maintenance;
+                            Ok(report)
+                        }
+                        (Err(error), _) | (_, Err(error)) => Err(error),
+                    };
                     (writer, report)
                 })
                 .await;
@@ -598,7 +641,7 @@ async fn serve(c: Config, s: Store, config_path: std::path::PathBuf) -> Result<(
             "/api/v1/update",
             get(move || {
                 let status = read_status.clone();
-                async move { axum::Json(status.lock().unwrap().to_json()) }
+                async move { axum::Json(status.lock().unwrap().report()) }
             }),
         )
         .route(
@@ -643,8 +686,9 @@ async fn serve(c: Config, s: Store, config_path: std::path::PathBuf) -> Result<(
             get(move || {
                 let status = ready_status.clone();
                 let identity = storage_identity.clone();
+                let quota_status = quota_status.clone();
                 async move {
-                    axum::Json(json!({"ready":true,"version":update::VERSION,"pid":std::process::id(),"storage_identity":identity,"collector":status.lock().unwrap().to_json()}))
+                    axum::Json(json!({"ready":true,"version":update::VERSION,"pid":std::process::id(),"storage_identity":identity,"poll_seconds":collector_poll_seconds,"collector":status.lock().unwrap().to_json(),"quota_sampler":&*quota_status.lock().unwrap()}))
                 }
             }),
         )
@@ -663,6 +707,23 @@ async fn serve(c: Config, s: Store, config_path: std::path::PathBuf) -> Result<(
             ),
         )
     };
+    let host_policy = Arc::new(hosts::HostPolicy::new(&c.server)?);
+    let app = app.layer(axum::middleware::from_fn(
+        move |request: axum::extract::Request, next: axum::middleware::Next| {
+            let policy = host_policy.clone();
+            async move {
+                use axum::response::IntoResponse;
+                if let Err(code) = policy.check(request.headers()) {
+                    return (
+                        axum::http::StatusCode::FORBIDDEN,
+                        axum::Json(json!({"error":{"code":code}})),
+                    )
+                        .into_response();
+                }
+                next.run(request).await
+            }
+        },
+    ));
     println!("Runtrace {} http://{addr}", update::VERSION);
     axum::serve(listener, app)
         .with_graceful_shutdown(async {
@@ -679,11 +740,23 @@ async fn serve(c: Config, s: Store, config_path: std::path::PathBuf) -> Result<(
         .await?;
     Ok(())
 }
+
+fn refresh_quota(c: &Config, s: &Store) -> Result<Value> {
+    power_history::refresh(s)?;
+    let caches = t3ui_core::quota_sources::t3_caches(&c.source.sqlite_path);
+    if c.quota.checks
+        && let Err(error) = t3ui_core::quota_checks::run_due(s, caches.as_deref())
+    {
+        tracing::warn!(operation="quota_checks",error=%error);
+    }
+    let mut report = t3ui_core::quota_sources::collect(s, caches.as_deref())?;
+    report["notifications"] = quota_notify::run(c, s)?;
+    Ok(report)
+}
 async fn api(
     axum::extract::State(s): axum::extract::State<Shared>,
     axum::extract::Path(path): axum::extract::Path<String>,
     query: Result<axum::extract::Query<Filter>, axum::extract::rejection::QueryRejection>,
-    headers: axum::http::HeaderMap,
 ) -> (axum::http::StatusCode, axum::Json<Value>) {
     use axum::http::StatusCode;
     let mut f = match query {
@@ -701,29 +774,6 @@ async fn api(
         return (
             StatusCode::BAD_REQUEST,
             axum::Json(json!({"error":{"code":"invalid_filters","message":error.to_string()}})),
-        );
-    }
-    let host = headers
-        .get("host")
-        .and_then(|h| h.to_str().ok())
-        .unwrap_or("");
-    if !(host.starts_with("127.0.0.1:")
-        || host.starts_with("localhost:")
-        || host.starts_with("[::1]:"))
-    {
-        return (
-            StatusCode::FORBIDDEN,
-            axum::Json(json!({"error":{"code":"invalid_host"}})),
-        );
-    }
-    if headers
-        .get("origin")
-        .and_then(|x| x.to_str().ok())
-        .is_some_and(|o| o != format!("http://{host}"))
-    {
-        return (
-            StatusCode::FORBIDDEN,
-            axum::Json(json!({"error":{"code":"cross_origin_denied"}})),
         );
     }
     let parts: Vec<_> = path.split('/').collect();

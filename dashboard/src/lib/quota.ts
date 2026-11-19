@@ -6,6 +6,32 @@ export const leftOf = (used: number) => Math.min(100, Math.max(0, 100 - used));
 const HOUR = 60 * MINUTE;
 
 export interface QuotaReading { at: number; used: number; resetAt: number | null }
+export const MAX_QUOTA_GAP = 20 * MINUTE;
+export interface TrackGap { start_epoch_ms: number; end_epoch_ms: number }
+/** Never join a long unobserved interval or carry a reading beyond its reset. */
+export function quotaTrack(readings: QuotaReading[], from: number, until: number): { segments: QuotaReading[][]; gaps: TrackGap[] } {
+  const sorted = readings.filter((p) => Number.isFinite(p.at) && Number.isFinite(p.used) && p.at <= until).sort((a, b) => a.at - b.at);
+  const points = sorted.filter((p) => p.at >= from);
+  const previous = sorted.filter((p) => p.at < from).at(-1);
+  if (previous && from - previous.at <= MAX_QUOTA_GAP && (previous.resetAt === null || previous.resetAt > from)) points.unshift({ ...previous, at: from });
+  if (!points.length) return { segments: [], gaps: [{ start_epoch_ms: from, end_epoch_ms: until }] };
+  const segments: QuotaReading[][] = [[points[0]]];
+  const gaps: TrackGap[] = [];
+  if (points[0].at > from) gaps.push({ start_epoch_ms: from, end_epoch_ms: points[0].at });
+  for (let i = 1; i < points.length; i++) {
+    const prior = points[i - 1]; const next = points[i];
+    const crossedReset = prior.resetAt !== null && prior.resetAt <= next.at && prior.resetAt !== next.resetAt;
+    if (next.at - prior.at > MAX_QUOTA_GAP || crossedReset) {
+      gaps.push({ start_epoch_ms: prior.at, end_epoch_ms: next.at });
+      segments.push([next]);
+    } else segments.at(-1)!.push(next);
+  }
+  const last = points.at(-1)!;
+  const observedUntil = Math.min(until, last.resetAt ?? until);
+  if (until - last.at > MAX_QUOTA_GAP || observedUntil < until) gaps.push({ start_epoch_ms: last.at, end_epoch_ms: until });
+  else if (observedUntil > last.at) segments.at(-1)!.push({ ...last, at: observedUntil });
+  return { segments, gaps };
+}
 export interface Pace {
   /** Percentage points used per hour over the readings looked at. */
   perHour: number;
